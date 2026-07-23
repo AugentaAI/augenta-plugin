@@ -1,0 +1,7 @@
+# Keep the shipped plugin bundle lean — none of this is needed at runtime.
+node_modules/
+__tests__/
+*.test.ts
+bun.lock
+*.log
+.DS_Store

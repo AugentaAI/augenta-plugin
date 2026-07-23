@@ -1,0 +1,6 @@
+interface:
+  display_name: "Initialize Augenta"
+  short_description: "Enable Augenta for the current project"
+  default_prompt: "Use $augenta:init to initialize Augenta for this project."
+policy:
+  allow_implicit_invocation: true

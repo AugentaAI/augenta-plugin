@@ -1,0 +1,49 @@
+{
+  "description": "Augenta agent activity and project memory — one-time init prompt (SessionStart), turn-ordinal bump (UserPromptSubmit), buffer trajectory steps into <project>/.augenta (PostToolUse), scan memory + flush the completed turn (Stop). SessionStart also scans memory before draining. Every hook is a silent no-op unless <project>/.augenta/config.json exists; AUGENTA_CAPTURE_ENABLED=0 disables both.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.ts\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt.ts\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/capture/capture.ts\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/capture/capture.ts\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "augenta",
+  "interface": {
+    "displayName": "Augenta"
+  },
+  "owner": {
+    "name": "Augenta",
+    "email": "richard@augenta.ai"
+  },
+  "metadata": {
+    "description": "Augenta for Codex — per-project, opt-in agent activity and project-memory capture.",
+    "version": "0.2.3"
+  },
+  "plugins": [
+    {
+      "name": "augenta",
+      "description": "Augenta v0.2.3 — captures agent activity and project memory from opted-in projects. Run $augenta:init or ask \"Initialize Augenta\" to begin.",
+      "version": "0.2.3",
+      "category": "Productivity",
+      "keywords": ["augenta", "telemetry", "memory", "codex"],
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      }
+    }
+  ]
+}

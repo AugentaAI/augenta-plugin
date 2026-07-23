@@ -1,0 +1,21 @@
+{
+  "name": "augenta",
+  "owner": {
+    "name": "Augenta",
+    "email": "richard@augenta.ai"
+  },
+  "metadata": {
+    "description": "Augenta — per-project, opt-in agent activity and project-memory capture for Claude Code and Codex.",
+    "version": "0.2.3"
+  },
+  "plugins": [
+    {
+      "name": "augenta",
+      "source": "./",
+      "description": "Augenta v0.2.3 — captures agent activity and project memory from opted-in projects. Start with /augenta:init.",
+      "version": "0.2.3",
+      "keywords": ["augenta", "telemetry", "memory", "capture"],
+      "strict": false
+    }
+  ]
+}

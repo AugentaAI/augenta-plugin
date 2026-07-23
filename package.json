@@ -1,0 +1,19 @@
+{
+  "name": "augenta-plugin",
+  "version": "0.2.3",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "description": "Augenta plugin for Claude Code and Codex — opt-in, per-project capture of agent activity and project memory.",
+  "homepage": "https://augenta.ai",
+  "repository": "https://github.com/AugentaAI/augenta-plugin",
+  "scripts": {
+    "test": "bun test",
+    "test:e2e": "bun test __tests__/memory-capture.e2e.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}

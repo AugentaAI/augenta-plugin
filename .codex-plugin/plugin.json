@@ -1,0 +1,27 @@
+{
+  "name": "augenta",
+  "version": "0.2.3",
+  "description": "Augenta — opt-in, per-project capture of your coding agent's activity and project memory to your Augenta Neurospace. Ask \"Initialize Augenta\" in a project to enable it.",
+  "author": {
+    "name": "Augenta"
+  },
+  "homepage": "https://augenta.ai",
+  "repository": "https://github.com/AugentaAI/augenta-plugin",
+  "license": "UNLICENSED",
+  "keywords": ["augenta", "telemetry", "memory", "capture", "codex"],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Augenta",
+    "shortDescription": "Per-project activity and memory capture",
+    "longDescription": "Augenta captures your coding agent's activity and matching project memory from projects you explicitly opt in, and ships them to your Augenta Neurospace. Nothing is captured until you initialize a project.",
+    "developerName": "Augenta",
+    "category": "Productivity",
+    "capabilities": ["Read"],
+    "websiteURL": "https://augenta.ai",
+    "privacyPolicyURL": "https://augenta.ai",
+    "termsOfServiceURL": "https://augenta.ai",
+    "defaultPrompt": ["Initialize Augenta"],
+    "brandColor": "#EEE673"
+  }
+}

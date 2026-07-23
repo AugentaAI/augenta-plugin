@@ -1,0 +1,17 @@
+node_modules/
+.DS_Store
+*.tgz
+*.log
+
+# Codex CLI local state — machine-local, not source
+.codex/
+
+# The plugin's own project-scoped state dir (config.json holds the API key) —
+# .augenta/ also self-gitignores via the .gitignore the plugin writes inside it,
+# but never commit one from this repo either.
+.augenta/
+
+# Secrets / local env — NEVER commit
+.env
+.env.*
+!.env.example

@@ -1,0 +1,12 @@
+{
+  "name": "augenta",
+  "version": "0.2.3",
+  "description": "Augenta — opt-in, per-project capture of your coding agent's activity and project memory to your Augenta Neurospace. Run /augenta:init in a project to enable it.",
+  "author": {
+    "name": "Augenta"
+  },
+  "homepage": "https://augenta.ai",
+  "repository": "https://github.com/AugentaAI/augenta-plugin",
+  "keywords": ["augenta", "telemetry", "memory", "capture"],
+  "skills": "./skills/"
+}

@@ -1,0 +1,17 @@
+Copyright (c) 2026 Augenta. All rights reserved.
+
+This software and its source code are proprietary and confidential to Augenta.
+No license, express or implied, is granted to any person to use, copy, modify,
+merge, publish, distribute, sublicense, or sell copies of this software, in
+whole or in part, except as expressly permitted in a separate written agreement
+with Augenta. The source is published for installation and inspection only.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL AUGENTA BE
+LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM, OUT OF, OR IN
+CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+The Augenta plugin communicates with the hosted Augenta platform; use of that
+service is additionally governed by Augenta's Terms of Service and Privacy
+Policy at https://augenta.ai.

@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Least privilege: CI only needs to read the repo to install, typecheck, and test.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save runner minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plugin:
+    name: typecheck + test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      # --frozen-lockfile makes installs reproducible and fails fast if bun.lock
+      # has drifted from package.json.
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+  install-smoke:
+    name: Claude + Codex marketplace install smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install plugin CLIs
+        run: npm install --global @anthropic-ai/claude-code @openai/codex
+
+      - name: Install and inspect with Claude Code
+        run: |
+          claude plugin marketplace add ./
+          claude plugin install augenta@augenta
+          claude plugin details augenta@augenta | tee claude-plugin-details.txt
+          grep -Fq 'augenta 0.2.3' claude-plugin-details.txt
+          grep -Eq 'Skills [(]1[)].*init' claude-plugin-details.txt
+          grep -Fq 'Hooks (4)' claude-plugin-details.txt
+
+      - name: Install and inspect with Codex
+        run: |
+          codex plugin marketplace add .
+          codex plugin add augenta@augenta --json | tee codex-install.json
+          codex plugin list --json | tee codex-plugins.json
+          jq -e '.installed[] | select(
+            .pluginId == "augenta@augenta" and
+            .version == "0.2.3" and
+            .enabled == true
+          )' codex-plugins.json
+          codex_plugin_root="$(jq -r '.installedPath' codex-install.json)"
+          test -f "$codex_plugin_root/skills/init/SKILL.md"
+          test "$(find "$codex_plugin_root/skills" -name SKILL.md | wc -l)" -eq 1
+          test "$(jq -r '.hooks' "$codex_plugin_root/.codex-plugin/plugin.json")" = './hooks/hooks.json'
+          test "$(jq '.hooks | keys | length' "$codex_plugin_root/hooks/hooks.json")" -eq 4
+          node .github/scripts/read-codex-plugin.mjs "$PWD/.agents/plugins/marketplace.json" augenta \
+            | tee codex-plugin-read.json
+          jq -e '
+            .summary.localVersion == "0.2.3" and
+            (.skills | length == 1) and
+            .skills[0].name == "augenta:init" and
+            .skills[0].enabled == true and
+            .skills[0].interface != null and
+            .skills[0].interface.shortDescription != null and
+            (.hooks | length == 4)
+          ' codex-plugin-read.json
