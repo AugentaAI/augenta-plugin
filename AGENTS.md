@@ -18,6 +18,23 @@ with `codex plugin marketplace add` followed by `codex plugin add`.
 Also run `claude --plugin-dir . plugin details augenta` and verify it reports
 the manifest version, one `connect` skill, four hooks, and no load errors.
 
+For a hosted dev release, follow the platform repository's
+`docs/deployment-runbook.md`. Connect a disposable project with:
+
+```bash
+bun scripts/connect.ts \
+  --project /absolute/path/to/test-project \
+  --control-url https://dev.augenta.ai
+bun scripts/dev-e2e.ts \
+  --project /absolute/path/to/test-project \
+  --control-url https://dev.augenta.ai
+```
+
+This is the positive human OAuth gate. GitHub Actions intentionally verifies
+the platform-key path and must never receive a human WorkOS access or refresh
+token. `--endpoint` overrides only the gateway; use `--control-url` when
+selecting a non-production issuer/client/gateway set.
+
 ## Cross-harness packaging
 
 This repository is one plugin for Claude Code and Codex. Keep runtime skills in

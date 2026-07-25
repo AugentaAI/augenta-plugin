@@ -164,6 +164,12 @@ For integrations and local development, `AUGENTA_API_URL` overrides the gateway
 base and `AUGENTA_INGEST_URL` redirects the experiences endpoint. Neither
 variable opts a project into capture.
 
+`AUGENTA_CONTROL_URL` (or `scripts/connect.ts --control-url`) selects the
+environment's complete public login discovery: WorkOS issuer, public client id,
+and gateway. Use it when connecting to dev or staging. `--endpoint` changes
+only the gateway and must not be used by itself for a new cross-environment
+WorkOS login.
+
 ## Development
 
 ```bash
@@ -172,6 +178,25 @@ bun run typecheck
 bun run test:e2e
 bun test
 ```
+
+After the platform dev topology, backend, and Pages app are deployed, connect a
+disposable project to dev and run the hosted human/plugin E2E:
+
+```bash
+bun scripts/connect.ts \
+  --project /absolute/path/to/test-project \
+  --control-url https://dev.augenta.ai
+
+bun scripts/dev-e2e.ts \
+  --project /absolute/path/to/test-project \
+  --control-url https://dev.augenta.ai
+```
+
+The test uses the stored owner-only WorkOS profile, real outbox and shipper,
+and authenticated experience-read API to verify durable schema-v2 landing. It
+does not print or export the access or refresh token. The platform deployment
+order, GitHub Actions gates, variables, and browser acceptance steps live in
+the platform repository's `docs/deployment-runbook.md`.
 
 For local testing, add this repository as a plugin marketplace and install it:
 
@@ -190,4 +215,5 @@ The main implementation lives in:
 - `hooks/` — lifecycle entrypoints for supported coding agents
 - `capture/` — normalization, scrubbing, durable buffering, and delivery
 - `scripts/connect.ts` — WorkOS login, Neurolink selection, and safe project config
+- `scripts/dev-e2e.ts` — hosted WorkOS/profile/plugin/durable-landing verification
 - `skills/connect/` — the guided connection flow

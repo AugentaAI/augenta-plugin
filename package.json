@@ -10,6 +10,7 @@
   "scripts": {
     "test": "bun test",
     "test:e2e": "bun test __tests__/memory-capture.e2e.test.ts",
+    "e2e:dev": "bun scripts/dev-e2e.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

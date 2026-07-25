@@ -24,6 +24,7 @@ interface Args {
   apiKey?: string;
   project?: string;
   endpoint?: string;
+  controlUrl?: string;
   harness?: "claude-code" | "codex";
 }
 
@@ -69,6 +70,9 @@ export function parseArgs(argv: string[]): Args {
       i++;
     } else if (flag === "--endpoint") {
       args.endpoint = value;
+      i++;
+    } else if (flag === "--control-url") {
+      args.controlUrl = value;
       i++;
     } else if (
       flag === "--harness" &&
@@ -365,7 +369,7 @@ export async function connectProject(
   projectRoot: string,
   args: Args,
 ): Promise<void> {
-  const discovered = await augentaOAuthConfig();
+  const discovered = await augentaOAuthConfig(args.controlUrl);
   const gateway = (args.endpoint?.trim() || discovered.gateway).replace(/\/+$/, "");
   const oauth = { ...discovered, gateway };
   const existing = existsSync(join(projectRoot, ".augenta", "config.json"))

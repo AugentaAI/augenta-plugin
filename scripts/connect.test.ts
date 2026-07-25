@@ -33,13 +33,25 @@ afterEach(() => {
 });
 
 describe("parseArgs", () => {
-  test("reads --api-key, --project, --endpoint without legacy aliases", () => {
+  test("reads key, project, gateway, and control URL without legacy aliases", () => {
     expect(parseArgs(["--api-key", "k1"])).toEqual({ apiKey: "k1" });
     expect(parseArgs(["--apiKey", "k2"])).toEqual({});
-    expect(parseArgs(["--api-key", "k", "--project", "/p", "--endpoint", "http://x"])).toEqual({
+    expect(
+      parseArgs([
+        "--api-key",
+        "k",
+        "--project",
+        "/p",
+        "--endpoint",
+        "http://x",
+        "--control-url",
+        "https://dev.example.com",
+      ]),
+    ).toEqual({
       apiKey: "k",
       project: "/p",
       endpoint: "http://x",
+      controlUrl: "https://dev.example.com",
     });
   });
 });
