@@ -21,7 +21,6 @@ const SECRET = "ghp_0123456789abcdefghijklmnopqrstuvwx";
 
 interface ReceivedRequest {
   authorization: string | null;
-  subscriptionKey: string | null;
   experiences: Experience[];
 }
 
@@ -46,7 +45,10 @@ function runHook(script: string, payload: object, env: Record<string, string>): 
 
 function configureProject(project: string, apiKey: string): void {
   mkdirSync(join(project, ".augenta"), { recursive: true });
-  writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ apiKey }));
+  writeFileSync(
+    join(project, ".augenta", "config.json"),
+    JSON.stringify({ authMode: "api-key", apiKey }),
+  );
 }
 
 function receiver(requests: ReceivedRequest[]) {
@@ -57,7 +59,6 @@ function receiver(requests: ReceivedRequest[]) {
       const body = await request.json() as { experiences: Experience[] };
       requests.push({
         authorization: request.headers.get("authorization"),
-        subscriptionKey: request.headers.get("ocp-apim-subscription-key"),
         experiences: body.experiences,
       });
       return new Response(null, { status: 202 });
@@ -132,8 +133,7 @@ describe("memory capture E2E", () => {
       expect(JSON.stringify(document)).not.toContain(SECRET);
       expect("events" in document).toBe(false);
 
-      expect(requests.every((request) => request.authorization === "Bearer e2e-claude-key")).toBe(true);
-      expect(requests.every((request) => request.subscriptionKey === "e2e-claude-key")).toBe(true);
+      expect(requests.every((request) => request.authorization === "AugentaKey e2e-claude-key")).toBe(true);
     } finally {
       await waitFor(
         () => !existsSync(join(project, ".augenta", "outbox", ".lock")),
@@ -145,7 +145,7 @@ describe("memory capture E2E", () => {
     }
   }, 10_000);
 
-  test("Codex SessionStart ships only Task Groups scoped to the initialized project", async () => {
+  test("Codex SessionStart ships only Task Groups scoped to the connected project", async () => {
     const work = mkdtempSync(join(tmpdir(), "augenta-e2e-codex-"));
     const project = join(work, "project");
     const childProject = join(project, "packages", "app");
@@ -215,8 +215,7 @@ describe("memory capture E2E", () => {
       expect(wire).not.toContain("Global memory must remain private.");
       expect(wire).not.toContain("Never capture this unrelated memory.");
       expect(wire).not.toContain("Never capture this unscoped memory.");
-      expect(requests.every((request) => request.authorization === "Bearer e2e-codex-key")).toBe(true);
-      expect(requests.every((request) => request.subscriptionKey === "e2e-codex-key")).toBe(true);
+      expect(requests.every((request) => request.authorization === "AugentaKey e2e-codex-key")).toBe(true);
     } finally {
       await waitFor(
         () => !existsSync(join(project, ".augenta", "outbox", ".lock")),

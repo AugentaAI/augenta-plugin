@@ -48,6 +48,11 @@ import { mkdirSync, openSync, writeSync, closeSync, unlinkSync, statSync, append
 import { Outbox, isDocumentRecord, isRawRecord, type SpoolRecord } from "./outbox";
 import type { CaptureEvent, DocumentExperience, Experience, TrajectoryExperience } from "./event";
 import { experiencesUrl, loadProjectConfig, captureEnabled } from "./config";
+import {
+  accessTokenForProfile,
+  markAuthNotice,
+  ReLoginRequiredError,
+} from "./auth";
 import { sanitizeTelemetryJsonl } from "./sanitize";
 
 /**
@@ -328,16 +333,23 @@ export async function postExperiences(
   url: string,
   token: string | undefined,
   experiences: Experience[],
+  neurolinkId?: string,
+  authMode: "workos" | "api-key" = "api-key",
 ): Promise<PostResult> {
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      // The Augenta API key, sent in BOTH locations so one shipper works everywhere:
-      // the hosted gateway validates the subscription-key header, while a local raw
-      // receiver reads `Authorization: Bearer`. Identity is resolved from the key
-      // server-side; the copy the receiver doesn't use is inert.
-      ...(token ? { authorization: `Bearer ${token}`, "ocp-apim-subscription-key": token } : {}),
+      ...(token
+        ? authMode === "workos"
+          ? {
+              authorization: `Bearer ${token}`,
+              ...(neurolinkId
+                ? { "x-augenta-neurolink-id": neurolinkId }
+                : {}),
+            }
+          : { authorization: `AugentaKey ${token}` }
+        : {}),
     },
     body: JSON.stringify({ experiences }),
     signal: AbortSignal.timeout(10_000),
@@ -393,6 +405,8 @@ function appendRejected(projectRoot: string, entries: RejectedEntry[]): void {
 export interface DrainOptions {
   url: string;
   token?: string;
+  neurolinkId?: string;
+  authMode?: "workos" | "api-key";
   /** Project root holding .augenta/ — the outbox being drained. */
   projectRoot: string;
   /** Max spool records per slice — events, raws, and documents combined. */
@@ -406,6 +420,20 @@ export interface DrainResult {
   batches: number;
   /** HTTP status of the last POST (0 if a network error stopped the drain). */
   lastStatus: number;
+}
+
+export function shippingNotice(
+  authMode: "workos" | "api-key",
+  status: number,
+): "relogin" | "connect" | undefined {
+  if (authMode === "workos" && status === 401) return "relogin";
+  if (
+    (status === 403 || status === 404) ||
+    (authMode === "api-key" && status === 401)
+  ) {
+    return "connect";
+  }
+  return undefined;
 }
 
 /**
@@ -461,7 +489,13 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
     const quarantineBatch: RejectedEntry[] = [];
     try {
       for (const body of packBodies(experiences)) {
-        const res = await postExperiences(opts.url, opts.token, body);
+        const res = await postExperiences(
+          opts.url,
+          opts.token,
+          body,
+          opts.neurolinkId,
+          opts.authMode,
+        );
         lastStatus = res.status;
         if (lastStatus >= 200 && lastStatus < 300) {
           batches += 1;
@@ -481,7 +515,7 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
         sliceOk = false; // transient — keep the whole slice, discard this pass's quarantine candidates
         break;
       }
-    } catch {
+    } catch (error) {
       break; // network/timeout — leave the cursor, retry on the next trigger
     }
     if (!sliceOk) break;
@@ -525,7 +559,7 @@ export function acquireLock(projectRoot: string): boolean {
         unlinkSync(lock);
         return acquireLock(projectRoot); // one retry after reclaiming
       }
-    } catch {
+    } catch (error) {
       /* lost a race on the lock file — treat as held */
     }
     return false;
@@ -548,9 +582,43 @@ if (import.meta.main) {
   const cfg = projectRoot ? loadProjectConfig(projectRoot) : undefined;
   if (cfg && captureEnabled(cfg) && acquireLock(cfg.projectRoot)) {
     try {
-      await drain({ url: experiencesUrl(cfg), token: cfg.apiKey, projectRoot: cfg.projectRoot });
-    } catch {
-      /* never throw out of the detached shipper */
+      if (cfg.authMode === "workos") {
+        const token = await accessTokenForProfile(cfg.profileId!);
+        let result = await drain({
+          url: experiencesUrl(cfg),
+          token,
+          neurolinkId: cfg.neurolinkId,
+          authMode: "workos",
+          projectRoot: cfg.projectRoot,
+        });
+        if (result.lastStatus === 401) {
+          const refreshed = await accessTokenForProfile(cfg.profileId!, true);
+          result = await drain({
+            url: experiencesUrl(cfg),
+            token: refreshed,
+            neurolinkId: cfg.neurolinkId,
+            authMode: "workos",
+            projectRoot: cfg.projectRoot,
+          });
+        }
+        const notice = shippingNotice("workos", result.lastStatus);
+        if (notice) markAuthNotice(cfg.projectRoot, notice);
+      } else {
+        const result = await drain({
+          url: experiencesUrl(cfg),
+          token: cfg.apiKey,
+          authMode: "api-key",
+          projectRoot: cfg.projectRoot,
+        });
+        const notice = shippingNotice("api-key", result.lastStatus);
+        if (notice) markAuthNotice(cfg.projectRoot, notice);
+      }
+    } catch (error) {
+      // The outbox cursor was not advanced. Surface a single actionable notice
+      // at the next SessionStart instead of losing queued records or spamming hooks.
+      if (error instanceof ReLoginRequiredError) {
+        markAuthNotice(cfg.projectRoot, "relogin");
+      }
     } finally {
       releaseLock(cfg.projectRoot);
     }

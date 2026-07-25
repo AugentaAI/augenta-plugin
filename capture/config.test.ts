@@ -1,8 +1,8 @@
 /**
  * Tests for config.ts — project-scoped config resolution and the consent gate.
  *
- * Contract under test: the key/consent travel together in
- * `<project>/.augenta/config.json` (found by walking UP from cwd); no env var
+ * Contract under test: project consent and a Neurolink or platform key travel
+ * together in `<project>/.augenta/config.json` (found by walking UP from cwd); no env var
  * and no home-dir file can stand in for it; AUGENTA_INGEST_URL only redirects
  * the destination; AUGENTA_CAPTURE_ENABLED=0|false kills capture everywhere.
  *
@@ -48,12 +48,12 @@ afterEach(() => {
 
 describe("resolveProjectRoot", () => {
   test("finds .augenta/config.json in the cwd itself", () => {
-    writeConfig(project, { apiKey: "k" });
+    writeConfig(project, { authMode: "api-key", apiKey: "k" });
     expect(resolveProjectRoot(project)).toBe(project);
   });
 
   test("walks up from a nested subdirectory to the project root", () => {
-    writeConfig(project, { apiKey: "k" });
+    writeConfig(project, { authMode: "api-key", apiKey: "k" });
     const deep = join(project, "src", "utils", "nested");
     mkdirSync(deep, { recursive: true });
     expect(resolveProjectRoot(deep)).toBe(project);
@@ -66,27 +66,46 @@ describe("resolveProjectRoot", () => {
 });
 
 describe("loadProjectConfig", () => {
-  test("parses apiKey and optional endpoint, and records the root", () => {
-    writeConfig(project, { apiKey: "sk-test", endpoint: "https://gw.example.com/" });
+  test("parses platform-key mode and optional endpoint", () => {
+    writeConfig(project, { authMode: "api-key", apiKey: "key-test", endpoint: "https://gw.example.com/" });
     expect(loadProjectConfig(project)).toEqual({
-      apiKey: "sk-test",
+      authMode: "api-key",
+      apiKey: "key-test",
       endpoint: "https://gw.example.com/",
       projectRoot: project,
     });
   });
 
-  test("undefined on missing file, malformed JSON, or empty/non-string apiKey", () => {
+  test("parses WorkOS mode without organization or Neurospace coordinates", () => {
+    writeConfig(project, {
+      authMode: "workos",
+      profileId: "profile_1",
+      neurolinkId: "link_1",
+    });
+    expect(loadProjectConfig(project)).toEqual({
+      authMode: "workos",
+      profileId: "profile_1",
+      neurolinkId: "link_1",
+      projectRoot: project,
+    });
+  });
+
+  test("undefined on missing, malformed, legacy, or incomplete config", () => {
     expect(loadProjectConfig(project)).toBeUndefined();
     writeConfig(project, "not json {");
     expect(loadProjectConfig(project)).toBeUndefined();
-    writeConfig(project, { apiKey: "   " });
+    writeConfig(project, { authMode: "api-key", apiKey: "   " });
     expect(loadProjectConfig(project)).toBeUndefined();
-    writeConfig(project, { apiKey: 42 });
+    writeConfig(project, { authMode: "api-key", apiKey: 42 });
+    expect(loadProjectConfig(project)).toBeUndefined();
+    writeConfig(project, { apiKey: "legacy" });
+    expect(loadProjectConfig(project)).toBeUndefined();
+    writeConfig(project, { authMode: "workos", profileId: "profile_1" });
     expect(loadProjectConfig(project)).toBeUndefined();
   });
 
   test("projectConfig = resolve + load in one call", () => {
-    writeConfig(project, { apiKey: "k" });
+    writeConfig(project, { authMode: "api-key", apiKey: "k" });
     const deep = join(project, "a", "b");
     mkdirSync(deep, { recursive: true });
     expect(projectConfig(deep)?.apiKey).toBe("k");
@@ -96,6 +115,7 @@ describe("loadProjectConfig", () => {
 
 describe("URL resolution", () => {
   const cfg = (endpoint?: string): ProjectConfig => ({
+    authMode: "api-key",
     apiKey: "k",
     projectRoot: "/p",
     ...(endpoint ? { endpoint } : {}),
@@ -124,7 +144,8 @@ describe("URL resolution", () => {
 
 describe("captureEnabled — config presence IS consent", () => {
   test("on with a config, off without", () => {
-    expect(captureEnabled({ apiKey: "k", projectRoot: "/p" })).toBe(true);
+    expect(captureEnabled({ authMode: "api-key", apiKey: "k", projectRoot: "/p" })).toBe(true);
+    expect(captureEnabled({ authMode: "workos", profileId: "profile_1", neurolinkId: "link_1", projectRoot: "/p" })).toBe(true);
     expect(captureEnabled(undefined)).toBe(false);
   });
 
@@ -137,11 +158,11 @@ describe("captureEnabled — config presence IS consent", () => {
     for (const v of ["0", "false"]) {
       process.env.AUGENTA_CAPTURE_ENABLED = v;
       expect(captureKilled()).toBe(true);
-      expect(captureEnabled({ apiKey: "k", projectRoot: "/p" })).toBe(false);
+      expect(captureEnabled({ authMode: "api-key", apiKey: "k", projectRoot: "/p" })).toBe(false);
     }
     // any other value is not the kill switch
     process.env.AUGENTA_CAPTURE_ENABLED = "1";
     expect(captureKilled()).toBe(false);
-    expect(captureEnabled({ apiKey: "k", projectRoot: "/p" })).toBe(true);
+    expect(captureEnabled({ authMode: "api-key", apiKey: "k", projectRoot: "/p" })).toBe(true);
   });
 });

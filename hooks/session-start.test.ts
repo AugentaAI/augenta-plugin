@@ -1,11 +1,11 @@
 /**
- * Tests for session-start.ts — the SessionStart init prompt, memory scan, and
+ * Tests for session-start.ts — the SessionStart connect prompt, memory scan, and
  * stranded-outbox drain.
  *
- * Contract under test: an uninitialized project fires the init prompt exactly
- * once per project (`initialUserMessage` = /augenta:init on Claude Code, a
+ * Contract under test: an unconnected project fires the connect prompt exactly
+ * once per project (`initialUserMessage` = /augenta:connect on Claude Code, a
  * natural-language ask on Codex — which shows additionalContext to the user,
- * so it must carry no agent-only scaffolding there); an initialized project is
+ * so it must carry no agent-only scaffolding there); a connected project is
  * silent; a previously-prompted project is silent.
  *
  * Run as a subprocess with an isolated AUGENTA_HOME (the prompted-marker map)
@@ -46,19 +46,19 @@ function fire(payload: object, overrides: Record<string, string> = {}): string {
   return proc.stdout.toString();
 }
 
-describe("uninitialized project — the init prompt, harness-aware", () => {
-  test("Claude Code: fires /augenta:init with agent-directed context", () => {
+describe("unconnected project — the connect prompt, harness-aware", () => {
+  test("Claude Code: fires /augenta:connect with agent-directed context", () => {
     const out = fire({ transcript_path: CLAUDE_TP, cwd: project });
     const parsed = JSON.parse(out);
-    expect(parsed.hookSpecificOutput?.initialUserMessage).toBe("/augenta:init");
+    expect(parsed.hookSpecificOutput?.initialUserMessage).toBe("/augenta:connect");
     expect(out).toContain("never be pasted");
   });
 
   test("Codex: natural-language ask, no slash command, no agent-only scaffolding", () => {
     const out = fire({ transcript_path: CODEX_TP, cwd: project });
     const parsed = JSON.parse(out);
-    expect(parsed.hookSpecificOutput?.initialUserMessage).toBe("Initialize Augenta");
-    expect(out).not.toContain("/augenta:init");
+    expect(parsed.hookSpecificOutput?.initialUserMessage).toBe("Connect Augenta");
+    expect(out).not.toContain("/augenta:connect");
     expect(out).not.toContain("[Augenta]");
   });
 
@@ -78,26 +78,26 @@ describe("uninitialized project — the init prompt, harness-aware", () => {
   });
 });
 
-describe("initialized / silent paths", () => {
+describe("connected / silent paths", () => {
   test("a project with .augenta/config.json is silent", () => {
     mkdirSync(join(project, ".augenta"), { recursive: true });
-    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ apiKey: "k" }));
+    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ authMode: "api-key", apiKey: "k" }));
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
   });
 
-  test("a config in an ancestor also counts as initialized", () => {
+  test("a config in an ancestor also counts as connected", () => {
     mkdirSync(join(project, ".augenta"), { recursive: true });
-    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ apiKey: "k" }));
+    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ authMode: "api-key", apiKey: "k" }));
     const sub = join(project, "src");
     mkdirSync(sub);
     expect(fire({ transcript_path: CLAUDE_TP, cwd: sub })).toBe("");
   });
 
-  test("an initialized Codex SessionStart captures matching global-memory Task Groups before its detached drain", () => {
+  test("a connected Codex SessionStart captures matching global-memory Task Groups before its detached drain", () => {
     const codexHome = mkdtempSync(join(tmpdir(), "aug-ss-codex-home-"));
     try {
       mkdirSync(join(project, ".augenta"), { recursive: true });
-      writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ apiKey: "k" }));
+      writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ authMode: "api-key", apiKey: "k" }));
       mkdirSync(join(codexHome, "memories"), { recursive: true });
       writeFileSync(
         join(codexHome, "memories", "MEMORY.md"),
@@ -124,9 +124,9 @@ describe("SessionStart drains a stranded outbox (G2)", () => {
     return { src: "claude-code", sid: "s1", proj: project, ts: "2026-06-15T00:00:00.000Z", seq, kind: "msg", role: "user", text: `stranded ${seq}` };
   }
 
-  test("an initialized project with a pending spool still exits silently — the drain is detached, output is unaffected", () => {
+  test("a connected project with a pending spool still exits silently — the drain is detached, output is unaffected", () => {
     mkdirSync(join(project, ".augenta"), { recursive: true });
-    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ apiKey: "k" }));
+    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ authMode: "api-key", apiKey: "k" }));
     // Seed a spool as if a prior session's final Stop never drained it.
     new Outbox(project).append([stubEvent(0)]);
 
@@ -147,9 +147,9 @@ describe("SessionStart drains a stranded outbox (G2)", () => {
     expect(proc.stdout.toString()).toBe("");
   });
 
-  test("an initialized project with NOTHING pending is still silent (no spurious spawn)", () => {
+  test("a connected project with NOTHING pending is still silent (no spurious spawn)", () => {
     mkdirSync(join(project, ".augenta"), { recursive: true });
-    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ apiKey: "k" }));
+    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ authMode: "api-key", apiKey: "k" }));
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
   });
 });

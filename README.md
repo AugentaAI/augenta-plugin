@@ -21,11 +21,11 @@ activity alone.
 - **Share learning across a Neurospace.** Turn isolated agent sessions into
   useful organizational context for the people and agents working alongside
   them.
-- **Capture without changing your workflow.** Once a project is initialized,
+- **Capture without changing your workflow.** Once a project is connected,
   Augenta runs quietly in the background and tolerates temporary network
   failures without interrupting the agent.
 - **Choose exactly where capture happens.** Projects are opted in individually.
-  Uninitialized projects are silent no-ops, and a global kill switch is always
+  Unconnected projects are silent no-ops, and a global kill switch is always
   available.
 
 Augenta currently works with Claude Code and OpenAI Codex. Both integrations
@@ -55,7 +55,7 @@ Or, from inside an interactive Claude Code session:
 ```
 
 Restart Claude Code or start a new task, open a project you want Augenta to
-learn from, and run `/augenta:init`.
+learn from, and run `/augenta:connect`.
 
 ### OpenAI Codex
 
@@ -68,32 +68,40 @@ codex plugin add augenta@augenta
 
 On first launch, run `/hooks` and trust Augenta's hooks. Codex asks again after
 plugin updates; capture remains off until the hooks are trusted. Then open a
-project you want Augenta to learn from and run `$augenta:init` or ask
-**"Initialize Augenta."**
+project you want Augenta to learn from and run `$augenta:connect` or ask
+**"Connect Augenta."**
 
 The corresponding desktop apps share plugin configuration with their CLI. Once
 the marketplace has been added, you can enable Augenta from the plugin browser
 in Claude's Code tab or ChatGPT's Codex mode.
 
-## Initialize a project
+## Connect a project
 
-Initialization is a deliberate per-project opt-in. Get an API key from
-[augenta.ai](https://augenta.ai), then follow the initialization flow in your
-agent. It gives you a command like this to run in your own terminal at the
+Connection is a deliberate per-project opt-in. Follow the connection flow in
+your agent. It gives you this command to run in your own terminal at the
 project root:
 
 ```bash
-bun "<plugin-root>/scripts/setup.ts" --api-key <your-key>
+bun "<plugin-root>/scripts/connect.ts"
 ```
 
-Your key never needs to pass through the agent chat. The setup script makes no
-network calls and creates only this private, self-ignored directory:
+The script reuses your owner-only global WorkOS login when possible, otherwise
+opens device login. It displays the authenticated organization, always asks you
+to select a Neurospace, creates or retargets an inbound agent Neurolink through
+the normal `/v1` API, verifies it, and writes this private, self-ignored project
+directory:
 
 ```text
 <project>/.augenta/
 ├── .gitignore     "*"  — prevents the directory from being committed
-└── config.json    API key and optional endpoint (mode 0600)
+└── config.json    profileId, neurolinkId, optional endpoint (mode 0600)
 ```
+
+Rotating access and refresh tokens live only in `~/.augenta/auth.json` (mode
+`0600`, inside a `0700` directory). The project stores no OAuth token,
+organization id, or Neurospace id. Autonomous services and CI can use the
+advanced `--api-key <AugentaKey>` option; the assigned Neurolink is derived
+server-side.
 
 The presence of `.augenta/config.json` is the project's consent to capture both
 agent activity and project memory. Delete that file—or the entire `.augenta/`
@@ -115,8 +123,8 @@ finishes, it sends two complementary forms of activity to your Neurospace:
 
 > **Important:** raw transcript records are not secret-scrubbed. They are
 > structurally sanitized to remove opaque reasoning artifacts, then uploaded.
-> Initializing a project consents to uploading both the scrubbed event stream
-> and these raw transcript records. Only initialize projects whose agent
+> Connecting a project consents to uploading both the scrubbed event stream
+> and these raw transcript records. Only connect projects whose agent
 > activity you are comfortable sending to your Augenta Neurospace.
 
 Project memory is captured separately from trajectory activity. Memory becomes
@@ -127,7 +135,7 @@ scrubber to memory text before it enters the durable outbox.
 - **Claude Code:** captures regular, non-symlink Markdown files under the
   session's sibling `memory/` directory.
 - **Codex:** reads its global `MEMORY.md`, but captures only `# Task Group:`
-  blocks whose required `applies_to: cwd=...` scope is the initialized project
+  blocks whose required `applies_to: cwd=...` scope is the connected project
   or one of its descendants. Global summaries, profiles, unscoped blocks, and
   unrelated Task Groups are excluded.
 
@@ -135,16 +143,16 @@ Memory revisions and deletion notices are buffered durably just like turns.
 Nothing is scanned or uploaded without `.augenta/config.json`; the
 `AUGENTA_CAPTURE_ENABLED=0` kill switch disables activity and memory capture.
 
-All local state—including the API key and any queued activity or memory—lives
-under the self-git-ignored `.augenta/` directory. A durable, size-bounded outbox
-keeps records safe during network interruptions and retries delivery
-idempotently when connectivity returns.
+Project routing and queued activity or memory live under the self-git-ignored
+`.augenta/` directory; reusable WorkOS credentials live in the global
+owner-only auth file. A durable, size-bounded outbox keeps records safe during
+network interruptions or expired login and retries delivery idempotently.
 
 ## How capture works
 
 | Moment | Plugin behavior |
 |---|---|
-| Project opens | Offers to initialize Augenta once if the project has not opted in. An initialized project scans memory changes and drains any durable outbox. |
+| Project opens | Offers to connect Augenta once if the project has not opted in. A connected project scans memory changes and drains any durable outbox. |
 | Prompt submitted | Starts a new turn. |
 | Tool completes | Captures new transcript activity into the local outbox; no network request is made. |
 | Agent stops | Captures the final activity and memory changes, then sends completed records to Augenta in the background. |
@@ -181,5 +189,5 @@ The main implementation lives in:
 
 - `hooks/` — lifecycle entrypoints for supported coding agents
 - `capture/` — normalization, scrubbing, durable buffering, and delivery
-- `scripts/setup.ts` — safe per-project credential setup
-- `skills/init/` — the guided initialization flow
+- `scripts/connect.ts` — WorkOS login, Neurolink selection, and safe project config
+- `skills/connect/` — the guided connection flow

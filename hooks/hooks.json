@@ -1,5 +1,5 @@
 {
-  "description": "Augenta agent activity and project memory — one-time init prompt (SessionStart), turn-ordinal bump (UserPromptSubmit), buffer trajectory steps into <project>/.augenta (PostToolUse), scan memory + flush the completed turn (Stop). SessionStart also scans memory before draining. Every hook is a silent no-op unless <project>/.augenta/config.json exists; AUGENTA_CAPTURE_ENABLED=0 disables both.",
+  "description": "Augenta agent activity and project memory — one-time connect prompt (SessionStart), turn-ordinal bump (UserPromptSubmit), buffer trajectory steps into <project>/.augenta (PostToolUse), scan memory + flush the completed turn (Stop). SessionStart also scans memory before draining. Every hook is a silent no-op unless <project>/.augenta/config.json exists; AUGENTA_CAPTURE_ENABLED=0 disables both.",
   "hooks": {
     "SessionStart": [
       {

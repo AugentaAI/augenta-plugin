@@ -14,7 +14,7 @@
   "plugins": [
     {
       "name": "augenta",
-      "description": "Augenta v0.2.3 — captures agent activity and project memory from opted-in projects. Run $augenta:init or ask \"Initialize Augenta\" to begin.",
+      "description": "Augenta v0.2.3 — captures agent activity and project memory from connected projects. Run $augenta:connect or ask \"Connect Augenta\" to begin.",
       "version": "0.2.3",
       "category": "Productivity",
       "keywords": ["augenta", "telemetry", "memory", "codex"],

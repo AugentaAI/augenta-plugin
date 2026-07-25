@@ -513,7 +513,7 @@ describe("runCapture", () => {
       expect(existsSync(join(project, ".augenta"))).toBe(false);
 
       mkdirSync(join(project, ".augenta"), { recursive: true });
-      writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ apiKey: "k" }));
+      writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ authMode: "api-key", apiKey: "k" }));
       const killed = runHook({ AUGENTA_CAPTURE_ENABLED: "0" });
       expect(killed.exitCode).toBe(0);
       expect(killed.stdout.toString()).toBe("");

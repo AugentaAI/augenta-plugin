@@ -1,0 +1,6 @@
+interface:
+  display_name: "Connect Augenta"
+  short_description: "Connect this project through a Neurolink"
+  default_prompt: "Use $augenta:connect to connect Augenta for this project."
+policy:
+  allow_implicit_invocation: true

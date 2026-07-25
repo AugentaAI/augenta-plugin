@@ -16,7 +16,7 @@ Codex plugin-creator validator currently rejects Codex's supported `hooks`
 manifest field, so the Codex release gate is a real marketplace installation
 with `codex plugin marketplace add` followed by `codex plugin add`.
 Also run `claude --plugin-dir . plugin details augenta` and verify it reports
-the manifest version, one `init` skill, four hooks, and no load errors.
+the manifest version, one `connect` skill, four hooks, and no load errors.
 
 ## Cross-harness packaging
 
@@ -41,7 +41,9 @@ versioned marketplace descriptions at the same time.
 
 Augenta remains opt-in per project. Do not change telemetry APIs, payloads,
 consent semantics, or capture behavior without an explicit product decision.
-The API key stays out of chat and is written only by `scripts/setup.ts` to
-`.augenta/config.json`; the setup script is never run by the agent with a user
-key. Capture must stay a silent no-op without that config, and
+OAuth tokens stay in the owner-only global `~/.augenta/auth.json`; a connected
+project stores only a profile reference and Neurolink id. Platform keys stay
+out of chat and are written only by `scripts/connect.ts` in the explicit
+`--api-key` path; the connect script is never run by the agent with a user
+credential. Capture must stay a silent no-op without project config, and
 `AUGENTA_CAPTURE_ENABLED=0` remains the global kill switch.

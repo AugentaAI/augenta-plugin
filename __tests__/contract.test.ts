@@ -36,8 +36,8 @@ const KNOWN_HOOK_EVENTS = new Set([
   "PreToolUse", "PostToolUse", "PreCompact", "Notification",
 ]);
 
-// The telemetry-only plugin ships exactly ONE skill: init.
-const EXPECTED_SKILLS = new Set(["init"]);
+// The capture plugin ships exactly one connection skill.
+const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
 const RELEASE_VERSION = "0.2.3";
@@ -90,7 +90,7 @@ function referencedPaths(text: string): string[] {
 describe("skill frontmatter", () => {
   const dirs = skillDirs();
 
-  test("exactly the expected skills are present (single init surface)", () => {
+  test("exactly the expected skills are present", () => {
     expect(new Set(dirs)).toEqual(EXPECTED_SKILLS);
   });
 
@@ -131,9 +131,9 @@ describe("skill frontmatter", () => {
         const metadataPath = join(skillDir, "agents", "openai.yaml");
         expect(existsSync(metadataPath)).toBe(true);
         const metadata = readFileSync(metadataPath, "utf8");
-        expect(metadata).toContain('display_name: "Initialize Augenta"');
-        expect(metadata).toContain('short_description: "Enable Augenta for the current project"');
-        expect(metadata).toContain('default_prompt: "Use $augenta:init to initialize Augenta for this project."');
+        expect(metadata).toContain('display_name: "Connect Augenta"');
+        expect(metadata).toContain('short_description: "Connect this project through a Neurolink"');
+        expect(metadata).toContain('default_prompt: "Use $augenta:connect to connect Augenta for this project."');
         expect(metadata).toContain("allow_implicit_invocation: true");
       });
 
@@ -264,8 +264,8 @@ describe("manifests — cross-harness packaging and one version", () => {
     expect(readme).toContain("claude plugin install augenta@augenta");
     expect(readme).toContain("codex plugin marketplace add AugentaAI/augenta-plugin --ref main");
     expect(readme).toContain("codex plugin add augenta@augenta");
-    expect(readme).toContain("/augenta:init");
-    expect(readme).toContain("$augenta:init");
+    expect(readme).toContain("/augenta:connect");
+    expect(readme).toContain("$augenta:connect");
     expect(readme).not.toContain("codex plugin install");
   });
 });
