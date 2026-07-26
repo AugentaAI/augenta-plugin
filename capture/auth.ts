@@ -280,6 +280,8 @@ export function profileIdFor(
   workosOrgId: string,
 ): string {
   const digest = createHash("sha256")
+    // codeql[js/insufficient-password-hash] These are public profile coordinates
+    // (issuer URL, public client ID, and organization ID), never a password or token.
     .update(`${issuer.replace(/\/+$/, "")}\0${clientId}\0${workosOrgId}`)
     .digest("hex")
     .slice(0, 24);
