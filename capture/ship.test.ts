@@ -27,6 +27,8 @@ import {
   boundExperienceSize,
   boundRawData,
   packBodies,
+  postExperiences,
+  shippingNotice,
   MAX_EXPERIENCE_BYTES,
   MAX_BODY_BYTES,
   DOCUMENT_TRUNCATION_MARKER,
@@ -48,6 +50,66 @@ function ev(seq: number, opts: Partial<CaptureEvent> = {}): CaptureEvent {
     ...opts,
   };
 }
+
+describe("unified authentication headers", () => {
+  test("WorkOS uses bearer plus Neurolink; platform keys use AugentaKey", async () => {
+    const seen: Headers[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        seen.push(request.headers);
+        return new Response(null, { status: 202 });
+      },
+    });
+    const url = `http://127.0.0.1:${server.port}/v1/experiences`;
+    const experience = groupIntoExperiences([ev(0)])[0]!;
+    try {
+      await postExperiences(url, "oauth-token", [experience], "link_1", "workos");
+      await postExperiences(url, "key_public.secret", [experience], undefined, "api-key");
+    } finally {
+      server.stop(true);
+    }
+    expect(seen[0]!.get("authorization")).toBe("Bearer oauth-token");
+    expect(seen[0]!.get("x-augenta-neurolink-id")).toBe("link_1");
+    expect(seen[1]!.get("authorization")).toBe(
+      "AugentaKey key_public.secret",
+    );
+    expect(seen[1]!.get("x-augenta-neurolink-id")).toBeNull();
+  });
+
+  test("WorkOS shipping without a Neurolink fails transiently, never into quarantine", async () => {
+    // The door answers a missing X-Augenta-Neurolink-Id with 400, and 400 is a
+    // PERMANENT status here — so reaching it would quarantine real records to
+    // rejected.jsonl. Throwing first routes it to drain()'s transient path,
+    // which leaves the cursor exactly where it was.
+    let requests = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        requests += 1;
+        return new Response(null, { status: 400 });
+      },
+    });
+    const url = `http://127.0.0.1:${server.port}/v1/experiences`;
+    const experience = groupIntoExperiences([ev(0)])[0]!;
+    try {
+      await expect(
+        postExperiences(url, "oauth-token", [experience], undefined, "workos"),
+      ).rejects.toThrow("requires a Neurolink id");
+    } finally {
+      server.stop(true);
+    }
+    expect(requests).toBe(0);
+  });
+
+  test("maps expired human login and unusable key/link states to one actionable notice", () => {
+    expect(shippingNotice("workos", 401)).toBe("relogin");
+    expect(shippingNotice("workos", 403)).toBe("connect");
+    expect(shippingNotice("api-key", 401)).toBe("connect");
+    expect(shippingNotice("api-key", 403)).toBe("connect");
+    expect(shippingNotice("api-key", 500)).toBeUndefined();
+  });
+});
 
 function raw(line: string, opts: Partial<RawRecord> = {}): RawRecord {
   return {

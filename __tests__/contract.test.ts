@@ -36,11 +36,11 @@ const KNOWN_HOOK_EVENTS = new Set([
   "PreToolUse", "PostToolUse", "PreCompact", "Notification",
 ]);
 
-// The telemetry-only plugin ships exactly ONE skill: init.
-const EXPECTED_SKILLS = new Set(["init"]);
+// The capture plugin ships exactly one connection skill.
+const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.2.3";
+const RELEASE_VERSION = "0.3.0";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -90,7 +90,7 @@ function referencedPaths(text: string): string[] {
 describe("skill frontmatter", () => {
   const dirs = skillDirs();
 
-  test("exactly the expected skills are present (single init surface)", () => {
+  test("exactly the expected skills are present", () => {
     expect(new Set(dirs)).toEqual(EXPECTED_SKILLS);
   });
 
@@ -131,9 +131,9 @@ describe("skill frontmatter", () => {
         const metadataPath = join(skillDir, "agents", "openai.yaml");
         expect(existsSync(metadataPath)).toBe(true);
         const metadata = readFileSync(metadataPath, "utf8");
-        expect(metadata).toContain('display_name: "Initialize Augenta"');
-        expect(metadata).toContain('short_description: "Enable Augenta for the current project"');
-        expect(metadata).toContain('default_prompt: "Use $augenta:init to initialize Augenta for this project."');
+        expect(metadata).toContain('display_name: "Connect Augenta"');
+        expect(metadata).toContain('short_description: "Connect this project through a Neurolink"');
+        expect(metadata).toContain('default_prompt: "Use $augenta:connect to connect Augenta for this project."');
         expect(metadata).toContain("allow_implicit_invocation: true");
       });
 
@@ -154,6 +154,83 @@ describe("repository guidance", () => {
     expect(existsSync(agents)).toBe(true);
     expect(existsSync(claude)).toBe(true);
     expect(readFileSync(claude, "utf8").trim()).toBe("@AGENTS.md");
+  });
+});
+
+describe("network calls are bounded", () => {
+  // The plugin runs inside a hook with a hard timeout, and connect runs in a
+  // person's terminal right after they authorized in the browser — before the
+  // tokens are persisted. An unbounded fetch there hangs the terminal and throws
+  // the login away, and no behavioural test catches it (a hang looks like a slow
+  // test). So assert it structurally: every fetch must carry a signal.
+  const sources = ["capture/auth.ts", "capture/ship.ts", "scripts/connect.ts"];
+
+  test("every fetch passes an AbortSignal", () => {
+    const unbounded: string[] = [];
+    for (const rel of sources) {
+      const text = readFileSync(join(PLUGIN_ROOT, rel), "utf8");
+      // Each `fetch(` call, up to the closing brace of its init object. Crude on
+      // purpose — a false positive is a comment away, a false negative is a hang.
+      for (const match of text.matchAll(/\bfetch\(/g)) {
+        const start = match.index!;
+        const call = text.slice(start, start + 600);
+        const end = call.indexOf("\n  });") >= 0 ? call.indexOf("\n  });") : call.length;
+        if (!/\bsignal\s*:/.test(call.slice(0, end))) {
+          const line = text.slice(0, start).split("\n").length;
+          unbounded.push(`${rel}:${line}`);
+        }
+      }
+    }
+    expect(unbounded).toEqual([]);
+  });
+});
+
+describe("no inert CodeQL suppression markers", () => {
+  // `// codeql[rule-id]` is an LGTM-era marker that GitHub code scanning does
+  // NOT honor — an adjacent one was verified firing anyway. Leaving them in
+  // reads as "this is handled" when nothing is handling it. Alerts here are
+  // adjudicated by dismissal in the Security tab; keep the prose explaining WHY
+  // a finding is a false positive, not a marker that implies a mechanism.
+  test("source files carry no codeql[...] markers", () => {
+    const orphans: string[] = [];
+    for (const rel of ["capture/auth.ts", "capture/ship.ts", "scripts/connect.ts"]) {
+      const lines = readFileSync(join(PLUGIN_ROOT, rel), "utf8").split("\n");
+      lines.forEach((line, index) => {
+        // Only a marker STANDING ALONE on its comment line is the suppression
+        // form; prose that merely names it (explaining why it does not work) is
+        // documentation and must not trip this.
+        if (/^\s*\/\/\s*codeql\[[^\]]+\]\s*$/.test(line)) orphans.push(`${rel}:${index + 1}`);
+      });
+    }
+    expect(orphans).toEqual([]);
+  });
+});
+
+describe("the connect skill hands over a runnable command", () => {
+  // The skill does not perform the login — it PRINTS one terminal command. If it
+  // does not tell the model how to find the installed plugin root, the model
+  // guesses, and the user's first experience of Augenta is "file not found".
+  // The install lives at a versioned cache path, so there is nothing to guess.
+  const skill = readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8");
+
+  test("names CLAUDE_PLUGIN_ROOT as the resolution mechanism", () => {
+    expect(skill).toContain("CLAUDE_PLUGIN_ROOT");
+  });
+
+  test("gives a fallback for Codex and an unset variable", () => {
+    expect(skill).toMatch(/plugins\/cache/);
+    expect(skill).toMatch(/CODEX_HOME/);
+  });
+
+  test("requires the path to be verified before it is printed", () => {
+    expect(skill).toMatch(/test -f/);
+  });
+
+  test("warns that the user's own shell lacks the variable", () => {
+    // Whitespace-tolerant: the prose is hard-wrapped, so the sentence spans lines.
+    expect(skill.replace(/\s+/g, " ")).toMatch(
+      /user's own shell does not have the plugin-root environment variable/,
+    );
   });
 });
 
@@ -195,6 +272,13 @@ describe("manifests — cross-harness packaging and one version", () => {
 
   test("all release surfaces agree on ONE version", () => {
     const packageJson = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf8"));
+    // connect.ts reports its version to the platform as Neurolink metadata, so
+    // it is a release surface too — and the only one not expressed as JSON, which
+    // is exactly how it drifted a release behind before this assertion existed.
+    const connectSource = readFileSync(join(PLUGIN_ROOT, "scripts", "connect.ts"), "utf8");
+    const pluginVersion = connectSource.match(
+      /^export const PLUGIN_VERSION = "([^"]+)";$/m,
+    )?.[1];
     const versions = new Set([
       claudePluginJson.version,
       claudeMarketplaceJson.metadata?.version,
@@ -203,8 +287,20 @@ describe("manifests — cross-harness packaging and one version", () => {
       agentsMarketplaceJson.metadata?.version,
       agentsMarketplaceJson.plugins?.[0]?.version,
       packageJson.version,
+      pluginVersion,
     ]);
     expect([...versions]).toEqual([RELEASE_VERSION]);
+  });
+
+  test("the versioned marketplace descriptions track the release", () => {
+    // AGENTS.md → Releases: descriptions carry the version in prose, so they go
+    // stale silently unless something pins them to the same bump.
+    for (const description of [
+      claudeMarketplaceJson.plugins?.[0]?.description,
+      agentsMarketplaceJson.plugins?.[0]?.description,
+    ]) {
+      expect(description).toContain(`v${RELEASE_VERSION}`);
+    }
   });
 
   test("Claude marketplace lists this plugin at the repo root", () => {
@@ -264,8 +360,8 @@ describe("manifests — cross-harness packaging and one version", () => {
     expect(readme).toContain("claude plugin install augenta@augenta");
     expect(readme).toContain("codex plugin marketplace add AugentaAI/augenta-plugin --ref main");
     expect(readme).toContain("codex plugin add augenta@augenta");
-    expect(readme).toContain("/augenta:init");
-    expect(readme).toContain("$augenta:init");
+    expect(readme).toContain("/augenta:connect");
+    expect(readme).toContain("$augenta:connect");
     expect(readme).not.toContain("codex plugin install");
   });
 });

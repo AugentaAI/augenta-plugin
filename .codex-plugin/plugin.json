@@ -1,7 +1,7 @@
 {
   "name": "augenta",
-  "version": "0.2.3",
-  "description": "Augenta — opt-in, per-project capture of your coding agent's activity and project memory to your Augenta Neurospace. Ask \"Initialize Augenta\" in a project to enable it.",
+  "version": "0.3.0",
+  "description": "Augenta — opt-in, per-project capture of your coding agent's activity and project memory to your Augenta Neurospace. Ask \"Connect Augenta\" in a project to enable it.",
   "author": {
     "name": "Augenta"
   },
@@ -14,14 +14,14 @@
   "interface": {
     "displayName": "Augenta",
     "shortDescription": "Per-project activity and memory capture",
-    "longDescription": "Augenta captures your coding agent's activity and matching project memory from projects you explicitly opt in, and ships them to your Augenta Neurospace. Nothing is captured until you initialize a project.",
+    "longDescription": "Augenta captures your coding agent's activity and matching project memory from projects you explicitly connect, and ships them to your Augenta Neurospace through a Neurolink. Nothing is captured until you connect a project.",
     "developerName": "Augenta",
     "category": "Productivity",
     "capabilities": ["Read"],
     "websiteURL": "https://augenta.ai",
     "privacyPolicyURL": "https://augenta.ai",
     "termsOfServiceURL": "https://augenta.ai",
-    "defaultPrompt": ["Initialize Augenta"],
+    "defaultPrompt": ["Connect Augenta"],
     "brandColor": "#EEE673"
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "augenta-plugin",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
@@ -10,6 +10,7 @@
   "scripts": {
     "test": "bun test",
     "test:e2e": "bun test __tests__/memory-capture.e2e.test.ts",
+    "e2e:dev": "bun scripts/dev-e2e.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

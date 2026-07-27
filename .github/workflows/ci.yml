@@ -53,8 +53,8 @@ jobs:
           claude plugin marketplace add ./
           claude plugin install augenta@augenta
           claude plugin details augenta@augenta | tee claude-plugin-details.txt
-          grep -Fq 'augenta 0.2.3' claude-plugin-details.txt
-          grep -Eq 'Skills [(]1[)].*init' claude-plugin-details.txt
+          grep -Fq 'augenta 0.3.0' claude-plugin-details.txt
+          grep -Eq 'Skills [(]1[)].*connect' claude-plugin-details.txt
           grep -Fq 'Hooks (4)' claude-plugin-details.txt
 
       - name: Install and inspect with Codex
@@ -64,20 +64,20 @@ jobs:
           codex plugin list --json | tee codex-plugins.json
           jq -e '.installed[] | select(
             .pluginId == "augenta@augenta" and
-            .version == "0.2.3" and
+            .version == "0.3.0" and
             .enabled == true
           )' codex-plugins.json
           codex_plugin_root="$(jq -r '.installedPath' codex-install.json)"
-          test -f "$codex_plugin_root/skills/init/SKILL.md"
+          test -f "$codex_plugin_root/skills/connect/SKILL.md"
           test "$(find "$codex_plugin_root/skills" -name SKILL.md | wc -l)" -eq 1
           test "$(jq -r '.hooks' "$codex_plugin_root/.codex-plugin/plugin.json")" = './hooks/hooks.json'
           test "$(jq '.hooks | keys | length' "$codex_plugin_root/hooks/hooks.json")" -eq 4
           node .github/scripts/read-codex-plugin.mjs "$PWD/.agents/plugins/marketplace.json" augenta \
             | tee codex-plugin-read.json
           jq -e '
-            .summary.localVersion == "0.2.3" and
+            .summary.localVersion == "0.3.0" and
             (.skills | length == 1) and
-            .skills[0].name == "augenta:init" and
+            .skills[0].name == "augenta:connect" and
             .skills[0].enabled == true and
             .skills[0].interface != null and
             .skills[0].interface.shortDescription != null and

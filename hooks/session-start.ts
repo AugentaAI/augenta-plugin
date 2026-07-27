@@ -2,20 +2,29 @@
 /**
  * Augenta SessionStart hook — two jobs, via `hookSpecificOutput`:
  *
- *  Uninitialized project → auto-fire the init skill exactly once per project.
+ *  Unconnected project → auto-fire the connect skill exactly once per project.
  *  SessionStart is the earliest point a plugin can act, and its output can carry
- *  `initialUserMessage`, which creates the first user turn on its own — so init
- *  starts without the user typing anything (`/augenta:init` on Claude Code; a
+ *  `initialUserMessage`, which creates the first user turn on its own — so connect
+ *  starts without the user typing anything (`/augenta:connect` on Claude Code; a
  *  natural-language ask on Codex, which has no slash commands).
  *
- *  Run-once-per-project guarantee: fire only when the project has NO
+ *  Run-once-per-project guarantee: fire only when the project has NO USABLE
  *  `.augenta/config.json` AND has not been auto-prompted before. The prompted
- *  marker lives in the USER's home (~/.augenta/state/init-prompted.json, a
+ *  marker lives in the USER's home (~/.augenta/state/connect-prompted.json, a
  *  {projectPath: isoDate} map, honoring AUGENTA_HOME) — deliberately NOT in the
  *  project: planting a `.augenta/` dir in every repo the user merely opens would
  *  be invasive before they've consented. It is the plugin's only home-dir state.
+ *  The pre-0.3.0 map (init-prompted.json) is still READ, so renaming the skill
+ *  doesn't re-prompt every project a user already dismissed.
  *
- *  Initialized project → scan memory changes, then give a STRANDED outbox a
+ *  "Usable" means the current parser accepts it. A config file it rejects — a
+ *  pre-0.3.0 `{apiKey}` file from the removed setup.ts, or a truncated write —
+ *  counts as UNCONNECTED, and gets its own one-shot reconnect prompt. Left on
+ *  the connected path it would be the worst of both worlds: capture off, and
+ *  the prompt below unreachable forever, since that is gated on the file's
+ *  ABSENCE. Silent permanent death is the one outcome this hook must not have.
+ *
+ *  Connected project → scan memory changes, then give a STRANDED outbox a
  *  chance to drain. If the final Stop of a prior session never fired (crash,
  *  killed terminal) or failed mid-drain, that spool would otherwise sit
  *  untouched until the NEXT session's own Stop. SessionStart is the next
@@ -23,7 +32,7 @@
  *  uses whenever the scan or an earlier session left pending bytes. The
  *  shipper's single-flight `.lock` prevents concurrent drains.
  *
- *  Everything else is silent: an initialized project with nothing pending
+ *  Everything else is silent: a connected project with nothing pending
  *  needs nothing injected (the plugin is push-only), and a previously-prompted
  *  project gets no nag.
  */
@@ -35,6 +44,7 @@ import { captureEnabled, loadProjectConfig, resolveProjectRoot } from "../captur
 import { Outbox } from "../capture/outbox";
 import { spawnShipper } from "../capture/capture";
 import { captureAgentMemory } from "../capture/memory";
+import { takeAuthNotice } from "../capture/auth";
 
 // SessionStart passes a JSON payload on stdin; we need the transcript path (to
 // tell which harness we're in) and cwd (to find the project), and we must
@@ -54,26 +64,43 @@ try {
 const codex = isCodexHarness(transcriptPath);
 const projectPath = cwd || process.cwd();
 
-// --- Initialized? The project (or an ancestor) has .augenta/config.json. ------
-const initializedRoot = resolveProjectRoot(projectPath);
-if (initializedRoot) {
-  // A stranded spool (a prior session's final Stop never fired, or failed
-  // before it could drain) otherwise waits for THIS session's own Stop —
-  // give it a chance to drain now instead.
-  const cfg = loadProjectConfig(initializedRoot);
+// --- Connected? An ancestor has a .augenta/config.json the parser ACCEPTS. ----
+const configuredRoot = resolveProjectRoot(projectPath);
+const cfg = configuredRoot ? loadProjectConfig(configuredRoot) : undefined;
+/** A config file exists, but this plugin version cannot read it. */
+const staleConfig = Boolean(configuredRoot) && !cfg;
+const connectedRoot = cfg ? configuredRoot : undefined;
+if (connectedRoot) {
+  // Everything below is gated on capture actually being live. With the kill
+  // switch thrown this hook owes the user silence, and a pending notice is not
+  // an exception: nagging about a connection they deliberately switched off is
+  // noise. Leaving the marker unread also keeps it — it surfaces on the first
+  // session after capture is re-enabled, which is when it becomes actionable.
   if (captureEnabled(cfg)) {
-    // Pick up memory generated after the previous session ended before the
-    // stranded-outbox check, so this same detached shipper can deliver both.
+    const authNotice = takeAuthNotice(connectedRoot);
+    if (authNotice) {
+      const action = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
+      const reason =
+        authNotice === "relogin"
+          ? "WorkOS re-login"
+          : "a valid inbound Neurolink";
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: `Augenta has queued capture waiting for ${reason}. Run ${action}; queued records will resume shipping after reconnecting.` } }));
+    }
+    // A stranded spool (a prior session's final Stop never fired, or failed
+    // before it could drain) otherwise waits for THIS session's own Stop —
+    // give it a chance to drain now instead. Memory generated after the
+    // previous session ended is picked up first, so the one detached shipper
+    // below delivers both.
     try {
       captureAgentMemory({
-        projectRoot: initializedRoot,
+        projectRoot: connectedRoot,
         harness: codex ? "codex" : "claude-code",
         transcriptPath,
       });
     } catch {
       /* memory discovery is best-effort and this hook must remain silent */
     }
-    if (new Outbox(initializedRoot).hasPendingBytes()) spawnShipper(initializedRoot);
+    if (new Outbox(connectedRoot).hasPendingBytes()) spawnShipper(connectedRoot);
   }
   process.exit(0);
 }
@@ -81,26 +108,37 @@ if (initializedRoot) {
 // --- Prompted before? Check the once-per-project marker map. ------------------
 const home = process.env.AUGENTA_HOME ?? homedir();
 const stateDir = join(home, ".augenta", "state");
-const markerPath = join(stateDir, "init-prompted.json");
+const markerPath = join(stateDir, "connect-prompted.json");
+// The pre-0.3.0 map, written when this hook prompted for `/augenta:init`. Read,
+// never written: renaming the skill must not re-prompt projects the user has
+// already dismissed once.
+const legacyMarkerPath = join(stateDir, "init-prompted.json");
 
-function readMarkers(): Record<string, string> {
+function readMarkers(path: string): Record<string, string> {
   try {
-    const parsed = JSON.parse(readFileSync(markerPath, "utf8")) as unknown;
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
     return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
   } catch {
     return {};
   }
 }
 
-const markers = readMarkers();
-if (markers[projectPath]) process.exit(0);
+// A stale config is a DIFFERENT prompt from "you never connected this project":
+// the user did connect, and their config stopped being readable. It gets its own
+// one-shot key, and deliberately ignores the pre-0.3.0 marker — every project
+// with a legacy config has one, and honoring it here would re-silence exactly
+// the users this prompt exists for.
+const markerKey = staleConfig ? `reconnect:${projectPath}` : projectPath;
+const markers = readMarkers(markerPath);
+if (markers[markerKey]) process.exit(0);
+if (!staleConfig && readMarkers(legacyMarkerPath)[projectPath]) process.exit(0);
 
 // Record that we've auto-prompted this project, so this is its only automatic
 // fire ever. If the marker can't be persisted, don't fire — better silent than
 // a prompt loop on every session.
 try {
   mkdirSync(stateDir, { recursive: true });
-  markers[projectPath] = new Date().toISOString();
+  markers[markerKey] = new Date().toISOString();
   const tmp = markerPath + ".tmp";
   writeFileSync(tmp, JSON.stringify(markers));
   renameSync(tmp, markerPath);
@@ -108,24 +146,36 @@ try {
   process.exit(0);
 }
 
-const additionalContext = codex
-  ? // Codex shows this verbatim — clean, user-facing, no internal scaffolding.
-    "Augenta isn't set up for this project yet — starting initialization."
-  : "[Augenta] This project has not been initialized for Augenta capture and this " +
-    "is the one automatic prompt it will ever get. Run the augenta init skill now " +
-    "(/augenta:init): it explains what capture does and walks the user through " +
+// Codex shows additionalContext verbatim, so its wording stays clean and
+// user-facing; Claude Code's is agent-directed and may carry scaffolding.
+const codexContext = staleConfig
+  ? "Augenta's saved connection for this project can no longer be read — reconnecting."
+  : "Augenta isn't connected for this project yet — starting connection.";
+
+const claudeContext = staleConfig
+  ? "[Augenta] This project has an .augenta/config.json that this plugin version " +
+    "cannot read — it predates the Neurolink connection format, or the write was " +
+    "truncated — so capture is silently off. This is the one automatic prompt it " +
+    "will ever get. Run the augenta connect skill now (/augenta:connect) to " +
+    "reconnect it; anything already queued in the outbox ships once it succeeds. " +
+    "OAuth tokens and API keys must never be pasted into the chat."
+  : "[Augenta] This project has not been connected for Augenta capture and this " +
+    "is the one automatic prompt it will ever get. Run the augenta connect skill now " +
+    "(/augenta:connect): it explains what capture does and walks the user through " +
     "creating .augenta/config.json via a command they run in their OWN terminal — " +
-    "the API key must never be pasted into the chat.";
+    "OAuth tokens and API keys must never be pasted into the chat.";
+
+const additionalContext = codex ? codexContext : claudeContext;
 
 process.stdout.write(
   JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "SessionStart",
       additionalContext,
-      // Auto-create the first turn so init begins without user input. Codex has
+      // Auto-create the first turn so connect begins without user input. Codex has
       // no slash commands, so ask in natural language there — the same phrase as
       // the Codex manifest's defaultPrompt.
-      initialUserMessage: codex ? "Initialize Augenta" : "/augenta:init",
+      initialUserMessage: codex ? "Connect Augenta" : "/augenta:connect",
     },
   }),
 );

@@ -32,7 +32,7 @@ function fire(payload: object): { stdout: string; exitCode: number | null } {
 
 function optIn(): void {
   mkdirSync(join(project, ".augenta"), { recursive: true });
-  writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ apiKey: "k" }));
+  writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ authMode: "api-key", apiKey: "k" }));
 }
 
 describe("user-prompt turn bump", () => {
