@@ -16,10 +16,12 @@ import { join } from "node:path";
 import {
   accessTokenForProfile,
   fetchWithProfile,
+  markAuthNotice,
   profileIdFor,
   readAuthStore,
   reusableProfiles,
   saveDeviceProfile,
+  takeAuthNotice,
   type OAuthConfig,
 } from "./auth";
 
@@ -55,9 +57,7 @@ describe("global WorkOS profiles", () => {
       { workosUserId: "user_a", workosOrgId: "org_a" },
     );
 
-    expect(saved.profileId).toBe(
-      profileIdFor(config.issuer, config.clientId, "org_a"),
-    );
+    expect(saved.profileId).toBe(profileIdFor(config, "org_a"));
     expect(readAuthStore().version).toBe(1);
     expect(statSync(root).mode & 0o777).toBe(0o700);
     expect(statSync(join(root, "auth.json")).mode & 0o777).toBe(0o600);
@@ -89,6 +89,32 @@ describe("global WorkOS profiles", () => {
     expect(Object.keys(readAuthStore().profiles)).toHaveLength(2);
     expect(reusableProfiles(config).map((item) => item.profile.workosOrgId)).toEqual([
       "org_a",
+    ]);
+  });
+
+  test("the same organization behind two gateways keeps two profiles", async () => {
+    // reusableProfiles() filters on the gateway, so profile IDENTITY must include
+    // it too. When it didn't, connecting one project with an --endpoint override
+    // and another without collapsed both onto one id: the second login silently
+    // overwrote the first's gateway, and the next --endpoint connect re-ran
+    // device login against tokens that were still perfectly valid.
+    const override = { ...config, gateway: "http://127.0.0.1:8080" };
+    const tokens = {
+      accessToken: "access-a",
+      refreshToken: "refresh-a",
+      expiresAt: Date.now() + 60_000,
+    };
+    const identity = { workosUserId: "user_a", workosOrgId: "org_a" };
+    const first = await saveDeviceProfile(override, tokens, identity);
+    const second = await saveDeviceProfile(config, tokens, identity);
+
+    expect(first.profileId).not.toBe(second.profileId);
+    expect(Object.keys(readAuthStore().profiles)).toHaveLength(2);
+    expect(reusableProfiles(override).map((item) => item.profileId)).toEqual([
+      first.profileId,
+    ]);
+    expect(reusableProfiles(config).map((item) => item.profileId)).toEqual([
+      second.profileId,
     ]);
   });
 
@@ -162,5 +188,34 @@ describe("global WorkOS profiles", () => {
     expect(response.status).toBe(204);
     expect(apiCalls).toBe(2);
     expect(refreshes).toBe(1);
+  });
+});
+
+describe("auth notices handed from the detached shipper to the next SessionStart", () => {
+  let project: string;
+  beforeEach(() => (project = mkdtempSync(join(tmpdir(), "aug-notice-"))));
+  afterEach(() => rmSync(project, { recursive: true, force: true }));
+
+  test("a notice round-trips once and does not repeat", () => {
+    markAuthNotice(project, "relogin");
+    expect(takeAuthNotice(project)).toBe("relogin");
+    expect(takeAuthNotice(project)).toBeUndefined();
+  });
+
+  test("marking upholds the .augenta self-gitignore invariant", () => {
+    // The dir must never exist without the .gitignore that ignores it — a notice
+    // is the one writer that could create it on a project that has no config.
+    markAuthNotice(project, "connect");
+    expect(readFileSync(join(project, ".augenta", ".gitignore"), "utf8")).toBe("*\n");
+  });
+
+  test("reports the most urgent pending notice and clears every one", () => {
+    // The shipper writes whichever notice its last status implies, so both can be
+    // on disk. Clearing only the reported one strands the other, which resurfaces
+    // sessions later as a prompt for a cause that is long gone.
+    markAuthNotice(project, "connect");
+    markAuthNotice(project, "relogin");
+    expect(takeAuthNotice(project)).toBe("relogin");
+    expect(takeAuthNotice(project)).toBeUndefined();
   });
 });

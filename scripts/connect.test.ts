@@ -54,6 +54,18 @@ describe("parseArgs", () => {
       controlUrl: "https://dev.example.com",
     });
   });
+
+  test("a flag is never swallowed as another flag's value", () => {
+    // This used to store "--project" as the API key and go on to write a config
+    // with it — a typo that only surfaced later as an unexplained 401.
+    expect(() => parseArgs(["--api-key", "--project", "/p"])).toThrow(
+      "--api-key requires a value",
+    );
+    expect(() => parseArgs(["--endpoint"])).toThrow("--endpoint requires a value");
+    expect(() => parseArgs(["--harness", "emacs"])).toThrow(
+      "--harness must be claude-code or codex",
+    );
+  });
 });
 
 describe("resolveTargetProject", () => {

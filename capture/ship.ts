@@ -336,6 +336,14 @@ export async function postExperiences(
   neurolinkId?: string,
   authMode: "workos" | "api-key" = "api-key",
 ): Promise<PostResult> {
+  // In WorkOS mode the Neurolink is the ROUTE — a platform key carries its own
+  // assignment, a bearer token does not. The door answers a missing header with
+  // 400, which is a PERMANENT status here, so the batch would be quarantined to
+  // rejected.jsonl. Throwing instead puts it on the transient path: the cursor
+  // holds and the records are still there once the caller is fixed.
+  if (authMode === "workos" && !neurolinkId) {
+    throw new Error("WorkOS shipping requires a Neurolink id");
+  }
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -515,7 +523,7 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
         sliceOk = false; // transient — keep the whole slice, discard this pass's quarantine candidates
         break;
       }
-    } catch (error) {
+    } catch {
       break; // network/timeout — leave the cursor, retry on the next trigger
     }
     if (!sliceOk) break;
@@ -559,7 +567,7 @@ export function acquireLock(projectRoot: string): boolean {
         unlinkSync(lock);
         return acquireLock(projectRoot); // one retry after reclaiming
       }
-    } catch (error) {
+    } catch {
       /* lost a race on the lock file — treat as held */
     }
     return false;

@@ -6,7 +6,10 @@
  * once per project (`initialUserMessage` = /augenta:connect on Claude Code, a
  * natural-language ask on Codex — which shows additionalContext to the user,
  * so it must carry no agent-only scaffolding there); a connected project is
- * silent; a previously-prompted project is silent.
+ * silent; a previously-prompted project is silent — including one prompted
+ * under the pre-0.3.0 `init-prompted.json` map. A config file the current
+ * parser REJECTS counts as unconnected and gets its own one-shot reconnect
+ * prompt; it must never be silently treated as connected.
  *
  * Run as a subprocess with an isolated AUGENTA_HOME (the prompted-marker map)
  * and a temp project as cwd.
@@ -34,6 +37,13 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
   rmSync(project, { recursive: true, force: true });
 });
+
+/** Seed a prompted-marker map in the isolated AUGENTA_HOME. */
+function writeMarkers(file: string, markers: Record<string, string>): void {
+  const stateDir = join(home, ".augenta", "state");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(stateDir, file), JSON.stringify(markers));
+}
 
 function fire(payload: object, overrides: Record<string, string> = {}): string {
   const env: Record<string, string> = { ...(process.env as Record<string, string>), AUGENTA_HOME: home, ...overrides };
@@ -75,6 +85,62 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
     } finally {
       rmSync(other, { recursive: true, force: true });
     }
+  });
+
+  test("a project already prompted under the pre-0.3.0 marker is not re-prompted", () => {
+    // Renaming the skill renamed the marker map. Reading only the new name would
+    // re-fire the "one automatic prompt it will ever get" at every project every
+    // user had already dismissed.
+    writeMarkers("init-prompted.json", { [project]: "2026-01-01T00:00:00.000Z" });
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+  });
+});
+
+describe("a config file the parser rejects is UNCONNECTED, not connected", () => {
+  // The failure this covers: resolveProjectRoot finds a config by existence, so
+  // an unreadable one took the connected branch — capture off (it does not load)
+  // AND unpromptable (the prompt is gated on the file's ABSENCE). Silent, and
+  // permanent. Every pre-0.3.0 `{apiKey}` config from the removed setup.ts is
+  // exactly this shape.
+  const LEGACY = JSON.stringify({ apiKey: "k-from-setup-ts" });
+
+  function writeConfig(body: string): void {
+    mkdirSync(join(project, ".augenta"), { recursive: true });
+    writeFileSync(join(project, ".augenta", "config.json"), body);
+  }
+
+  test("a legacy setup.ts config prompts to reconnect instead of going silent", () => {
+    writeConfig(LEGACY);
+    const parsed = JSON.parse(fire({ transcript_path: CLAUDE_TP, cwd: project }));
+    expect(parsed.hookSpecificOutput?.initialUserMessage).toBe("/augenta:connect");
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("cannot read");
+  });
+
+  test("truncated JSON prompts the same way", () => {
+    writeConfig('{"authMode":"workos","profileId":');
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).not.toBe("");
+  });
+
+  test("the reconnect prompt also fires exactly once", () => {
+    writeConfig(LEGACY);
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).not.toBe("");
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+  });
+
+  test("the pre-0.3.0 marker does NOT suppress it", () => {
+    // Every project holding a legacy config was prompted under the old flow, so
+    // honoring that marker here would re-silence exactly the users who need this.
+    writeConfig(LEGACY);
+    writeMarkers("init-prompted.json", { [project]: "2026-01-01T00:00:00.000Z" });
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).not.toBe("");
+  });
+
+  test("Codex gets user-facing wording with no agent scaffolding", () => {
+    writeConfig(LEGACY);
+    const out = fire({ transcript_path: CODEX_TP, cwd: project });
+    expect(JSON.parse(out).hookSpecificOutput?.initialUserMessage).toBe("Connect Augenta");
+    expect(out).not.toContain("[Augenta]");
+    expect(out).not.toContain("/augenta:connect");
   });
 });
 

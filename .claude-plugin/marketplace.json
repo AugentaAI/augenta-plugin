@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Augenta — per-project, opt-in agent activity and project-memory capture for Claude Code and Codex.",
-    "version": "0.2.3"
+    "version": "0.3.0"
   },
   "plugins": [
     {
       "name": "augenta",
       "source": "./",
-      "description": "Augenta v0.2.3 — captures agent activity and project memory from connected projects. Start with /augenta:connect.",
-      "version": "0.2.3",
+      "description": "Augenta v0.3.0 — captures agent activity and project memory from connected projects. Start with /augenta:connect.",
+      "version": "0.3.0",
       "keywords": ["augenta", "telemetry", "memory", "capture"],
       "strict": false
     }

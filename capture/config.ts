@@ -4,6 +4,12 @@
  * Human projects keep only a global WorkOS profile reference and authoritative
  * Neurolink id. Machine projects may instead hold a platform-managed API key.
  * No organization or Neurospace coordinate is accepted from project config.
+ *
+ * A pre-0.3.0 `{apiKey}` config (no `authMode`, written by the removed
+ * scripts/setup.ts) is deliberately NOT auto-migrated: the wire contract changed
+ * from `Bearer` + subscription-key to `AugentaKey`, so silently reusing the old
+ * credential would trade a clear reconnect for an unexplained 401. It parses to
+ * undefined, and session-start.ts turns that into a one-time reconnect prompt.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

@@ -40,7 +40,7 @@ const KNOWN_HOOK_EVENTS = new Set([
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.2.3";
+const RELEASE_VERSION = "0.3.0";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -251,6 +251,13 @@ describe("manifests — cross-harness packaging and one version", () => {
 
   test("all release surfaces agree on ONE version", () => {
     const packageJson = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf8"));
+    // connect.ts reports its version to the platform as Neurolink metadata, so
+    // it is a release surface too — and the only one not expressed as JSON, which
+    // is exactly how it drifted a release behind before this assertion existed.
+    const connectSource = readFileSync(join(PLUGIN_ROOT, "scripts", "connect.ts"), "utf8");
+    const pluginVersion = connectSource.match(
+      /^export const PLUGIN_VERSION = "([^"]+)";$/m,
+    )?.[1];
     const versions = new Set([
       claudePluginJson.version,
       claudeMarketplaceJson.metadata?.version,
@@ -259,8 +266,20 @@ describe("manifests — cross-harness packaging and one version", () => {
       agentsMarketplaceJson.metadata?.version,
       agentsMarketplaceJson.plugins?.[0]?.version,
       packageJson.version,
+      pluginVersion,
     ]);
     expect([...versions]).toEqual([RELEASE_VERSION]);
+  });
+
+  test("the versioned marketplace descriptions track the release", () => {
+    // AGENTS.md → Releases: descriptions carry the version in prose, so they go
+    // stale silently unless something pins them to the same bump.
+    for (const description of [
+      claudeMarketplaceJson.plugins?.[0]?.description,
+      agentsMarketplaceJson.plugins?.[0]?.description,
+    ]) {
+      expect(description).toContain(`v${RELEASE_VERSION}`);
+    }
   });
 
   test("Claude marketplace lists this plugin at the repo root", () => {

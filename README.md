@@ -103,10 +103,20 @@ organization id, or Neurospace id. Autonomous services and CI can use the
 advanced `--api-key <AugentaKey>` option; the assigned Neurolink is derived
 server-side.
 
-The presence of `.augenta/config.json` is the project's consent to capture both
-agent activity and project memory. Delete that file—or the entire `.augenta/`
-directory—to stop capture for the project. Set `AUGENTA_CAPTURE_ENABLED=0` to
-disable both globally.
+The presence of a **readable** `.augenta/config.json` is the project's consent to
+capture both agent activity and project memory. Delete that file—or the entire
+`.augenta/` directory—to stop capture for the project. Set
+`AUGENTA_CAPTURE_ENABLED=0` to disable both globally.
+
+### Upgrading from 0.2.x
+
+Projects connected before 0.3.0 hold an API key written by the old setup script,
+under an authentication scheme the platform no longer accepts. They are not
+migrated automatically—reusing that credential would turn a clear reconnect into
+an unexplained authentication failure. Each such project instead gets one
+automatic prompt to run `/augenta:connect` again; anything already queued in its
+outbox ships as soon as that succeeds. Capture for the project is paused, not
+lost, in the meantime.
 
 ## What gets captured
 

@@ -48,6 +48,13 @@ interface Neurolink {
   _etag?: string;
 }
 
+/**
+ * Reported to the platform as Neurolink metadata. Part of the atomic release set
+ * (AGENTS.md → Releases) alongside both plugin manifests, both marketplace files,
+ * and package.json; the contract test pins all of them to one value.
+ */
+export const PLUGIN_VERSION = "0.3.0";
+
 class AugentaRequestError extends Error {
   constructor(
     readonly status: number,
@@ -60,27 +67,34 @@ class AugentaRequestError extends Error {
 
 export function parseArgs(argv: string[]): Args {
   const args: Args = {};
+  /**
+   * A flag is never another flag's value. Without this, `--api-key --project /p`
+   * parsed as the key "--project" and went on to write a config with it — the
+   * kind of typo that only shows up later as an unexplained 401.
+   */
+  const valueFor = (flag: string, i: number): string => {
+    const value = argv[i + 1];
+    if (!value || value.startsWith("--")) {
+      throw new Error(`${flag} requires a value`);
+    }
+    return value;
+  };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
-    const value = argv[i + 1];
     if (flag === "--api-key") {
-      args.apiKey = value;
-      i++;
+      args.apiKey = valueFor(flag, i++);
     } else if (flag === "--project") {
-      args.project = value;
-      i++;
+      args.project = valueFor(flag, i++);
     } else if (flag === "--endpoint") {
-      args.endpoint = value;
-      i++;
+      args.endpoint = valueFor(flag, i++);
     } else if (flag === "--control-url") {
-      args.controlUrl = value;
-      i++;
-    } else if (
-      flag === "--harness" &&
-      (value === "claude-code" || value === "codex")
-    ) {
+      args.controlUrl = valueFor(flag, i++);
+    } else if (flag === "--harness") {
+      const value = valueFor(flag, i++);
+      if (value !== "claude-code" && value !== "codex") {
+        throw new Error("--harness must be claude-code or codex");
+      }
       args.harness = value;
-      i++;
     }
   }
   return args;
@@ -161,25 +175,35 @@ function detectedHarness(args: Args): "claude-code" | "codex" {
   );
 }
 
+/**
+ * Numbered interactive pick. A single option is auto-selected — there is nothing
+ * to decide — unless `alwaysAsk` is set, which the Neurospace choice uses: WHICH
+ * Neurospace a project feeds is the user's consent decision, so it stays explicit
+ * even when only one exists (see skills/connect/SKILL.md).
+ */
 async function choose<T>(
   prompt: string,
   values: T[],
   label: (value: T) => string,
+  opts: { alwaysAsk?: boolean } = {},
 ): Promise<T> {
   if (values.length === 0) throw new Error(`no choices available for ${prompt}`);
-  if (values.length === 1) return values[0]!;
+  if (values.length === 1 && !opts.alwaysAsk) return values[0]!;
+  // Checked before printing: a menu nobody can answer is just noise.
+  if (!input.isTTY) {
+    throw new Error("run augenta:connect in an interactive terminal");
+  }
   console.log(prompt);
   values.forEach((value, index) =>
     console.log(`  ${index + 1}. ${label(value)}`),
   );
-  if (!input.isTTY) {
-    throw new Error("run augenta:connect in an interactive terminal");
-  }
   const rl = createInterface({ input, output });
   try {
     const answer = await rl.question(`Selection [1-${values.length}]: `);
     const selected = values[Number(answer) - 1];
-    if (!selected) throw new Error("invalid selection");
+    if (!selected) {
+      throw new Error(`invalid selection: ${answer.trim() || "(empty)"}`);
+    }
     return selected;
   } finally {
     rl.close();
@@ -280,31 +304,19 @@ async function selectedNeurospace(
   profileId: string,
   gateway: string,
 ): Promise<Neurospace> {
-  const response = await bearerJson<{ neurospaces: Neurospace[] }>(
+  const { neurospaces } = await bearerJson<{ neurospaces: Neurospace[] }>(
     profileId,
     `${gateway}/v1/neurospaces`,
   );
-  if (response.neurospaces.length === 0) {
+  if (neurospaces.length === 0) {
     throw new Error("the authenticated organization has no active Neurospaces");
   }
-  console.log("Choose the Neurospace for this project:");
-  response.neurospaces.forEach((neurospace, index) =>
-    console.log(`  ${index + 1}. ${neurospace.name} (${neurospace.id})`),
+  return choose(
+    "Choose the Neurospace for this project:",
+    neurospaces,
+    (neurospace) => `${neurospace.name} (${neurospace.id})`,
+    { alwaysAsk: true },
   );
-  if (!input.isTTY) {
-    throw new Error("run augenta:connect in an interactive terminal");
-  }
-  const rl = createInterface({ input, output });
-  try {
-    const answer = await rl.question(
-      `Selection [1-${response.neurospaces.length}]: `,
-    );
-    const value = response.neurospaces[Number(answer) - 1];
-    if (!value) throw new Error("invalid Neurospace selection");
-    return value;
-  } finally {
-    rl.close();
-  }
 }
 
 async function currentNeurolink(
@@ -342,7 +354,7 @@ async function connectNeurolink(
     harness: detectedHarness(args),
     client: "augenta-plugin",
     description: `Agent activity and project memory from ${name}`,
-    metadata: { pluginVersion: "0.2.3" },
+    metadata: { pluginVersion: PLUGIN_VERSION },
   };
   const existing = await currentNeurolink(profileId, gateway, priorId);
   if (existing?.kind === "agent" && existing.status === "active") {
@@ -437,11 +449,19 @@ export async function verifyApiKeyConnection(
       }`,
     );
   }
-  const value = (await response.json()) as { neurolinks?: Neurolink[] };
-  const neurolink = value.neurolinks?.[0];
-  if (!neurolink || value.neurolinks?.length !== 1) {
+  const neurolinks = ((await response.json()) as { neurolinks?: Neurolink[] })
+    .neurolinks ?? [];
+  if (neurolinks.length === 0) {
     throw new Error("the platform key is not assigned to a Neurolink");
   }
+  // Capture writes to exactly one link; with several visible there is no
+  // non-arbitrary pick, and guessing would silently misroute the project.
+  if (neurolinks.length > 1) {
+    throw new Error(
+      `the platform key is assigned to ${neurolinks.length} Neurolinks; capture requires exactly one`,
+    );
+  }
+  const neurolink = neurolinks[0]!;
   if (
     neurolink.status !== "active" ||
     (neurolink.direction !== "inbound" &&
@@ -470,11 +490,14 @@ export async function connectWithApiKey(
 }
 
 if (import.meta.main) {
-  const args = parseArgs(process.argv.slice(2));
-  const projectRoot = resolveTargetProject(args, process.cwd());
-  if (args.apiKey?.trim()) {
-    const existed = existsSync(join(projectRoot, ".augenta", "config.json"));
-    try {
+  // One failure shape for the whole CLI, argument parsing included — every exit
+  // the user can cause reads as `Augenta connect: <what went wrong>`, never a
+  // stack trace.
+  try {
+    const args = parseArgs(process.argv.slice(2));
+    const projectRoot = resolveTargetProject(args, process.cwd());
+    if (args.apiKey?.trim()) {
+      const existed = existsSync(join(projectRoot, ".augenta", "config.json"));
       const { path, neurolink } = await connectWithApiKey(
         projectRoot,
         args.apiKey.trim(),
@@ -486,19 +509,15 @@ if (import.meta.main) {
       console.log(
         "Off switch: delete .augenta/config.json, or set AUGENTA_CAPTURE_ENABLED=0.",
       );
-    } catch (error) {
-      console.error(`Augenta connect: ${(error as Error).message}`);
-      process.exitCode = 1;
+    } else if (!input.isTTY) {
+      throw new Error(
+        "WorkOS login requires an interactive terminal; --api-key is for autonomous or CI clients.",
+      );
+    } else {
+      await connectProject(projectRoot, args);
     }
-  } else if (!input.isTTY) {
-    console.error(
-      "Augenta connect: WorkOS login requires an interactive terminal; --api-key is for autonomous or CI clients.",
-    );
+  } catch (error) {
+    console.error(`Augenta connect: ${(error as Error).message}`);
     process.exitCode = 1;
-  } else {
-    connectProject(projectRoot, args).catch((error) => {
-      console.error(`Augenta connect: ${(error as Error).message}`);
-      process.exitCode = 1;
-    });
   }
 }

@@ -9,9 +9,10 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { ensureAugentaDir } from "./augenta-dir";
 
 export interface OAuthConfig {
   issuer: string;
@@ -61,8 +62,12 @@ const authPath = () => join(authRoot(), "auth.json");
 const lockPath = () => join(authRoot(), "auth.lock");
 const LOCK_WAIT_MS = 10_000;
 const STALE_LOCK_MS = 30_000;
-/** Every network call in the plugin is bounded by this. Exported so the connect
- *  CLI bounds its own calls with the SAME budget instead of a second literal. */
+/** Bounds every CONTROL-PLANE call — discovery, device grant, token refresh, and
+ *  the `/v1` requests connect makes. Exported so the connect CLI reuses this
+ *  budget instead of a second literal. The ingest POST is deliberately separate:
+ *  it runs in the detached shipper on a hot path and keeps its own, tighter
+ *  budget in ship.ts. Nothing here is unbounded — that is what the "every fetch
+ *  passes an AbortSignal" contract test enforces. */
 export const REQUEST_TIMEOUT_MS = 15_000;
 
 function ensureAuthRoot(): void {
@@ -87,7 +92,7 @@ export function readAuthStore(): AuthStore {
 function writeAuthStore(store: AuthStore): void {
   ensureAuthRoot();
   const path = authPath();
-  const tmp = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
     writeFileSync(tmp, `${JSON.stringify(store, null, 2)}\n`, {
       mode: 0o600,
@@ -195,6 +200,15 @@ export async function augentaOAuthConfig(
   };
 }
 
+/** Per-platform "open this URL" command. Best effort — the URL and code are
+ *  printed either way, so a wrong or missing opener costs nothing. `start`'s
+ *  first quoted argument is the window title, hence the empty one. */
+export function browserCommand(url: string): string[] {
+  if (process.platform === "darwin") return ["open", url];
+  if (process.platform === "win32") return ["cmd", "/c", "start", "", url];
+  return ["xdg-open", url];
+}
+
 /** Run the WorkOS device grant. No client secret is used or stored. */
 export async function deviceLogin(config: OAuthConfig): Promise<DeviceTokens> {
   const start = await fetch(endpoint(config.issuer, "/oauth2/device_authorization"), {
@@ -221,10 +235,7 @@ export async function deviceLogin(config: OAuthConfig): Promise<DeviceTokens> {
   console.log(`WorkOS verification code: ${device.user_code}`);
   try {
     Bun.spawnSync({
-      cmd: [
-        process.platform === "darwin" ? "open" : "xdg-open",
-        verificationUrl,
-      ],
+      cmd: browserCommand(verificationUrl),
       stdout: "ignore",
       stderr: "ignore",
     });
@@ -276,16 +287,27 @@ export async function deviceLogin(config: OAuthConfig): Promise<DeviceTokens> {
   throw new ReLoginRequiredError("WorkOS device login expired");
 }
 
-export function profileIdFor(
-  issuer: string,
-  clientId: string,
-  workosOrgId: string,
-): string {
+/**
+ * A profile's identity is exactly the set of coordinates {@link reusableProfiles}
+ * filters on — issuer, client, gateway, organization. The gateway belongs here
+ * even though tokens don't depend on it: leave it out and two logins the filter
+ * treats as DISTINCT (same org, `--endpoint` override vs. default) collapse onto
+ * one id, so the second silently overwrites the first's stored gateway and the
+ * next `--endpoint` connect re-runs device login against still-valid tokens.
+ */
+export function profileIdFor(config: OAuthConfig, workosOrgId: string): string {
   const digest = createHash("sha256")
-    // These are public profile coordinates (issuer URL, public client ID, and
-    // organization ID), never a password or token.
+    // These are public profile coordinates (issuer URL, public client ID,
+    // gateway URL, and organization ID), never a password or token.
     // codeql[js/insufficient-password-hash]
-    .update(`${issuer.replace(/\/+$/, "")}\0${clientId}\0${workosOrgId}`)
+    .update(
+      [
+        config.issuer.replace(/\/+$/, ""),
+        config.clientId,
+        config.gateway.replace(/\/+$/, ""),
+        workosOrgId,
+      ].join("\0"),
+    )
     .digest("hex")
     .slice(0, 24);
   return `profile_${digest}`;
@@ -298,11 +320,7 @@ export async function saveDeviceProfile(
 ): Promise<{ profileId: string; profile: AuthProfile }> {
   return withAuthLock(() => {
     const store = readAuthStore();
-    const profileId = profileIdFor(
-      config.issuer,
-      config.clientId,
-      identity.workosOrgId,
-    );
+    const profileId = profileIdFor(config, identity.workosOrgId);
     const profile: AuthProfile = {
       issuer: config.issuer,
       clientId: config.clientId,
@@ -396,12 +414,18 @@ export async function fetchWithProfile(
 
 type Notice = "relogin" | "connect";
 
+/** Most to least urgent — also the order {@link takeAuthNotice} reports in. */
+const NOTICES = ["relogin", "connect"] as const;
+
 function noticePath(projectRoot: string, notice: Notice): string {
   return join(projectRoot, ".augenta", `${notice}-required`);
 }
 
 export function markAuthNotice(projectRoot: string, notice: Notice): void {
   try {
+    // Upholds the `.augenta/` invariant: the dir never exists without the
+    // .gitignore that ignores it (see ensureAugentaDir).
+    ensureAugentaDir(projectRoot);
     writeFileSync(noticePath(projectRoot, notice), `${notice}\n`, {
       mode: 0o600,
     });
@@ -410,18 +434,23 @@ export function markAuthNotice(projectRoot: string, notice: Notice): void {
   }
 }
 
-export function takeAuthNotice(
-  projectRoot: string,
-): Notice | undefined {
-  for (const notice of ["relogin", "connect"] as const) {
+/**
+ * Report the most urgent pending notice and clear ALL of them. Clearing only the
+ * one reported would strand the others: the shipper writes whichever notice its
+ * last status implies, so a `connect` left behind a since-fixed `relogin` would
+ * resurface as a stale prompt sessions later, long after the cause was gone.
+ */
+export function takeAuthNotice(projectRoot: string): Notice | undefined {
+  let found: Notice | undefined;
+  for (const notice of NOTICES) {
     const path = noticePath(projectRoot, notice);
     if (!existsSync(path)) continue;
+    found ??= notice;
     try {
       unlinkSync(path);
     } catch {
       // Show the notice even if marker cleanup raced.
     }
-    return notice;
   }
-  return undefined;
+  return found;
 }
