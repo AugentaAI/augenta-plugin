@@ -40,8 +40,24 @@ user declines, acknowledge and stop.
 Never ask the user to paste an OAuth token or API key into chat, and do not run
 the interactive login for them.
 
-Resolve the installed plugin root to a literal absolute path. Then print this
-command for the user to run in their own terminal at the project root:
+Resolve the installed plugin root to a **literal absolute path** — the user's own
+shell does not have the plugin-root environment variable, so a command containing
+`${CLAUDE_PLUGIN_ROOT}` is useless once pasted. On Claude Code, `CLAUDE_PLUGIN_ROOT`
+is set in YOUR environment: read it with `echo "$CLAUDE_PLUGIN_ROOT"`. If it is
+empty, or on Codex, locate the install before printing — it lives at a VERSIONED
+cache path, never a guessable one:
+
+```bash
+ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/augenta/*/scripts/connect.ts \
+      "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/augenta/*/scripts/connect.ts 2>/dev/null
+```
+
+Never print a path you have not confirmed exists — `test -f "<path>"` first. A
+plausible-looking guess (`~/.claude/plugins/augenta/scripts/connect.ts`) reads fine
+in chat and fails the moment the user runs it.
+
+Then print this command for the user to run in their own terminal at the project
+root (it needs Bun — https://bun.sh — the same runtime the plugin's hooks use):
 
 ```bash
 bun "<ABSOLUTE_PLUGIN_ROOT>/scripts/connect.ts"

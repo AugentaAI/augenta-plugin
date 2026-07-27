@@ -15,6 +15,7 @@ import {
   deviceLogin,
   fetchWithProfile,
   ReLoginRequiredError,
+  REQUEST_TIMEOUT_MS,
   reusableProfiles,
   saveDeviceProfile,
   type OAuthConfig,
@@ -205,8 +206,12 @@ async function verifyFreshLogin(
   oauth: OAuthConfig,
   accessToken: string,
 ): Promise<MeResponse> {
+  // Bounded like every other call: this runs the instant the user finishes
+  // authorizing in the browser and BEFORE the tokens are persisted, so an
+  // unreachable gateway would otherwise hang the terminal and throw the login away.
   const response = await fetch(`${oauth.gateway}/v1/me`, {
     headers: { authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) {
     throw new Error(`Augenta rejected the WorkOS login (${response.status})`);
@@ -421,7 +426,7 @@ export async function verifyApiKeyConnection(
     `${gateway.replace(/\/+$/, "")}/v1/neurolinks`,
     {
       headers: { authorization: `AugentaKey ${apiKey}` },
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     },
   );
   if (!response.ok) {

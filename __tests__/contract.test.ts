@@ -157,6 +157,62 @@ describe("repository guidance", () => {
   });
 });
 
+describe("network calls are bounded", () => {
+  // The plugin runs inside a hook with a hard timeout, and connect runs in a
+  // person's terminal right after they authorized in the browser — before the
+  // tokens are persisted. An unbounded fetch there hangs the terminal and throws
+  // the login away, and no behavioural test catches it (a hang looks like a slow
+  // test). So assert it structurally: every fetch must carry a signal.
+  const sources = ["capture/auth.ts", "capture/ship.ts", "scripts/connect.ts"];
+
+  test("every fetch passes an AbortSignal", () => {
+    const unbounded: string[] = [];
+    for (const rel of sources) {
+      const text = readFileSync(join(PLUGIN_ROOT, rel), "utf8");
+      // Each `fetch(` call, up to the closing brace of its init object. Crude on
+      // purpose — a false positive is a comment away, a false negative is a hang.
+      for (const match of text.matchAll(/\bfetch\(/g)) {
+        const start = match.index!;
+        const call = text.slice(start, start + 600);
+        const end = call.indexOf("\n  });") >= 0 ? call.indexOf("\n  });") : call.length;
+        if (!/\bsignal\s*:/.test(call.slice(0, end))) {
+          const line = text.slice(0, start).split("\n").length;
+          unbounded.push(`${rel}:${line}`);
+        }
+      }
+    }
+    expect(unbounded).toEqual([]);
+  });
+});
+
+describe("the connect skill hands over a runnable command", () => {
+  // The skill does not perform the login — it PRINTS one terminal command. If it
+  // does not tell the model how to find the installed plugin root, the model
+  // guesses, and the user's first experience of Augenta is "file not found".
+  // The install lives at a versioned cache path, so there is nothing to guess.
+  const skill = readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8");
+
+  test("names CLAUDE_PLUGIN_ROOT as the resolution mechanism", () => {
+    expect(skill).toContain("CLAUDE_PLUGIN_ROOT");
+  });
+
+  test("gives a fallback for Codex and an unset variable", () => {
+    expect(skill).toMatch(/plugins\/cache/);
+    expect(skill).toMatch(/CODEX_HOME/);
+  });
+
+  test("requires the path to be verified before it is printed", () => {
+    expect(skill).toMatch(/test -f/);
+  });
+
+  test("warns that the user's own shell lacks the variable", () => {
+    // Whitespace-tolerant: the prose is hard-wrapped, so the sentence spans lines.
+    expect(skill.replace(/\s+/g, " ")).toMatch(
+      /user's own shell does not have the plugin-root environment variable/,
+    );
+  });
+});
+
 describe("manifests — cross-harness packaging and one version", () => {
   const claudePluginJson = JSON.parse(
     readFileSync(join(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), "utf8"),

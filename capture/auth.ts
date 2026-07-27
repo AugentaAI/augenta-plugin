@@ -61,7 +61,9 @@ const authPath = () => join(authRoot(), "auth.json");
 const lockPath = () => join(authRoot(), "auth.lock");
 const LOCK_WAIT_MS = 10_000;
 const STALE_LOCK_MS = 30_000;
-const REQUEST_TIMEOUT_MS = 15_000;
+/** Every network call in the plugin is bounded by this. Exported so the connect
+ *  CLI bounds its own calls with the SAME budget instead of a second literal. */
+export const REQUEST_TIMEOUT_MS = 15_000;
 
 function ensureAuthRoot(): void {
   mkdirSync(authRoot(), { recursive: true, mode: 0o700 });
@@ -151,7 +153,7 @@ async function refreshTokens(profile: AuthProfile): Promise<TokenResponse> {
   const response = await fetch(endpoint(profile.issuer, "/oauth2/token"), {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     body: form({
       grant_type: "refresh_token",
       refresh_token: profile.refreshToken,
