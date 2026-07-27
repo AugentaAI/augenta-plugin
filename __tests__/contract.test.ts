@@ -185,37 +185,24 @@ describe("network calls are bounded", () => {
   });
 });
 
-describe("CodeQL suppressions stay attached to what they suppress", () => {
-  // `// codeql[rule-id]` is LINE-ANCHORED: it covers the commented line and the
-  // one that follows. Nothing in the language enforces that, so an ordinary
-  // reformat — wrapping a call argument onto its own line — silently detaches it
-  // and the alert returns as a red check on someone else's PR. That already
-  // happened once. Assert the adjacency here so it fails in `bun test` instead.
-  test("every suppression is immediately followed by a line of code", () => {
-    const detached: string[] = [];
+describe("no inert CodeQL suppression markers", () => {
+  // `// codeql[rule-id]` is an LGTM-era marker that GitHub code scanning does
+  // NOT honor — an adjacent one was verified firing anyway. Leaving them in
+  // reads as "this is handled" when nothing is handling it. Alerts here are
+  // adjudicated by dismissal in the Security tab; keep the prose explaining WHY
+  // a finding is a false positive, not a marker that implies a mechanism.
+  test("source files carry no codeql[...] markers", () => {
+    const orphans: string[] = [];
     for (const rel of ["capture/auth.ts", "capture/ship.ts", "scripts/connect.ts"]) {
       const lines = readFileSync(join(PLUGIN_ROOT, rel), "utf8").split("\n");
       lines.forEach((line, index) => {
-        if (!/^\s*\/\/\s*codeql\[[^\]]+\]\s*$/.test(line)) return;
-        const next = lines[index + 1]?.trim() ?? "";
-        // A comment or blank line after the marker means it now guards nothing.
-        if (!next || next.startsWith("//") || next.startsWith("*")) {
-          detached.push(`${rel}:${index + 1}`);
-        }
+        // Only a marker STANDING ALONE on its comment line is the suppression
+        // form; prose that merely names it (explaining why it does not work) is
+        // documentation and must not trip this.
+        if (/^\s*\/\/\s*codeql\[[^\]]+\]\s*$/.test(line)) orphans.push(`${rel}:${index + 1}`);
       });
     }
-    expect(detached).toEqual([]);
-  });
-
-  test("the profile-id suppression still covers the hash input", () => {
-    // The specific instance that regressed: the .update() argument must sit on
-    // the suppressed line, not wrap onto the next one.
-    const lines = readFileSync(join(PLUGIN_ROOT, "capture", "auth.ts"), "utf8").split("\n");
-    const marker = lines.findIndex((line) =>
-      line.includes("codeql[js/insufficient-password-hash]"),
-    );
-    expect(marker).toBeGreaterThan(-1);
-    expect(lines[marker + 1]?.trim()).toMatch(/^\.update\([A-Za-z_$][\w$]*\)$/);
+    expect(orphans).toEqual([]);
   });
 });
 

@@ -71,21 +71,26 @@ const cfg = configuredRoot ? loadProjectConfig(configuredRoot) : undefined;
 const staleConfig = Boolean(configuredRoot) && !cfg;
 const connectedRoot = cfg ? configuredRoot : undefined;
 if (connectedRoot) {
-  const authNotice = takeAuthNotice(connectedRoot);
-  if (authNotice) {
-    const action = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
-    const reason =
-      authNotice === "relogin"
-        ? "WorkOS re-login"
-        : "a valid inbound Neurolink";
-    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: `Augenta has queued capture waiting for ${reason}. Run ${action}; queued records will resume shipping after reconnecting.` } }));
-  }
-  // A stranded spool (a prior session's final Stop never fired, or failed
-  // before it could drain) otherwise waits for THIS session's own Stop —
-  // give it a chance to drain now instead.
+  // Everything below is gated on capture actually being live. With the kill
+  // switch thrown this hook owes the user silence, and a pending notice is not
+  // an exception: nagging about a connection they deliberately switched off is
+  // noise. Leaving the marker unread also keeps it — it surfaces on the first
+  // session after capture is re-enabled, which is when it becomes actionable.
   if (captureEnabled(cfg)) {
-    // Pick up memory generated after the previous session ended before the
-    // stranded-outbox check, so this same detached shipper can deliver both.
+    const authNotice = takeAuthNotice(connectedRoot);
+    if (authNotice) {
+      const action = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
+      const reason =
+        authNotice === "relogin"
+          ? "WorkOS re-login"
+          : "a valid inbound Neurolink";
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: `Augenta has queued capture waiting for ${reason}. Run ${action}; queued records will resume shipping after reconnecting.` } }));
+    }
+    // A stranded spool (a prior session's final Stop never fired, or failed
+    // before it could drain) otherwise waits for THIS session's own Stop —
+    // give it a chance to drain now instead. Memory generated after the
+    // previous session ended is picked up first, so the one detached shipper
+    // below delivers both.
     try {
       captureAgentMemory({
         projectRoot: connectedRoot,

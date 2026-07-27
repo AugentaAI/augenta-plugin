@@ -297,9 +297,7 @@ export async function deviceLogin(config: OAuthConfig): Promise<DeviceTokens> {
  */
 export function profileIdFor(config: OAuthConfig, workosOrgId: string): string {
   // NUL-joined so no coordinate can impersonate another by containing the
-  // separator. Kept out of the .update() call because the CodeQL suppression
-  // below is LINE-ANCHORED: the sink argument has to stay on the commented
-  // line, or the alert reappears (see the contract test that pins this).
+  // separator.
   const coordinates = [
     config.issuer.replace(/\/+$/, ""),
     config.clientId,
@@ -307,11 +305,19 @@ export function profileIdFor(config: OAuthConfig, workosOrgId: string): string {
     workosOrgId,
   ].join("\0");
   const digest = createHash("sha256")
-    // Public profile coordinates — an issuer URL, a PUBLIC OAuth client id (this
-    // is a public client; deviceLogin uses no secret), a gateway URL, and an
-    // organization id. None is a password, and the digest is a local cache key,
-    // not a credential verifier, so a slow KDF would be the wrong tool.
-    // codeql[js/insufficient-password-hash]
+    // CodeQL reports js/insufficient-password-hash here. It is a false positive
+    // and is handled by a dismissal in the repository's Security tab — this
+    // repo uses CodeQL default setup, which takes no config file, and inline
+    // `// codeql[...]` markers do NOT suppress code-scanning alerts. If a
+    // refactor changes this function's shape, CodeQL mints a NEW alert that the
+    // old dismissal does not cover, and the check goes red until it is
+    // dismissed again.
+    //
+    // Why it is a false positive: these are public profile coordinates — an
+    // issuer URL, a PUBLIC OAuth client id (deviceLogin uses no client secret),
+    // a gateway URL, and an organization id. None is a password, and the digest
+    // is a local cache key, not a credential verifier, so a slow KDF would be
+    // the wrong tool.
     .update(coordinates)
     .digest("hex")
     .slice(0, 24);

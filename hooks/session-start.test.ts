@@ -17,7 +17,7 @@
  * Run: bun test hooks/session-start.test.ts
  */
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDocumentRecord, Outbox } from "../capture/outbox";
@@ -93,6 +93,29 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
     // user had already dismissed.
     writeMarkers("init-prompted.json", { [project]: "2026-01-01T00:00:00.000Z" });
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+  });
+});
+
+describe("the kill switch means silence, notices included", () => {
+  test("a pending auth notice is neither shown nor consumed while capture is off", () => {
+    // hooks.json promises AUGENTA_CAPTURE_ENABLED=0 disables the hook. Nagging
+    // about a connection the user deliberately switched off breaks that — and
+    // leaving the marker unread means it still surfaces once capture is back,
+    // which is the moment it becomes actionable.
+    mkdirSync(join(project, ".augenta"), { recursive: true });
+    writeFileSync(
+      join(project, ".augenta", "config.json"),
+      JSON.stringify({ authMode: "api-key", apiKey: "k" }),
+    );
+    const notice = join(project, ".augenta", "relogin-required");
+    writeFileSync(notice, "relogin\n");
+
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project }, { AUGENTA_CAPTURE_ENABLED: "0" })).toBe("");
+    expect(existsSync(notice)).toBe(true);
+
+    // Re-enabled: the same pending notice now surfaces, exactly once.
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toContain("queued capture");
+    expect(existsSync(notice)).toBe(false);
   });
 });
 
