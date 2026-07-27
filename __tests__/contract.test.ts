@@ -185,6 +185,40 @@ describe("network calls are bounded", () => {
   });
 });
 
+describe("CodeQL suppressions stay attached to what they suppress", () => {
+  // `// codeql[rule-id]` is LINE-ANCHORED: it covers the commented line and the
+  // one that follows. Nothing in the language enforces that, so an ordinary
+  // reformat — wrapping a call argument onto its own line — silently detaches it
+  // and the alert returns as a red check on someone else's PR. That already
+  // happened once. Assert the adjacency here so it fails in `bun test` instead.
+  test("every suppression is immediately followed by a line of code", () => {
+    const detached: string[] = [];
+    for (const rel of ["capture/auth.ts", "capture/ship.ts", "scripts/connect.ts"]) {
+      const lines = readFileSync(join(PLUGIN_ROOT, rel), "utf8").split("\n");
+      lines.forEach((line, index) => {
+        if (!/^\s*\/\/\s*codeql\[[^\]]+\]\s*$/.test(line)) return;
+        const next = lines[index + 1]?.trim() ?? "";
+        // A comment or blank line after the marker means it now guards nothing.
+        if (!next || next.startsWith("//") || next.startsWith("*")) {
+          detached.push(`${rel}:${index + 1}`);
+        }
+      });
+    }
+    expect(detached).toEqual([]);
+  });
+
+  test("the profile-id suppression still covers the hash input", () => {
+    // The specific instance that regressed: the .update() argument must sit on
+    // the suppressed line, not wrap onto the next one.
+    const lines = readFileSync(join(PLUGIN_ROOT, "capture", "auth.ts"), "utf8").split("\n");
+    const marker = lines.findIndex((line) =>
+      line.includes("codeql[js/insufficient-password-hash]"),
+    );
+    expect(marker).toBeGreaterThan(-1);
+    expect(lines[marker + 1]?.trim()).toMatch(/^\.update\([A-Za-z_$][\w$]*\)$/);
+  });
+});
+
 describe("the connect skill hands over a runnable command", () => {
   // The skill does not perform the login — it PRINTS one terminal command. If it
   // does not tell the model how to find the installed plugin root, the model

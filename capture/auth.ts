@@ -296,18 +296,23 @@ export async function deviceLogin(config: OAuthConfig): Promise<DeviceTokens> {
  * next `--endpoint` connect re-runs device login against still-valid tokens.
  */
 export function profileIdFor(config: OAuthConfig, workosOrgId: string): string {
+  // NUL-joined so no coordinate can impersonate another by containing the
+  // separator. Kept out of the .update() call because the CodeQL suppression
+  // below is LINE-ANCHORED: the sink argument has to stay on the commented
+  // line, or the alert reappears (see the contract test that pins this).
+  const coordinates = [
+    config.issuer.replace(/\/+$/, ""),
+    config.clientId,
+    config.gateway.replace(/\/+$/, ""),
+    workosOrgId,
+  ].join("\0");
   const digest = createHash("sha256")
-    // These are public profile coordinates (issuer URL, public client ID,
-    // gateway URL, and organization ID), never a password or token.
+    // Public profile coordinates — an issuer URL, a PUBLIC OAuth client id (this
+    // is a public client; deviceLogin uses no secret), a gateway URL, and an
+    // organization id. None is a password, and the digest is a local cache key,
+    // not a credential verifier, so a slow KDF would be the wrong tool.
     // codeql[js/insufficient-password-hash]
-    .update(
-      [
-        config.issuer.replace(/\/+$/, ""),
-        config.clientId,
-        config.gateway.replace(/\/+$/, ""),
-        workosOrgId,
-      ].join("\0"),
-    )
+    .update(coordinates)
     .digest("hex")
     .slice(0, 24);
   return `profile_${digest}`;
