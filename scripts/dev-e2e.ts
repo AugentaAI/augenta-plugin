@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Human/plugin hosted E2E. Reuses a connected project's owner-only WorkOS
+ * Human/plugin hosted E2E. Reuses a connected project's owner-only
  * profile, ships through the real outbox/shipper, and verifies the durable
  * landed record through the authenticated platform API. Tokens are never
  * printed or copied into environment variables.
@@ -35,7 +35,7 @@ interface Args {
 
 interface MeResponse {
   user: { id: string; name?: string; email?: string };
-  org: { id: string; name: string; workosOrgId?: string };
+  org: { id: string; name: string };
 }
 
 interface Neurolink {
@@ -114,9 +114,9 @@ const projectRoot = resolveTargetProject(
   process.cwd(),
 );
 const cfg = loadProjectConfig(projectRoot);
-if (cfg?.authMode !== "workos" || !cfg.profileId || !cfg.neurolinkId) {
+if (cfg?.authMode !== "oauth" || !cfg.profileId || !cfg.neurolinkId) {
   console.error(
-    `Connect ${projectRoot} with WorkOS before running this test.`,
+    `Connect ${projectRoot} with an Augenta sign-in before running this test.`,
   );
   process.exit(2);
 }
@@ -125,7 +125,7 @@ console.log(`dev-e2e — project=${projectRoot}`);
 const discovered = await augentaOAuthConfig(args.controlUrl);
 const gateway = (cfg.endpoint || discovered.gateway).replace(/\/+$/, "");
 const profile = getAuthProfile(cfg.profileId);
-check(Boolean(profile), "global WorkOS profile exists");
+check(Boolean(profile), "global sign-in profile exists");
 check(
   Boolean(
     profile &&
@@ -144,8 +144,8 @@ if (failures > 0) process.exit(1);
 
 const me = await json<MeResponse>(cfg.profileId, `${gateway}/v1/me`);
 check(
-  Boolean(me.user?.id && me.org?.id && me.org?.workosOrgId),
-  "stored WorkOS login reaches /v1/me",
+  Boolean(me.user?.id && me.org?.id),
+  "stored sign-in reaches /v1/me",
   `${me.user?.email || me.user?.id} · ${me.org?.name}`,
 );
 const { neurolink } = await json<{ neurolink: Neurolink }>(
@@ -167,7 +167,7 @@ try {
     configPath,
     `${JSON.stringify(
       {
-        authMode: "workos",
+        authMode: "oauth",
         profileId: cfg.profileId,
         neurolinkId: cfg.neurolinkId,
         endpoint: gateway,
@@ -179,7 +179,7 @@ try {
   );
   chmodSync(configPath, 0o600);
 
-  const sid = `sess-hosted-workos-${Date.now()}`;
+  const sid = `sess-hosted-oauth-${Date.now()}`;
   const now = new Date().toISOString();
   const box = new Outbox(tempProject);
   check(
@@ -193,7 +193,7 @@ try {
         turn: 1,
         kind: "msg",
         role: "user",
-        text: "Augenta hosted WorkOS plugin E2E",
+        text: "Augenta hosted OAuth plugin E2E",
       },
       {
         src: "codex",
@@ -231,7 +231,7 @@ try {
   check(!box.hasPendingBytes(), "durable outbox advanced after accepted delivery");
 
   const row = await waitForExperience(cfg.profileId, gateway, sid);
-  check(Boolean(row), "WorkOS experience landed and is visible to its user");
+  check(Boolean(row), "experience landed and is visible to its user");
   check(
     row?.neurolinkId === cfg.neurolinkId,
     "landed list row is attributed to the configured Neurolink",
@@ -254,9 +254,11 @@ try {
         detail.experience.v === 2 &&
         detail.experience.neurolinkId === cfg.neurolinkId &&
         detail.experience.neurolinkRevision === neurolink.revision &&
+        // Platform-side wire value in the routing snapshot, not ours to rename:
+        // this asserts what the server recorded about the caller.
         detail.experience.routing?.caller?.type === "workos" &&
         detail.experience.routing?.caller?.userId === me.user.id,
-      "durable record preserves schema-v2 WorkOS and Neurolink snapshot",
+      "durable record preserves schema-v2 caller and Neurolink snapshot",
     );
   }
 } finally {
@@ -265,7 +267,7 @@ try {
 
 console.log(
   failures === 0
-    ? "\nAll hosted WorkOS/plugin checks passed."
+    ? "\nAll hosted sign-in/plugin checks passed."
     : `\n${failures} hosted E2E check(s) failed.`,
 );
 process.exit(failures === 0 ? 0 : 1);

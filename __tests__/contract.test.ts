@@ -40,7 +40,7 @@ const KNOWN_HOOK_EVENTS = new Set([
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.3.0";
+const RELEASE_VERSION = "0.4.0";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -206,30 +206,87 @@ describe("no inert CodeQL suppression markers", () => {
   });
 });
 
-describe("the connect skill hands over a runnable command", () => {
-  // The skill does not perform the login — it PRINTS one terminal command. If it
-  // does not tell the model how to find the installed plugin root, the model
-  // guesses, and the user's first experience of Augenta is "file not found".
-  // The install lives at a versioned cache path, so there is nothing to guess.
+describe("the connect skill drives connect itself", () => {
+  // The agent runs the script; the user answers one question and, at most, clicks
+  // one link. The old design printed a versioned cache path for the user to paste
+  // into a second terminal — long, easy to truncate, and impossible to guess if
+  // the model got it wrong. Pin the replacement so it cannot regress into a
+  // hand-off.
   const skill = readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8");
+  const flat = skill.replace(/\s+/g, " ");
 
-  test("names CLAUDE_PLUGIN_ROOT as the resolution mechanism", () => {
-    expect(skill).toContain("CLAUDE_PLUGIN_ROOT");
+  test("drives every JSON verb the CLI exposes", () => {
+    for (const verb of ["--json", "--probe", "--login", "--await-login", "--neurospace"]) {
+      expect(skill).toContain(verb);
+    }
   });
 
-  test("gives a fallback for Codex and an unset variable", () => {
+  test("resolves the script from its own environment, with a Codex fallback", () => {
+    expect(skill).toContain("CLAUDE_PLUGIN_ROOT");
     expect(skill).toMatch(/plugins\/cache/);
     expect(skill).toMatch(/CODEX_HOME/);
   });
 
-  test("requires the path to be verified before it is printed", () => {
-    expect(skill).toMatch(/test -f/);
+  test("never tells the user to run the connect command themselves", () => {
+    // The whole point: no context switch and no "tell me when it finished".
+    expect(flat).not.toMatch(/run (this|it) in (your|their) own terminal/i);
+    expect(flat).not.toMatch(/wait for the user to say the command completed/i);
   });
 
-  test("warns that the user's own shell lacks the variable", () => {
-    // Whitespace-tolerant: the prose is hard-wrapped, so the sentence spans lines.
-    expect(skill.replace(/\s+/g, " ")).toMatch(
-      /user's own shell does not have the plugin-root environment variable/,
+  test("surfaces the sign-in link and keeps credentials out of chat", () => {
+    expect(skill).toContain("verificationUri");
+    expect(flat).toMatch(/Never expose or request tokens/i);
+    // --api-key takes a secret as an argv value, so the agent must never run it.
+    expect(flat).toMatch(/--api-key.{0,200}?never run it/i);
+  });
+
+  test("requires a non-production environment to be stated before connecting", () => {
+    // Otherwise a project silently starts feeding dev or staging.
+    expect(skill).toContain("environment");
+    expect(flat).toMatch(/not `prod`, say so/);
+  });
+
+  test("explains the worktree redirect instead of retargeting silently", () => {
+    expect(skill).toContain("worktreeRedirect");
+  });
+});
+
+describe("the identity provider stays behind the scenes", () => {
+  // Augenta sign-in runs on WorkOS AuthKit behind auth.augenta.ai. The vendor name
+  // means nothing to a user and lands precisely when they are deciding whether to
+  // trust this plugin with their transcripts — it reads as data going somewhere
+  // they never signed up for. Runtime code names it NOWHERE, in any casing: not in
+  // an identifier, not in a stored value, not in an id it keys on. The plugin's
+  // user and org identity are Augenta's own `/v1/me` `user.id` and `org.id`; the
+  // IdP's separate `org.workosOrgId` is deliberately unused. Comments may explain
+  // all of this — that is the only place the name belongs.
+  const RUNTIME = [
+    "capture/auth.ts",
+    "capture/ship.ts",
+    "capture/config.ts",
+    "capture/capture.ts",
+    "scripts/connect.ts",
+    "hooks/session-start.ts",
+    "hooks/user-prompt.ts",
+  ];
+
+  test("no runtime code line outside a comment names the provider, in any casing", () => {
+    const offenders: string[] = [];
+    for (const rel of RUNTIME) {
+      readFileSync(join(PLUGIN_ROOT, rel), "utf8")
+        .split("\n")
+        .forEach((line, index) => {
+          if (/^\s*(\/\/|\*|\/\*)/.test(line)) return;
+          if (/workos/i.test(line)) offenders.push(`${rel}:${index + 1}`);
+        });
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("the connect skill never names it at all", () => {
+    // Every word of the skill is user-facing, directly or as agent instructions.
+    expect(readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8")).not.toContain(
+      "WorkOS",
     );
   });
 });

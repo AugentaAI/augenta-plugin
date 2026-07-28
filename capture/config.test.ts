@@ -76,18 +76,30 @@ describe("loadProjectConfig", () => {
     });
   });
 
-  test("parses WorkOS mode without organization or Neurospace coordinates", () => {
+  test("parses oauth mode without organization or Neurospace coordinates", () => {
+    writeConfig(project, {
+      authMode: "oauth",
+      profileId: "profile_1",
+      neurolinkId: "link_1",
+    });
+    expect(loadProjectConfig(project)).toEqual({
+      authMode: "oauth",
+      profileId: "profile_1",
+      neurolinkId: "link_1",
+      projectRoot: project,
+    });
+  });
+
+  test("the pre-0.4.0 `workos` spelling is not accepted", () => {
+    // Not migrated on purpose: an unparseable config becomes session-start's
+    // one-time reconnect prompt, which is a clear ask instead of a stale routing
+    // decision reused behind the user's back.
     writeConfig(project, {
       authMode: "workos",
       profileId: "profile_1",
       neurolinkId: "link_1",
     });
-    expect(loadProjectConfig(project)).toEqual({
-      authMode: "workos",
-      profileId: "profile_1",
-      neurolinkId: "link_1",
-      projectRoot: project,
-    });
+    expect(loadProjectConfig(project)).toBeUndefined();
   });
 
   test("undefined on missing, malformed, legacy, or incomplete config", () => {
@@ -100,7 +112,7 @@ describe("loadProjectConfig", () => {
     expect(loadProjectConfig(project)).toBeUndefined();
     writeConfig(project, { apiKey: "legacy" });
     expect(loadProjectConfig(project)).toBeUndefined();
-    writeConfig(project, { authMode: "workos", profileId: "profile_1" });
+    writeConfig(project, { authMode: "oauth", profileId: "profile_1" });
     expect(loadProjectConfig(project)).toBeUndefined();
   });
 
@@ -145,7 +157,7 @@ describe("URL resolution", () => {
 describe("captureEnabled — config presence IS consent", () => {
   test("on with a config, off without", () => {
     expect(captureEnabled({ authMode: "api-key", apiKey: "k", projectRoot: "/p" })).toBe(true);
-    expect(captureEnabled({ authMode: "workos", profileId: "profile_1", neurolinkId: "link_1", projectRoot: "/p" })).toBe(true);
+    expect(captureEnabled({ authMode: "oauth", profileId: "profile_1", neurolinkId: "link_1", projectRoot: "/p" })).toBe(true);
     expect(captureEnabled(undefined)).toBe(false);
   });
 

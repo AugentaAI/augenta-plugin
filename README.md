@@ -77,19 +77,28 @@ in Claude's Code tab or ChatGPT's Codex mode.
 
 ## Connect a project
 
-Connection is a deliberate per-project opt-in. Follow the connection flow in
-your agent. It gives you this command to run in your own terminal at the
-project root:
+Connection is a deliberate per-project opt-in. Run `/augenta:connect` (Codex:
+`$augenta:connect` or "Connect Augenta") and answer in the chat:
+
+1. Pick the Neurospace this project should feed, or decline. That single choice is
+   the consent boundary.
+2. The first time only, click the `auth.augenta.ai` link your agent shows you.
+   Later projects reuse that sign-in and skip this step.
+
+There is nothing to copy into a second terminal. Your agent runs the connect
+script's `--json` verbs directly; none of them accepts or emits a credential.
+
+You can also run the script yourself for the interactive terminal flow:
 
 ```bash
 bun "<plugin-root>/scripts/connect.ts"
 ```
 
-The script reuses your owner-only global WorkOS login when possible, otherwise
-opens device login. It displays the authenticated organization, always asks you
-to select a Neurospace, creates or retargets an inbound agent Neurolink through
-the normal `/v1` API, verifies it, and writes this private, self-ignored project
-directory:
+Either way it reuses your owner-only global sign-in when possible, otherwise
+starts device login. It displays the authenticated organization, always requires
+you to select a Neurospace, creates or retargets an inbound agent Neurolink
+through the normal `/v1` API, verifies it, and writes this private, self-ignored
+project directory:
 
 ```text
 <project>/.augenta/
@@ -108,15 +117,22 @@ capture both agent activity and project memory. Delete that file—or the entire
 `.augenta/` directory—to stop capture for the project. Set
 `AUGENTA_CAPTURE_ENABLED=0` to disable both globally.
 
-### Upgrading from 0.2.x
+### Upgrading from an earlier version
 
-Projects connected before 0.3.0 hold an API key written by the old setup script,
-under an authentication scheme the platform no longer accepts. They are not
-migrated automatically—reusing that credential would turn a clear reconnect into
-an unexplained authentication failure. Each such project instead gets one
-automatic prompt to run `/augenta:connect` again; anything already queued in its
-outbox ships as soon as that succeeds. Capture for the project is paused, not
-lost, in the meantime.
+Augenta is pre-1.0 and does not carry old project configs forward. Reconnect once
+per project after upgrading:
+
+- **Connected before 0.3.0** — the project holds an API key from the old setup
+  script, under an authentication scheme the platform no longer accepts.
+- **Connected on 0.3.x** — the project's `authMode` uses the older `workos`
+  spelling, replaced by the provider-neutral `oauth`.
+
+Neither is migrated automatically: reusing an old credential or routing decision
+would turn a clear reconnect into an unexplained authentication failure. Each such
+project instead gets one automatic prompt to run `/augenta:connect` again, which
+is now a single question and, at most, one link to click. Anything already queued
+in its outbox ships as soon as that succeeds. Capture for the project is paused,
+not lost, in the meantime.
 
 ## What gets captured
 
@@ -154,7 +170,7 @@ Nothing is scanned or uploaded without `.augenta/config.json`; the
 `AUGENTA_CAPTURE_ENABLED=0` kill switch disables activity and memory capture.
 
 Project routing and queued activity or memory live under the self-git-ignored
-`.augenta/` directory; reusable WorkOS credentials live in the global
+`.augenta/` directory; reusable sign-in credentials live in the global
 owner-only auth file. A durable, size-bounded outbox keeps records safe during
 network interruptions or expired login and retries delivery idempotently.
 
@@ -175,10 +191,14 @@ base and `AUGENTA_INGEST_URL` redirects the experiences endpoint. Neither
 variable opts a project into capture.
 
 `AUGENTA_CONTROL_URL` (or `scripts/connect.ts --control-url`) selects the
-environment's complete public login discovery: WorkOS issuer, public client id,
-and gateway. Use it when connecting to dev or staging. `--endpoint` changes
-only the gateway and must not be used by itself for a new cross-environment
-WorkOS login.
+environment's complete public login discovery: issuer, public client id, and
+gateway. Use it when connecting to dev or staging. `--endpoint` changes only the
+gateway and must not be used by itself for a new cross-environment sign-in.
+
+Augenta sign-in is a public-client OAuth device grant against WorkOS AuthKit,
+reached through Augenta's own `auth.augenta.ai` issuer. That is an implementation
+detail of the platform: no user-facing string in this plugin names the identity
+provider, and the stored `authMode` is the provider-neutral `oauth`.
 
 ## Development
 
@@ -202,7 +222,7 @@ bun scripts/dev-e2e.ts \
   --control-url https://dev.augenta.ai
 ```
 
-The test uses the stored owner-only WorkOS profile, real outbox and shipper,
+The test uses the stored owner-only sign-in profile, real outbox and shipper,
 and authenticated experience-read API to verify durable schema-v2 landing. It
 does not print or export the access or refresh token. The platform deployment
 order, GitHub Actions gates, variables, and browser acceptance steps live in
@@ -224,6 +244,7 @@ The main implementation lives in:
 
 - `hooks/` — lifecycle entrypoints for supported coding agents
 - `capture/` — normalization, scrubbing, durable buffering, and delivery
-- `scripts/connect.ts` — WorkOS login, Neurolink selection, and safe project config
-- `scripts/dev-e2e.ts` — hosted WorkOS/profile/plugin/durable-landing verification
+- `scripts/connect.ts` — sign-in, Neurolink selection, safe project config, and
+  the agent-driven `--json` verbs
+- `scripts/dev-e2e.ts` — hosted sign-in/profile/plugin/durable-landing verification
 - `skills/connect/` — the guided connection flow

@@ -82,7 +82,7 @@ if (connectedRoot) {
       const action = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
       const reason =
         authNotice === "relogin"
-          ? "WorkOS re-login"
+          ? "a new Augenta sign-in"
           : "a valid inbound Neurolink";
       process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: `Augenta has queued capture waiting for ${reason}. Run ${action}; queued records will resume shipping after reconnecting.` } }));
     }
@@ -154,16 +154,16 @@ const codexContext = staleConfig
 
 const claudeContext = staleConfig
   ? "[Augenta] This project has an .augenta/config.json that this plugin version " +
-    "cannot read — it predates the Neurolink connection format, or the write was " +
+    "cannot read — it predates the current connection format, or the write was " +
     "truncated — so capture is silently off. This is the one automatic prompt it " +
     "will ever get. Run the augenta connect skill now (/augenta:connect) to " +
     "reconnect it; anything already queued in the outbox ships once it succeeds. " +
-    "OAuth tokens and API keys must never be pasted into the chat."
+    "Tokens and API keys must never be pasted into the chat."
   : "[Augenta] This project has not been connected for Augenta capture and this " +
     "is the one automatic prompt it will ever get. Run the augenta connect skill now " +
-    "(/augenta:connect): it explains what capture does and walks the user through " +
-    "creating .augenta/config.json via a command they run in their OWN terminal — " +
-    "OAuth tokens and API keys must never be pasted into the chat.";
+    "(/augenta:connect): it explains what capture does, then drives connect's --json " +
+    "verbs itself so the user only answers one question and, at most, clicks one " +
+    "sign-in link. Tokens and API keys must never be pasted into the chat.";
 
 const additionalContext = codex ? codexContext : claudeContext;
 

@@ -1,15 +1,18 @@
 /**
  * Project-scoped capture consent and routing.
  *
- * Human projects keep only a global WorkOS profile reference and authoritative
+ * Human projects keep only a global sign-in profile reference and authoritative
  * Neurolink id. Machine projects may instead hold a platform-managed API key.
  * No organization or Neurospace coordinate is accepted from project config.
  *
- * A pre-0.3.0 `{apiKey}` config (no `authMode`, written by the removed
- * scripts/setup.ts) is deliberately NOT auto-migrated: the wire contract changed
- * from `Bearer` + subscription-key to `AugentaKey`, so silently reusing the old
- * credential would trade a clear reconnect for an unexplained 401. It parses to
- * undefined, and session-start.ts turns that into a one-time reconnect prompt.
+ * `authMode` names the CREDENTIAL KIND, which decides both what else the file
+ * must contain and which authorization header the shipper sends.
+ *
+ * A config this version cannot parse — a pre-0.3.0 `{apiKey}` file from the
+ * removed scripts/setup.ts, the pre-0.4.0 `authMode: "workos"` spelling, or a
+ * truncated write — is deliberately NOT migrated. Reusing a stale credential or
+ * routing would trade a clear reconnect for an unexplained 401, so it parses to
+ * undefined and session-start.ts turns that into a one-time reconnect prompt.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -17,8 +20,10 @@ import { dirname, join } from "node:path";
 export const DEFAULT_GATEWAY =
   "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
 
+export type AuthMode = "oauth" | "api-key";
+
 export interface ProjectConfig {
-  authMode: "workos" | "api-key";
+  authMode: AuthMode;
   profileId?: string;
   neurolinkId?: string;
   apiKey?: string;
@@ -57,14 +62,14 @@ export function loadProjectConfig(
       typeof value.endpoint === "string" && value.endpoint.trim()
         ? value.endpoint.trim()
         : undefined;
-    if (value.authMode === "workos") {
+    if (value.authMode === "oauth") {
       const profileId =
         typeof value.profileId === "string" ? value.profileId.trim() : "";
       const neurolinkId =
         typeof value.neurolinkId === "string" ? value.neurolinkId.trim() : "";
       if (!profileId || !neurolinkId) return undefined;
       return {
-        authMode: "workos",
+        authMode: "oauth",
         profileId,
         neurolinkId,
         ...(endpoint ? { endpoint } : {}),
@@ -114,7 +119,7 @@ export function captureKilled(): boolean {
 
 export function captureEnabled(cfg: ProjectConfig | undefined): boolean {
   if (!cfg || captureKilled()) return false;
-  return cfg.authMode === "workos"
+  return cfg.authMode === "oauth"
     ? Boolean(cfg.profileId && cfg.neurolinkId)
     : Boolean(cfg.apiKey);
 }

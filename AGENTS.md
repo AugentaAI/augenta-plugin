@@ -59,8 +59,35 @@ versioned marketplace descriptions at the same time.
 Augenta remains opt-in per project. Do not change telemetry APIs, payloads,
 consent semantics, or capture behavior without an explicit product decision.
 OAuth tokens stay in the owner-only global `~/.augenta/auth.json`; a connected
-project stores only a profile reference and Neurolink id. Platform keys stay
-out of chat and are written only by `scripts/connect.ts` in the explicit
-`--api-key` path; the connect script is never run by the agent with a user
-credential. Capture must stay a silent no-op without project config, and
-`AUGENTA_CAPTURE_ENABLED=0` remains the global kill switch.
+project stores only a profile reference and Neurolink id. Capture must stay a
+silent no-op without project config, and `AUGENTA_CAPTURE_ENABLED=0` remains the
+global kill switch.
+
+**No credential passes through the agent.** The line is what a process *handles*,
+not who starts it. The agent is the normal caller of `scripts/connect.ts --json`
+(`--probe`, `--login`, `--await-login`, `--neurospace`): those verbs never accept
+a credential as an argument and never emit an access token, refresh token, or
+device code in their payload, so tokens travel browser → `~/.augenta/auth.json`
+without touching a transcript. Do not add a `--json` verb or field that breaks
+that. Platform keys are different — `--api-key` takes a secret on the command
+line, so it stays a human/CI path, is rejected in `--json` mode, and is never run
+by the agent. Never ask a user to paste any credential into chat.
+
+**Consent stays explicit and in the user's hands.** Which Neurospace a project
+feeds is the user's decision, asked every time even when only one exists. Moving
+that question from a terminal menu into the harness's user-input mechanism is
+fine; removing or defaulting it is not. A non-production `environment` must be
+stated to the user before they answer.
+
+**The identity provider appears nowhere in the plugin.** Augenta sign-in runs on
+WorkOS AuthKit behind `auth.augenta.ai`, and that fact lives only in comments. The
+project config's `authMode` is `oauth`; a stored profile holds `userId`/`orgId`,
+taken from Augenta's own `/v1/me` `user.id` and `org.id`. The IdP's separate
+`org.workosOrgId` is deliberately unused — identity keys on Augenta's ids, not the
+provider's. A contract test fails on any casing of the vendor name in runtime code
+outside a comment; keep it that way.
+
+**Stale configs are reconnected, never migrated.** Pre-release versions are not
+carried forward. A config this version cannot parse becomes session-start's
+one-time reconnect prompt, which is a clear ask; reusing an old credential or
+routing decision would instead surface later as an unexplained 401.
