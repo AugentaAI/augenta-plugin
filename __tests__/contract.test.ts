@@ -40,7 +40,7 @@ const KNOWN_HOOK_EVENTS = new Set([
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.5.0";
+const RELEASE_VERSION = "0.5.1";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -451,7 +451,15 @@ describe("manifests — cross-harness packaging and one version", () => {
       // they get the longer budget; PostCompact only re-baselines a cursor.
       SubagentStop: 10,
       Stop: 10,
-      SessionEnd: 10,
+      // NOT 10, deliberately. Codex enforces a per-event MAXIMUM timeout and
+      // caps shutdown-path hooks at 3s; declaring more makes it clamp and
+      // report "1 issue loading hooks for this source" to every Codex user,
+      // permanently. One manifest serves both harnesses, so a declared timeout
+      // must be the MINIMUM across them. Claude accepts 10 happily, which is
+      // why `plugin validate`/`plugin details` cannot catch this — only a real
+      // Codex install can. SessionEnd's inline work is trimmed to match (it
+      // skips the memory scan; see shouldScanMemory in capture/capture.ts).
+      SessionEnd: 3,
       PreCompact: 10,
       PostCompact: 5,
     };
