@@ -261,6 +261,52 @@ describe("the connect skill drives connect itself", () => {
   test("explains the worktree redirect instead of retargeting silently", () => {
     expect(skill).toContain("worktreeRedirect");
   });
+
+  test("stays environment-agnostic — no environment selection reaches the agent", () => {
+    // Environment selection is `AUGENTA_CONTROL_URL` on the harness process, and
+    // DEBUG.md records why it is not a skill flag. Two reasons, both of which a
+    // future edit here would undo. A user connecting a project has no environment
+    // to choose, so an agent that knows about one can offer a decision nobody can
+    // answer. And a flag would have to be repeated on EVERY verb: --await-login
+    // compares the pending grant's issuer and client id against fresh discovery
+    // and CLEARS the grant on mismatch (scripts/connect.ts:695), so one verb
+    // missing it discards a sign-in the user already authorized in their browser.
+    // A process-wide variable cannot be applied to only some of the verbs.
+    expect(skill).not.toContain("--control-url");
+    expect(skill).not.toContain("AUGENTA_CONTROL_URL");
+    // No concrete non-production host either: a hostname sitting in this file is a
+    // string the model can volunteer to someone never meant to see the topology.
+    expect(skill).not.toMatch(/dev\.augenta\.ai|staging\.augenta\.ai/);
+    // What must survive: the disclosure rule, which needs no flag to work.
+    // environmentLabel reads the variable, so `environment` still reports a
+    // non-prod target and the agent still has to say so.
+    expect(flat).toMatch(/not `prod`, say so/);
+  });
+});
+
+describe("DEBUG.md is contributor-only documentation", () => {
+  const debugDoc = readFileSync(join(PLUGIN_ROOT, "DEBUG.md"), "utf8");
+  const readme = readFileSync(join(PLUGIN_ROOT, "README.md"), "utf8");
+  const agents = readFileSync(join(PLUGIN_ROOT, "AGENTS.md"), "utf8");
+
+  test("the contributor guide points at it and the user-facing README does not", () => {
+    // Every lever in it either aims a real project at a non-production Augenta or
+    // rewrites local sign-in state. That is contributor work, never something to
+    // walk a user through, so it is reachable from AGENTS.md only.
+    expect(agents).toContain("DEBUG.md");
+    expect(readme).not.toContain("DEBUG.md");
+  });
+
+  test("records why the skill has no environment flag, where the next editor looks", () => {
+    // Removing the section from SKILL.md loses the reasoning unless it lands
+    // somewhere; without it the flag gets re-added by someone solving the same
+    // problem again, along with the grant-clearing footgun.
+    expect(debugDoc).toContain("AUGENTA_CONTROL_URL");
+    expect(debugDoc.replace(/\s+/g, " ")).toMatch(
+      /connect skill has no environment flag, on purpose/i,
+    );
+    expect(debugDoc).toContain("clears the grant");
+  });
 });
 
 describe("the identity provider stays behind the scenes", () => {
