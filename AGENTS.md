@@ -41,6 +41,12 @@ the platform-key path and must never receive a human WorkOS access or refresh
 token. `--endpoint` overrides only the gateway; use `--control-url` when
 selecting a non-production issuer/client/gateway set.
 
+`DEBUG.md` carries the rest of the contributor levers: pointing a harness at a
+non-production Augenta with `AUGENTA_CONTROL_URL`, running the working tree
+instead of an installed copy, and resetting local sign-in state. It is contributor
+documentation and stays unlinked from `README.md` — the connect skill itself has
+no environment flag, and the reasoning for that is recorded there.
+
 ## Cross-harness packaging
 
 This repository is one plugin for Claude Code and Codex. Keep runtime skills in
