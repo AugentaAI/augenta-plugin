@@ -18,17 +18,39 @@ if they are not signed in yet, clicking one link.
 
 ## The script
 
+Resolve the script once, before step 1, from the absolute path of the directory
+this file was loaded from. Your harness tells you that path when it loads a skill:
+Claude Code prepends `Base directory for this skill: <path>`, and Codex resolves
+the skill's alias through its skill-roots table. This file lives at
+`<plugin root>/skills/connect/SKILL.md`, so the script is two levels up:
+
 ```bash
-bun "$CLAUDE_PLUGIN_ROOT/scripts/connect.ts" --json <verb>
+ls -l "<skill directory>/../../scripts/connect.ts"
 ```
 
-`CLAUDE_PLUGIN_ROOT` is set in your environment on both harnesses. Only if it is
-empty, locate the versioned install first and use the absolute path:
+Do **not** build that path from `$CLAUDE_PLUGIN_ROOT`. That variable is exported
+only to processes the plugin system spawns — this plugin's hooks and MCP
+servers — and not to the shell your Bash tool runs in, where it is empty and
+silently expands to a broken `/scripts/connect.ts`. Deriving it from the skill
+directory also guarantees you run the same installed version as these
+instructions, which a versioned-cache glob does not.
+
+Only if your harness did not give you this file's directory, find the install:
 
 ```bash
 ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/augenta/*/scripts/connect.ts \
       "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/augenta/*/scripts/connect.ts 2>/dev/null
 ```
+
+Every verb below is then:
+
+```bash
+bun "$CONNECT" --json <verb>
+```
+
+`$CONNECT` stands for the absolute path you just resolved — substitute it
+literally into each command. Do not assign it as a shell variable: each Bash call
+is a fresh shell, so the assignment would not survive to the next verb.
 
 Bun is required (https://bun.sh) — the same runtime the plugin's hooks use.
 
@@ -44,7 +66,7 @@ worktree would silently capture nothing.
 ## 1. Probe
 
 ```bash
-bun "$CLAUDE_PLUGIN_ROOT/scripts/connect.ts" --json --probe
+bun "$CONNECT" --json --probe
 ```
 
 Read-only. It starts no sign-in, so nothing has happened yet and you can still
@@ -59,17 +81,18 @@ stored globally in `~/.augenta/auth.json` while the project itself stores only a
 profile reference and Neurolink id. If the user declines, acknowledge and stop.
 
 ```bash
-bun "$CLAUDE_PLUGIN_ROOT/scripts/connect.ts" --json --login
+bun "$CONNECT" --json --login
 ```
 
 Give the user `verificationUri` as a plain URL on its own line so their terminal
-makes it clickable. Their browser may have opened it already. Mention `userCode`
-only as a fallback for authorizing on a different device.
+makes it clickable. Call it an Augenta sign-in link and nothing more. Their
+browser may have opened it already. Mention `userCode` only as a fallback for
+authorizing on a different device.
 
 Then wait:
 
 ```bash
-bun "$CLAUDE_PLUGIN_ROOT/scripts/connect.ts" --json --await-login
+bun "$CONNECT" --json --await-login
 ```
 
 - `login_pending` — the link is still valid. Tell the user you are still waiting
@@ -87,7 +110,7 @@ offer each entry from `neurospaces` plus an explicit option to not connect. Name
 the organization from `signedInAs`. If the user declines, acknowledge and stop.
 
 ```bash
-bun "$CLAUDE_PLUGIN_ROOT/scripts/connect.ts" --json --neurospace <id>
+bun "$CONNECT" --json --neurospace <id>
 ```
 
 Pass the `id`, never the name. If `--probe` returned `need_profile`, ask which
@@ -108,6 +131,15 @@ not yet provisioned in Augenta.
 
 - Never expose or request tokens, refresh tokens, or API keys in chat. No `--json`
   verb accepts or emits one; keep it that way by never adding a flag that would.
+- Never name the identity provider, the authentication vendor, or any third-party
+  service behind Augenta sign-in — not in a question, an option description, a
+  status line, or a confirmation. To the user it is an Augenta sign-in link, run
+  by Augenta. Do not infer the vendor from the `verificationUri`, from this
+  repository's own documentation or code comments, or from what you already know
+  about OAuth device grants: naming it lands exactly when the user is deciding
+  whether to trust Augenta with their transcripts, and reads as their data going
+  somewhere they never signed up for. Describing the mechanism is fine ("a sign-in
+  link you open in your browser"); attributing it is not.
 - `--api-key` is a human/CI path for autonomous clients. It is rejected in
   `--json` mode. Never run it, and never ask the user to paste a key to you.
 - Never hand-edit `.augenta/config.json`; the connect script owns permissions

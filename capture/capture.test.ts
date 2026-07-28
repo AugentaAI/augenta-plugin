@@ -17,7 +17,7 @@ import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCapture, shouldFlush, SPOOL_FULL_MARKER } from "./capture";
+import { readsFullTail, resolveCaptureTarget, runCapture, shouldFlush, SPOOL_FULL_MARKER } from "./capture";
 import { CaptureState } from "./capture-cursor";
 import { TurnState } from "./turn-cursor";
 import { Outbox, isCaptureEvent, isDocumentRecord, isRawRecord } from "./outbox";
@@ -66,6 +66,35 @@ describe("shouldFlush", () => {
   test("no event name never flushes", () => {
     expect(shouldFlush({})).toBe(false);
   });
+  test("SessionEnd flushes — a session ending without a Stop must not strand its spool", () => {
+    expect(shouldFlush({ hook_event_name: "SessionEnd" })).toBe(true);
+  });
+  test("PreCompact flushes — the transcript is about to be rewritten under us", () => {
+    expect(shouldFlush({ hook_event_name: "PreCompact" })).toBe(true);
+  });
+  test("PostCompact does NOT flush — it only re-baselines the cursor", () => {
+    expect(shouldFlush({ hook_event_name: "PostCompact" })).toBe(false);
+  });
+  test("SubagentStop does NOT flush — the parent's Stop ships shortly after", () => {
+    expect(shouldFlush({ hook_event_name: "SubagentStop" })).toBe(false);
+  });
+});
+
+describe("readsFullTail", () => {
+  test("the capped hot path is PostToolUse only", () => {
+    expect(readsFullTail({ hook_event_name: "PostToolUse" })).toBe(false);
+    expect(readsFullTail({ hook_event_name: "PostCompact" })).toBe(false);
+  });
+  test("every flush reads uncapped", () => {
+    for (const e of ["Stop", "SessionEnd", "PreCompact"]) {
+      expect(readsFullTail({ hook_event_name: e })).toBe(true);
+    }
+  });
+  test("SubagentStop reads uncapped despite not flushing — it is the ONLY fire on that transcript", () => {
+    // A capped read here would strand the rest of the subagent transcript with
+    // no later fire on that path to catch up: silent, permanent loss.
+    expect(readsFullTail({ hook_event_name: "SubagentStop" })).toBe(true);
+  });
 });
 
 describe("runCapture", () => {
@@ -82,7 +111,9 @@ describe("runCapture", () => {
     rmSync(work, { recursive: true, force: true });
   });
 
-  function fire(event: "PostToolUse" | "Stop" = "PostToolUse") {
+  function fire(
+    event: "PostToolUse" | "Stop" | "SessionEnd" | "PreCompact" | "PostCompact" = "PostToolUse",
+  ) {
     return runCapture(
       { session_id: "s1", transcript_path: transcript, cwd: "/proj", hook_event_name: event },
       { projectRoot: project, spawnShipper: false },
@@ -588,6 +619,176 @@ describe("runCapture", () => {
       const rawSids = new Set(pendingRaws().map((r) => r.sid));
       const eventSids = new Set(events.map((e) => e.sid));
       expect(eventSids).toEqual(rawSids);
+    });
+  });
+
+  describe("compaction — a rewritten transcript must not wedge or duplicate the cursor", () => {
+    test("a SHRUNK transcript re-baselines instead of stalling capture forever", () => {
+      writeFileSync(transcript, userLine("one") + userLine("two") + userLine("three"));
+      fire();
+      const before = new CaptureState(project).get(transcript);
+      expect(before.offset).toBeGreaterThan(0);
+
+      // Compaction rewrote the file smaller than the stored offset. Without the
+      // shrink guard, `cursor.offset < size` is false forever and this
+      // transcript is never captured again.
+      writeFileSync(transcript, userLine("summary"));
+      fire();
+
+      const after = new CaptureState(project).get(transcript);
+      expect(after.offset).toBe(Buffer.byteLength(userLine("summary")));
+      // seq stays monotonic across the rewrite so no later event collides.
+      expect(after.seq).toBeGreaterThanOrEqual(before.seq);
+    });
+
+    test("PreCompact captures its tail, ships, and arms the re-baseline", () => {
+      writeFileSync(transcript, userLine("pre-compaction work"));
+      const r = fire("PreCompact");
+      expect(r.flushed).toBe(true);
+      expect(pendingEvents().map((e) => e.text)).toEqual(["pre-compaction work"]);
+      expect(new CaptureState(project).get(transcript).rebaseline).toBe(true);
+    });
+
+    test("the armed re-baseline is consumed once, then normal tailing resumes", () => {
+      writeFileSync(transcript, userLine("before"));
+      fire("PreCompact");
+
+      // The harness rewrites the transcript. Its new content is the compaction
+      // summary — already represented by what PreCompact shipped — so it is
+      // skipped rather than re-emitted as new events.
+      writeFileSync(transcript, userLine("compacted summary line"));
+      const skipped = fire("PostCompact");
+      expect(skipped.appended).toBe(0);
+
+      const cursor = new CaptureState(project).get(transcript);
+      expect(cursor.rebaseline).toBeUndefined();
+      expect(cursor.offset).toBe(Buffer.byteLength(userLine("compacted summary line")));
+
+      // Genuinely new post-compaction content is captured normally.
+      appendFileSync(transcript, userLine("after compaction"));
+      fire();
+      expect(pendingEvents().map((e) => e.text)).toEqual(["before", "after compaction"]);
+    });
+
+    test("a re-baseline that reads nothing still persists — otherwise it rolls forward and eats new content", () => {
+      writeFileSync(transcript, userLine("before"));
+      fire("PreCompact");
+      // Rewritten to exactly the offset we already consumed: nothing to read.
+      writeFileSync(transcript, userLine("before"));
+      fire("PostCompact");
+      expect(new CaptureState(project).get(transcript).rebaseline).toBeUndefined();
+
+      // If the flag had survived, this line would be skipped as "already seen".
+      appendFileSync(transcript, userLine("must not be skipped"));
+      fire();
+      expect(pendingEvents().map((e) => e.text)).toContain("must not be skipped");
+    });
+  });
+
+  describe("subagent capture — work that is invisible in the parent transcript", () => {
+    function subagentTranscript(sessionId: string, agentId: string): string {
+      const dir = join(work, sessionId, "subagents");
+      mkdirSync(dir, { recursive: true });
+      return join(dir, `agent-${agentId}.jsonl`);
+    }
+
+    test("derives the subagent transcript from the documented layout when the harness omits the path", () => {
+      const parent = join(work, "sess-1.jsonl");
+      writeFileSync(parent, "");
+      const sub = subagentTranscript("sess-1", "abc123");
+      writeFileSync(sub, userLine("subagent work"));
+
+      expect(
+        resolveCaptureTarget({
+          hook_event_name: "SubagentStop",
+          transcript_path: parent,
+          agent_id: "abc123",
+          agent_type: "Explore",
+        }),
+      ).toEqual({ transcriptPath: sub, agentId: "abc123", agentType: "Explore" });
+    });
+
+    test("an explicit agent_transcript_path wins over the derived one", () => {
+      const explicit = join(work, "explicit.jsonl");
+      writeFileSync(explicit, userLine("x"));
+      expect(
+        resolveCaptureTarget({
+          hook_event_name: "SubagentStop",
+          transcript_path: join(work, "sess-1.jsonl"),
+          agent_transcript_path: explicit,
+          agent_id: "abc123",
+        }).transcriptPath,
+      ).toBe(explicit);
+    });
+
+    test("a derived path that does not resolve yields NO target rather than a bogus cursor entry", () => {
+      const parent = join(work, "sess-1.jsonl");
+      writeFileSync(parent, "");
+      expect(
+        resolveCaptureTarget({
+          hook_event_name: "SubagentStop",
+          transcript_path: parent,
+          agent_id: "missing",
+        }).transcriptPath,
+      ).toBeUndefined();
+    });
+
+    test("non-subagent events always target the session transcript", () => {
+      expect(
+        resolveCaptureTarget({ hook_event_name: "Stop", transcript_path: transcript, agent_id: "x" }),
+      ).toEqual({ transcriptPath: transcript });
+    });
+
+    test("subagent steps get their OWN sid so their seqs cannot collide with the parent's", () => {
+      const parent = join(work, "sess-1.jsonl");
+      writeFileSync(parent, "");
+      const sub = subagentTranscript("sess-1", "abc123");
+      // Subagent lines carry the PARENT's sessionId — the exact collision this
+      // sid namespacing exists to prevent.
+      writeFileSync(
+        sub,
+        JSON.stringify({ type: "user", sessionId: "sess-1", message: { role: "user", content: "explore this" } }) + "\n",
+      );
+
+      runCapture(
+        {
+          session_id: "sess-1",
+          transcript_path: parent,
+          cwd: "/proj",
+          hook_event_name: "SubagentStop",
+          agent_id: "abc123",
+          agent_type: "Explore",
+        },
+        { projectRoot: project, spawnShipper: false },
+      );
+
+      const events = pendingEvents();
+      expect(events).toHaveLength(1);
+      expect(events[0]!.sid).toBe("sess-1/agent-abc123");
+      expect(events[0]!.parent_sid).toBe("sess-1");
+      expect(events[0]!.agent_type).toBe("Explore");
+    });
+
+    test("a subagent's raws carry the same namespaced sid as its steps — otherwise ship drops them", () => {
+      const parent = join(work, "sess-1.jsonl");
+      writeFileSync(parent, "");
+      const sub = subagentTranscript("sess-1", "abc123");
+      writeFileSync(sub, userLine("explore this"));
+
+      runCapture(
+        {
+          session_id: "sess-1",
+          transcript_path: parent,
+          cwd: "/proj",
+          hook_event_name: "SubagentStop",
+          agent_id: "abc123",
+        },
+        { projectRoot: project, spawnShipper: false },
+      );
+
+      expect(new Set(pendingRaws().map((r) => r.sid))).toEqual(
+        new Set(pendingEvents().map((e) => e.sid)),
+      );
     });
   });
 });

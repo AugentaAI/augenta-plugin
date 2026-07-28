@@ -146,6 +146,10 @@ finishes, it sends two complementary forms of activity to your Neurospace:
 - **Raw transcript records:** otherwise-original transcript JSONL lines. Before
   upload, the plugin removes opaque reasoning signatures/encrypted content and
   empty `thinking`/`reasoning` fields so those artifacts are not retained.
+- **Subagent activity:** work a subagent performs is recorded in its own
+  transcript rather than the session's, so it is captured from that file when the
+  subagent finishes. These steps carry their own session id and name the session
+  that spawned them. Both forms above apply to them equally.
 
 > **Important:** raw transcript records are not secret-scrubbed. They are
 > structurally sanitized to remove opaque reasoning artifacts, then uploaded.

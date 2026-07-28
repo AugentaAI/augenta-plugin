@@ -25,12 +25,12 @@
  *  ABSENCE. Silent permanent death is the one outcome this hook must not have.
  *
  *  Connected project → scan memory changes, then give a STRANDED outbox a
- *  chance to drain. If the final Stop of a prior session never fired (crash,
- *  killed terminal) or failed mid-drain, that spool would otherwise sit
- *  untouched until the NEXT session's own Stop. SessionStart is the next
- *  guaranteed hook fire, so it spawns the same detached shipper capture.ts
- *  uses whenever the scan or an earlier session left pending bytes. The
- *  shipper's single-flight `.lock` prevents concurrent drains.
+ *  chance to drain. SessionEnd is the ordinary end-of-session drain; this is the
+ *  backstop for when neither it nor the final Stop got to run (crash, SIGKILL)
+ *  or the drain failed mid-flight. SessionStart is then the next guaranteed hook
+ *  fire, so it spawns the same detached shipper capture.ts uses whenever the
+ *  scan or an earlier session left pending bytes. The shipper's single-flight
+ *  `.lock` prevents concurrent drains.
  *
  *  Everything else is silent: a connected project with nothing pending
  *  needs nothing injected (the plugin is push-only), and a previously-prompted

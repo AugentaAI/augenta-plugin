@@ -102,6 +102,82 @@ describe("normalizeClaudeTranscript", () => {
     expect(e.text).toBe("done");
   });
 
+  test("cache tokens are captured — they are billed separately and usually dwarf input_tokens", () => {
+    const lines = [
+      lineFor({
+        type: "assistant",
+        sessionId: "s1",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          usage: {
+            input_tokens: 12,
+            output_tokens: 5,
+            cache_creation_input_tokens: 4096,
+            cache_read_input_tokens: 98304,
+          },
+        },
+      }),
+    ];
+    const e = normalizeClaudeTranscript({ lines, ctx, startSeq: 0, startOffset: 0 }).events[0]!;
+    expect(e.cache_in_tok).toBe(4096);
+    expect(e.cache_read_tok).toBe(98304);
+  });
+
+  test("usage without cache fields reports null, not zero — 'unreported' must stay distinguishable", () => {
+    const lines = [
+      lineFor({
+        type: "assistant",
+        sessionId: "s1",
+        message: { role: "assistant", content: [{ type: "text", text: "done" }], usage: { input_tokens: 10, output_tokens: 5 } },
+      }),
+    ];
+    const e = normalizeClaudeTranscript({ lines, ctx, startSeq: 0, startOffset: 0 }).events[0]!;
+    expect(e.cache_in_tok).toBeNull();
+    expect(e.cache_read_tok).toBeNull();
+  });
+
+  describe("subagent namespacing (ctx.agentId)", () => {
+    // Subagent transcript lines carry the PARENT session's sessionId, so without
+    // the suffix their independent seq counter collides with the parent's inside
+    // one experience group.
+    const subLine = lineFor({
+      type: "user",
+      sessionId: "parent-sess",
+      message: { role: "user", content: "explore" },
+    });
+
+    test("sid is namespaced and the parent is preserved on parent_sid", () => {
+      const e = normalizeClaudeTranscript({
+        lines: [subLine],
+        ctx: { ...ctx, agentId: "ag1", agentType: "Explore" },
+        startSeq: 0,
+        startOffset: 0,
+      }).events[0]!;
+      expect(e.sid).toBe("parent-sess/agent-ag1");
+      expect(e.parent_sid).toBe("parent-sess");
+      expect(e.agent_type).toBe("Explore");
+    });
+
+    test("the raw channel uses the SAME namespaced sid — a mismatch orphans raws into a dropped group", () => {
+      const { events, raws } = normalizeClaudeTranscript({
+        lines: [subLine, "{not json"],
+        ctx: { ...ctx, agentId: "ag1" },
+        startSeq: 0,
+        startOffset: 0,
+      });
+      expect(events[0]!.sid).toBe("parent-sess/agent-ag1");
+      for (const r of raws) expect(r.sid).toBe("parent-sess/agent-ag1");
+    });
+
+    test("without agentId nothing changes — main-session steps stay unnamespaced", () => {
+      const e = normalizeClaudeTranscript({ lines: [subLine], ctx, startSeq: 0, startOffset: 0 }).events[0]!;
+      expect(e.sid).toBe("parent-sess");
+      expect(e.parent_sid).toBeUndefined();
+      expect(e.agent_type).toBeUndefined();
+    });
+  });
+
   test("assistant tool_use → tool event with tool_name", () => {
     const lines = [
       lineFor({

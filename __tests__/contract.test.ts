@@ -33,14 +33,14 @@ const KNOWN_TOOLS = new Set([
 // unrecognized key in hooks.json never fires — it's dead config, so we fail on it.
 const KNOWN_HOOK_EVENTS = new Set([
   "SessionStart", "SessionEnd", "Stop", "SubagentStop", "UserPromptSubmit",
-  "PreToolUse", "PostToolUse", "PreCompact", "Notification",
+  "PreToolUse", "PostToolUse", "PreCompact", "PostCompact", "Notification",
 ]);
 
 // The capture plugin ships exactly one connection skill.
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.4.0";
+const RELEASE_VERSION = "0.5.0";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -221,8 +221,20 @@ describe("the connect skill drives connect itself", () => {
     }
   });
 
-  test("resolves the script from its own environment, with a Codex fallback", () => {
-    expect(skill).toContain("CLAUDE_PLUGIN_ROOT");
+  test("resolves the script from the skill's own directory, never from $CLAUDE_PLUGIN_ROOT", () => {
+    // CLAUDE_PLUGIN_ROOT is exported to processes the plugin system SPAWNS —
+    // hooks.json commands and MCP servers — and NOT to the shell behind the
+    // agent's Bash tool, where it is empty and expands to `/scripts/connect.ts`.
+    // Both harnesses do hand the model this file's absolute directory (Claude
+    // Code prepends "Base directory for this skill:"; Codex resolves the skill
+    // root alias), and deriving the path from it also pins the script to the
+    // same installed version as these instructions. Pin all three facts: the
+    // rule, the warning that explains it, and the absence of the broken form.
+    expect(skill).not.toMatch(/\$\{?CLAUDE_PLUGIN_ROOT\}?\/scripts\/connect\.ts/);
+    expect(flat).toMatch(/Do \*\*not\*\* build that path from `\$CLAUDE_PLUGIN_ROOT`/);
+    expect(flat).toMatch(/skills\/connect\/SKILL\.md`, so the script is two levels up/);
+    // The versioned-install glob stays as the last resort for a harness that
+    // does not announce the skill directory.
     expect(skill).toMatch(/plugins\/cache/);
     expect(skill).toMatch(/CODEX_HOME/);
   });
@@ -289,6 +301,26 @@ describe("the identity provider stays behind the scenes", () => {
       "WorkOS",
     );
   });
+
+  test("the connect skill forbids the agent from naming it", () => {
+    // Keeping the name OUT of the skill is not enough on its own. The agent
+    // writes the sign-in question itself, and it can source the vendor from
+    // this repository's comments and README (which explain the invariant), or
+    // from what any model knows about OAuth device grants. A file the string is
+    // merely absent from constrains nothing the model generates; only an
+    // explicit instruction does. This one is load-bearing — it is the check
+    // that would have caught "Opens a <vendor> device-authorization link" in
+    // the sign-in prompt.
+    const skill = readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8").replace(
+      /\s+/g,
+      " ",
+    );
+    expect(skill).toMatch(/Never name the identity provider/i);
+    // The instruction has to close the inference routes, not just the file.
+    expect(skill).toMatch(/Do not infer the vendor from the `verificationUri`/i);
+    // And the sign-in step itself has to say what the link IS called.
+    expect(skill).toMatch(/Call it an Augenta sign-in link and nothing more/i);
+  });
 });
 
 describe("manifests — cross-harness packaging and one version", () => {
@@ -349,6 +381,20 @@ describe("manifests — cross-harness packaging and one version", () => {
     expect([...versions]).toEqual([RELEASE_VERSION]);
   });
 
+  test("CI derives the release version and hook count instead of hardcoding them", () => {
+    // The install-smoke job is NOT one of the release surfaces above — it asserts
+    // against an INSTALLED plugin, not a file in the tree — so a version bump
+    // cannot reach it. It sat pinned to a stale version through a whole release
+    // before this. The fix is to derive both values at run time; this test keeps
+    // it derived rather than re-pinning a number that will rot again.
+    const ci = readFileSync(join(PLUGIN_ROOT, ".github", "workflows", "ci.yml"), "utf8");
+    expect(ci).toContain("jq -r .version package.json");
+    expect(ci).toContain("jq '.hooks | keys | length' hooks/hooks.json");
+    // Toolchain pins (bun-version, action tags) are legitimately literal; what
+    // must never appear is the PLUGIN's own version, which is what goes stale.
+    expect(ci, `CI hardcodes the plugin version ${RELEASE_VERSION}`).not.toContain(RELEASE_VERSION);
+  });
+
   test("the versioned marketplace descriptions track the release", () => {
     // AGENTS.md → Releases: descriptions carry the version in prose, so they go
     // stale silently unless something pins them to the same bump.
@@ -381,15 +427,33 @@ describe("manifests — cross-harness packaging and one version", () => {
       Array<{ hooks: Array<{ command: string; timeout?: number }> }>
     >;
 
-    // The telemetry surface is exactly these four events.
+    // The telemetry surface is exactly these eight events. Codex trust-pins each
+    // hook by content hash in ~/.codex/config.toml [hooks.state], so ANY change
+    // to this set re-prompts every Codex user — it moves once per release, in a
+    // single batch, never incrementally.
     expect(new Set(Object.keys(hooks))).toEqual(
-      new Set(["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]),
+      new Set([
+        "SessionStart",
+        "UserPromptSubmit",
+        "PostToolUse",
+        "SubagentStop",
+        "Stop",
+        "SessionEnd",
+        "PreCompact",
+        "PostCompact",
+      ]),
     );
     const expectedTimeouts: Record<string, number> = {
       SessionStart: 5,
       UserPromptSubmit: 5,
       PostToolUse: 5,
+      // Boundary fires read the FULL unread tail (uncapped) and may ship, so
+      // they get the longer budget; PostCompact only re-baselines a cursor.
+      SubagentStop: 10,
       Stop: 10,
+      SessionEnd: 10,
+      PreCompact: 10,
+      PostCompact: 5,
     };
 
     for (const [event, groups] of Object.entries(hooks)) {
