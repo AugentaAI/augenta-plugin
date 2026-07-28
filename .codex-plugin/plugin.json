@@ -1,6 +1,6 @@
 {
   "name": "augenta",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Augenta — opt-in, per-project capture of your coding agent's activity and project memory to your Augenta Neurospace. Ask \"Connect Augenta\" in a project to enable it.",
   "author": {
     "name": "Augenta"

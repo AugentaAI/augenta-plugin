@@ -47,7 +47,12 @@ import { join, dirname } from "node:path";
 import { mkdirSync, openSync, writeSync, closeSync, unlinkSync, statSync, appendFileSync } from "node:fs";
 import { Outbox, isDocumentRecord, isRawRecord, type SpoolRecord } from "./outbox";
 import type { CaptureEvent, DocumentExperience, Experience, TrajectoryExperience } from "./event";
-import { experiencesUrl, loadProjectConfig, captureEnabled } from "./config";
+import {
+  experiencesUrl,
+  loadProjectConfig,
+  captureEnabled,
+  type AuthMode,
+} from "./config";
 import {
   accessTokenForProfile,
   markAuthNotice,
@@ -334,22 +339,22 @@ export async function postExperiences(
   token: string | undefined,
   experiences: Experience[],
   neurolinkId?: string,
-  authMode: "workos" | "api-key" = "api-key",
+  authMode: AuthMode = "api-key",
 ): Promise<PostResult> {
-  // In WorkOS mode the Neurolink is the ROUTE — a platform key carries its own
+  // In oauth mode the Neurolink is the ROUTE — a platform key carries its own
   // assignment, a bearer token does not. The door answers a missing header with
   // 400, which is a PERMANENT status here, so the batch would be quarantined to
   // rejected.jsonl. Throwing instead puts it on the transient path: the cursor
   // holds and the records are still there once the caller is fixed.
-  if (authMode === "workos" && !neurolinkId) {
-    throw new Error("WorkOS shipping requires a Neurolink id");
+  if (authMode === "oauth" && !neurolinkId) {
+    throw new Error("shipping with an Augenta sign-in requires a Neurolink id");
   }
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       ...(token
-        ? authMode === "workos"
+        ? authMode === "oauth"
           ? {
               authorization: `Bearer ${token}`,
               ...(neurolinkId
@@ -414,7 +419,7 @@ export interface DrainOptions {
   url: string;
   token?: string;
   neurolinkId?: string;
-  authMode?: "workos" | "api-key";
+  authMode?: AuthMode;
   /** Project root holding .augenta/ — the outbox being drained. */
   projectRoot: string;
   /** Max spool records per slice — events, raws, and documents combined. */
@@ -431,10 +436,10 @@ export interface DrainResult {
 }
 
 export function shippingNotice(
-  authMode: "workos" | "api-key",
+  authMode: AuthMode,
   status: number,
 ): "relogin" | "connect" | undefined {
-  if (authMode === "workos" && status === 401) return "relogin";
+  if (authMode === "oauth" && status === 401) return "relogin";
   if (
     (status === 403 || status === 404) ||
     (authMode === "api-key" && status === 401)
@@ -590,13 +595,13 @@ if (import.meta.main) {
   const cfg = projectRoot ? loadProjectConfig(projectRoot) : undefined;
   if (cfg && captureEnabled(cfg) && acquireLock(cfg.projectRoot)) {
     try {
-      if (cfg.authMode === "workos") {
+      if (cfg.authMode === "oauth") {
         const token = await accessTokenForProfile(cfg.profileId!);
         let result = await drain({
           url: experiencesUrl(cfg),
           token,
           neurolinkId: cfg.neurolinkId,
-          authMode: "workos",
+          authMode: "oauth",
           projectRoot: cfg.projectRoot,
         });
         if (result.lastStatus === 401) {
@@ -605,11 +610,11 @@ if (import.meta.main) {
             url: experiencesUrl(cfg),
             token: refreshed,
             neurolinkId: cfg.neurolinkId,
-            authMode: "workos",
+            authMode: "oauth",
             projectRoot: cfg.projectRoot,
           });
         }
-        const notice = shippingNotice("workos", result.lastStatus);
+        const notice = shippingNotice("oauth", result.lastStatus);
         if (notice) markAuthNotice(cfg.projectRoot, notice);
       } else {
         const result = await drain({

@@ -64,7 +64,7 @@ describe("unified authentication headers", () => {
     const url = `http://127.0.0.1:${server.port}/v1/experiences`;
     const experience = groupIntoExperiences([ev(0)])[0]!;
     try {
-      await postExperiences(url, "oauth-token", [experience], "link_1", "workos");
+      await postExperiences(url, "oauth-token", [experience], "link_1", "oauth");
       await postExperiences(url, "key_public.secret", [experience], undefined, "api-key");
     } finally {
       server.stop(true);
@@ -94,7 +94,7 @@ describe("unified authentication headers", () => {
     const experience = groupIntoExperiences([ev(0)])[0]!;
     try {
       await expect(
-        postExperiences(url, "oauth-token", [experience], undefined, "workos"),
+        postExperiences(url, "oauth-token", [experience], undefined, "oauth"),
       ).rejects.toThrow("requires a Neurolink id");
     } finally {
       server.stop(true);
@@ -103,8 +103,8 @@ describe("unified authentication headers", () => {
   });
 
   test("maps expired human login and unusable key/link states to one actionable notice", () => {
-    expect(shippingNotice("workos", 401)).toBe("relogin");
-    expect(shippingNotice("workos", 403)).toBe("connect");
+    expect(shippingNotice("oauth", 401)).toBe("relogin");
+    expect(shippingNotice("oauth", 403)).toBe("connect");
     expect(shippingNotice("api-key", 401)).toBe("connect");
     expect(shippingNotice("api-key", 403)).toBe("connect");
     expect(shippingNotice("api-key", 500)).toBeUndefined();
