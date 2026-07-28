@@ -186,9 +186,19 @@ export function readsFullTail(payload: CapturePayload): boolean {
  * Whether this fire should scan harness memory. Memory is session-scoped, so it
  * runs at genuine session boundaries only — never per subagent, and not on a
  * compaction (which rewrites the transcript, not the memory files).
+ *
+ * SessionEnd is excluded too, for budget rather than correctness: Codex caps
+ * shutdown-path hooks at 3s (see the SessionEnd timeout in hooks/hooks.json),
+ * and the scan is the heaviest inline step standing between the tail read and
+ * `spawnShipper` — the handoff SessionEnd exists to reach. It is also all but
+ * redundant: Stop scans at the end of EVERY turn and session-start.ts scans as
+ * the backstop, so the only thing a SessionEnd scan uniquely catches is a memory
+ * edit made after the final Stop with no further turn — which the next
+ * SessionStart in that project picks up anyway.
  */
 function shouldScanMemory(payload: CapturePayload): boolean {
-  return shouldFlush(payload) && payload.hook_event_name !== "PreCompact";
+  const event = payload.hook_event_name;
+  return shouldFlush(payload) && event !== "PreCompact" && event !== "SessionEnd";
 }
 
 /**

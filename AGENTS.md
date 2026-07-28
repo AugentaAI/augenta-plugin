@@ -54,6 +54,15 @@ seconds. Any harness-specific instructional wording must remain portable:
 describe the current harness's native user-input mechanism and never add
 Codex-only tools to Claude `allowed-tools`.
 
+A declared hook timeout must be the **minimum** the two harnesses allow, because
+one manifest serves both. Codex enforces a per-event **maximum** and caps
+shutdown-path hooks at 3s — over-declaring does not fail the load, it clamps the
+value and shows `1 issue loading hooks for this source` in the Codex plugin panel
+for good. Claude accepts the larger number, so `claude plugin validate` and
+`plugin details` cannot catch this; only a real Codex install can. `SessionEnd`
+is the event this bites (hence its 3s budget, and why it skips the memory scan
+that `Stop` and `SessionStart` already cover).
+
 `CLAUDE_PLUGIN_ROOT` belongs in `hooks/hooks.json` and nowhere else. It is
 exported only to processes the plugin system spawns — hooks and MCP servers —
 not to the shell behind an agent's Bash tool, where it is empty and expands to a

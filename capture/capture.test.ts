@@ -479,7 +479,7 @@ describe("runCapture", () => {
     });
   });
 
-  test("memory is skipped on PostToolUse and captured at a genuine Stop before the shipper would run", () => {
+  test("memory is skipped on PostToolUse, captured at a genuine Stop before the shipper would run, and skipped again at SessionEnd", () => {
     const codexHome = mkdtempSync(join(tmpdir(), "aug-cap-codex-home-"));
     const previous = process.env.CODEX_HOME;
     try {
@@ -512,6 +512,22 @@ describe("runCapture", () => {
       const documents = new Outbox(project).readPending().records.filter(isDocumentRecord);
       expect(documents).toHaveLength(1);
       expect(documents[0]!.data.text).toContain("Remember this project.");
+
+      // SessionEnd flushes but must NOT scan: Codex caps shutdown-path hooks at
+      // 3s and the scan is the heaviest step standing between the tail read and
+      // the shipper handoff. Edit memory AFTER the Stop scan so a scan here
+      // would be visible as a second revision — the next SessionStart in this
+      // project is what picks that edit up.
+      writeFileSync(
+        join(codexHome, "memories", "MEMORY.md"),
+        `# Task Group: Current\napplies_to: cwd=${project}\nEdited after the final Stop.`,
+      );
+      const ended = runCapture(
+        { session_id: "codex-s1", transcript_path: rollout, cwd: project, hook_event_name: "SessionEnd" },
+        { projectRoot: project, spawnShipper: false },
+      );
+      expect(ended.flushed).toBe(true);
+      expect(new Outbox(project).readPending().records.filter(isDocumentRecord)).toHaveLength(1);
     } finally {
       if (previous === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previous;
