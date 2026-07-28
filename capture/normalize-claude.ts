@@ -16,7 +16,7 @@
  * source line. Cursor bookkeeping is shared via {@link tailToEvents}.
  */
 import { type CaptureEvent, type EventKind, type EventRole, type ToolStatus } from "./event";
-import { tailToEvents, type NormalizeCtx, type NormalizeOpts, type NormalizeResult, type Scrubber } from "./normalize-core";
+import { agentSid, tailToEvents, type NormalizeCtx, type NormalizeOpts, type NormalizeResult, type Scrubber } from "./normalize-core";
 
 interface ContentBlock {
   type?: string;
@@ -38,7 +38,14 @@ interface TranscriptLine {
     timestamp?: string;
     /** The generative model that produced this turn (present on assistant lines). */
     model?: string;
-    usage?: { input_tokens?: number; output_tokens?: number };
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      /** Tokens written to the prompt cache on this turn. */
+      cache_creation_input_tokens?: number;
+      /** Tokens served FROM the prompt cache — routinely the bulk of the input. */
+      cache_read_input_tokens?: number;
+    };
   };
 }
 
@@ -167,10 +174,15 @@ function normalizeLine(line: TranscriptLine, ctx: NormalizeCtx, seq: number, off
   if (!text) return null;
 
   const usage = line.message?.usage;
+  // A subagent transcript's lines carry the PARENT session's sessionId, so the
+  // base derivation alone would collide seqs with the parent (see NormalizeCtx).
+  const baseSid = line.sessionId || ctx.sessionId;
 
   return {
     src: ctx.harness ?? "claude-code",
-    sid: line.sessionId || ctx.sessionId,
+    sid: ctx.agentId ? agentSid(baseSid, ctx.agentId) : baseSid,
+    ...(ctx.agentId ? { parent_sid: baseSid } : {}),
+    ...(ctx.agentType ? { agent_type: ctx.agentType } : {}),
     proj: ctx.project,
     ts: line.timestamp || line.message?.timestamp || new Date().toISOString(),
     seq,
@@ -182,6 +194,10 @@ function normalizeLine(line: TranscriptLine, ctx: NormalizeCtx, seq: number, off
     // the cost-benchmark instance can tell "unreported" from "zero".
     in_tok: usage?.input_tokens ?? null,
     out_tok: usage?.output_tokens ?? null,
+    // Cache tokens are billed separately and usually dwarf input_tokens; see
+    // CaptureEvent. null (not absent) keeps "unreported" distinguishable.
+    cache_in_tok: usage?.cache_creation_input_tokens ?? null,
+    cache_read_tok: usage?.cache_read_input_tokens ?? null,
     // The model is reported on assistant turns; absent elsewhere (then omitted).
     ...(line.message?.model ? { model: line.message.model } : {}),
     text,
@@ -206,13 +222,16 @@ export function normalizeClaudeTranscript(opts: NormalizeOpts): NormalizeResult 
       if (!sanitized || typeof sanitized !== "object" || Array.isArray(sanitized)) return null;
       return normalizeLine(sanitized as TranscriptLine, ctx, seq, off, scrub);
     },
-    // Per-line sid for skipped lines — the SAME `line.sessionId || ctx.sessionId`
-    // derivation normalizeLine uses, so a resumed session's replayed history
+    // Per-line sid for skipped lines — the SAME derivation normalizeLine uses
+    // (including the subagent suffix), so a resumed session's replayed history
     // lines (which keep their ORIGINAL sessionId) never split the raw channel
-    // from its sibling events.
-    (sanitized) =>
-      sanitized && typeof sanitized === "object" && !Array.isArray(sanitized)
-        ? ((sanitized as TranscriptLine).sessionId || ctx.sessionId)
-        : ctx.sessionId,
+    // from its sibling events, and a subagent's raws never split from its steps.
+    (sanitized) => {
+      const base =
+        sanitized && typeof sanitized === "object" && !Array.isArray(sanitized)
+          ? ((sanitized as TranscriptLine).sessionId || ctx.sessionId)
+          : ctx.sessionId;
+      return ctx.agentId ? agentSid(base, ctx.agentId) : base;
+    },
   );
 }

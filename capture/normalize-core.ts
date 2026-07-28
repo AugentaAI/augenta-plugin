@@ -23,6 +23,32 @@ export interface NormalizeCtx {
   transcriptPath: string;
   /** Which harness produced this transcript; defaults per-normalizer when absent. */
   harness?: EventSource;
+  /**
+   * Set ONLY when normalizing a subagent transcript. Subagent lines carry the
+   * PARENT's `sessionId`, so without this every derived sid would collide with
+   * the parent session's — same experience group, two independent seq counters.
+   * When present, every sid becomes `<derivedSid>/agent-<agentId>` and the
+   * derived value is carried on the event as `parent_sid`.
+   */
+  agentId?: string;
+  /** Subagent kind from the hook payload; stamped as `agent_type`. */
+  agentType?: string;
+  /**
+   * Last model seen on this transcript, restored from the capture cursor. Only
+   * Codex needs it: it announces the model on a `turn_context` line rather than
+   * on each item, so a mid-turn fire whose tail no longer contains that line
+   * would otherwise stamp no model at all. Claude reports the model per line and
+   * ignores this.
+   */
+  model?: string;
+}
+
+/**
+ * The subagent sid derivation, shared by the event and raw channels so a
+ * subagent's raws can never orphan from its steps (see {@link tailToEvents}).
+ */
+export function agentSid(baseSid: string, agentId: string): string {
+  return `${baseSid}/agent-${agentId}`;
 }
 
 export interface NormalizeResult {
@@ -38,6 +64,10 @@ export interface NormalizeResult {
   nextSeq: number;
   /** Byte offset just past the last consumed line (the new tail cursor). */
   nextOffset: number;
+  /** Model still in effect at the end of this batch, for the caller to persist
+   *  on the cursor and seed the next fire with (see {@link NormalizeCtx.model}).
+   *  Only set by harnesses that report the model out-of-band; absent otherwise. */
+  lastModel?: string;
 }
 
 /** Shared input for the per-harness normalizers (Claude transcript / Codex rollout). */

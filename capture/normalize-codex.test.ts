@@ -29,6 +29,125 @@ function item(payload: unknown, type = "response_item"): string {
   return JSON.stringify({ timestamp: "2026-06-28T17:15:11.000Z", type, payload });
 }
 
+describe("normalizeCodexRollout — out-of-band model and token usage", () => {
+  // Codex reports neither the model nor token usage on the item lines
+  // themselves: the model arrives on a `turn_context` line and usage on an
+  // `event_msg`/`token_count` line emitted AFTER the assistant item.
+  const assistant = item({
+    type: "message",
+    role: "assistant",
+    content: [{ type: "output_text", text: "hello" }],
+  });
+  const turnContext = item({ model: "gpt-5.6-sol", effort: "xhigh" }, "turn_context");
+  const tokenCount = item(
+    {
+      type: "token_count",
+      info: {
+        last_token_usage: {
+          input_tokens: 21875,
+          cached_input_tokens: 11008,
+          cache_write_input_tokens: 512,
+          output_tokens: 263,
+          reasoning_output_tokens: 106,
+        },
+      },
+    },
+    "event_msg",
+  );
+
+  test("a turn_context line stamps the model on the items that follow it", () => {
+    const { events } = normalizeCodexRollout({
+      lines: [turnContext, assistant],
+      ctx: codexCtx,
+      startSeq: 0,
+      startOffset: 0,
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.model).toBe("gpt-5.6-sol");
+  });
+
+  test("a token_count line back-stamps usage onto the preceding assistant event", () => {
+    const { events } = normalizeCodexRollout({
+      lines: [assistant, tokenCount],
+      ctx: codexCtx,
+      startSeq: 0,
+      startOffset: 0,
+    });
+    expect(events).toHaveLength(1);
+    const e = events[0]!;
+    expect(e.in_tok).toBe(21875);
+    expect(e.out_tok).toBe(263);
+    expect(e.cache_read_tok).toBe(11008);
+    expect(e.cache_in_tok).toBe(512);
+    expect(e.reasoning_tok).toBe(106);
+  });
+
+  test("turn_context and token_count consume no seq — they are metadata, not steps", () => {
+    const { events, nextSeq } = normalizeCodexRollout({
+      lines: [turnContext, assistant, tokenCount],
+      ctx: codexCtx,
+      startSeq: 0,
+      startOffset: 0,
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.seq).toBe(0);
+    expect(nextSeq).toBe(1);
+  });
+
+  test("both metadata lines still reach the raw channel", () => {
+    const { raws } = normalizeCodexRollout({
+      lines: [turnContext, assistant, tokenCount],
+      ctx: codexCtx,
+      startSeq: 0,
+      startOffset: 0,
+    });
+    expect(raws).toHaveLength(3);
+    for (const r of raws) expect(r.sid).toBe(SID);
+  });
+
+  test("the model is surfaced as lastModel so capture can seed the next fire", () => {
+    const { lastModel } = normalizeCodexRollout({
+      lines: [turnContext, assistant],
+      ctx: codexCtx,
+      startSeq: 0,
+      startOffset: 0,
+    });
+    expect(lastModel).toBe("gpt-5.6-sol");
+  });
+
+  test("a seeded model covers a mid-turn fire whose tail no longer holds the turn_context line", () => {
+    const { events } = normalizeCodexRollout({
+      lines: [assistant],
+      ctx: { ...codexCtx, model: "gpt-5.6-sol" },
+      startSeq: 0,
+      startOffset: 0,
+    });
+    expect(events[0]!.model).toBe("gpt-5.6-sol");
+  });
+
+  test("a token_count orphaned from its assistant event is dropped, not misattributed", () => {
+    // Its numbers still ship on the raw `data` channel; what must never happen
+    // is stamping them onto an unrelated event.
+    const userItem = item({ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] });
+    const { events } = normalizeCodexRollout({
+      lines: [userItem, tokenCount],
+      ctx: codexCtx,
+      startSeq: 0,
+      startOffset: 0,
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.role).toBe("user");
+    expect(events[0]!.in_tok).toBeNull();
+  });
+
+  test("no usage line at all leaves counts null (unreported), as before", () => {
+    const { events } = normalizeCodexRollout({ lines: [assistant], ctx: codexCtx, startSeq: 0, startOffset: 0 });
+    expect(events[0]!.in_tok).toBeNull();
+    expect(events[0]!.out_tok).toBeNull();
+    expect(events[0]!.model).toBeUndefined();
+  });
+});
+
 describe("normalizeCodexRollout", () => {
   test("user message → msg(user); conversation id from the rollout path", () => {
     const lines = [item({ type: "message", role: "user", content: [{ type: "input_text", text: "say hi" }] })];

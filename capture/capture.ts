@@ -23,7 +23,7 @@
  */
 import { existsSync, openSync, fstatSync, readSync, closeSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { normalizeClaudeTranscript, normalizeCodexRollout, type Scrubber } from "./normalize";
 import type { CaptureEvent, RawRecord } from "./event";
 import { scrub as defaultScrub } from "./scrub";
@@ -41,6 +41,16 @@ export interface CapturePayload {
   hook_event_name?: string;
   /** Claude Code sets this on a Stop fired by a previous Stop hook's output — never re-flush. */
   stop_hook_active?: boolean;
+  /** SessionEnd: why the session ended. Claude names it `end_reason`, Codex `reason`. */
+  end_reason?: string;
+  reason?: string;
+  /** Pre/PostCompact: whether compaction was `auto` or `manual`. */
+  trigger?: string;
+  /** SubagentStop: which subagent finished, and (when the harness supplies it)
+   *  the path to its own transcript. */
+  agent_id?: string;
+  agent_type?: string;
+  agent_transcript_path?: string;
 }
 
 export interface RunCaptureOptions {
@@ -142,12 +152,81 @@ function resolveMemoryHarness(transcriptPath: string | undefined): "claude-code"
 }
 
 /**
- * The flush decision, kept pure for tests: only a genuine Stop (the agent-turn
- * boundary) flushes; PostToolUse is buffer-only, and a Stop re-fired by a Stop
- * hook's own output (`stop_hook_active`) never cascades.
+ * The flush decision, kept pure for tests: a boundary fire buffers AND ships.
+ * PostToolUse is buffer-only, and a Stop re-fired by a Stop hook's own output
+ * (`stop_hook_active`) never cascades.
+ *
+ *   • Stop       — the agent-turn boundary.
+ *   • SessionEnd — the session boundary. Without it, a session that ends
+ *     without a Stop strands its spool until the next SessionStart in the SAME
+ *     project, which may never come (closing a desktop window is the common case).
+ *   • PreCompact — the harness is about to rewrite the transcript; everything
+ *     written so far must be captured and shipped BEFORE the bytes move.
  */
 export function shouldFlush(payload: CapturePayload): boolean {
-  return payload.hook_event_name === "Stop" && !payload.stop_hook_active;
+  const event = payload.hook_event_name;
+  if (event === "Stop") return !payload.stop_hook_active;
+  return event === "SessionEnd" || event === "PreCompact";
+}
+
+/**
+ * Whether this fire reads the FULL unread tail rather than the capped hot-path
+ * window ({@link MAX_TAIL_BYTES_PER_FIRE}).
+ *
+ * Every flush qualifies, plus SubagentStop — which does NOT flush but is the
+ * ONLY fire that ever reads its subagent transcript. A capped read there would
+ * strand any tail beyond the cap with no later fire on that path to catch up:
+ * exactly the silent loss the cap exists to avoid on Stop.
+ */
+export function readsFullTail(payload: CapturePayload): boolean {
+  return shouldFlush(payload) || payload.hook_event_name === "SubagentStop";
+}
+
+/**
+ * Whether this fire should scan harness memory. Memory is session-scoped, so it
+ * runs at genuine session boundaries only — never per subagent, and not on a
+ * compaction (which rewrites the transcript, not the memory files).
+ */
+function shouldScanMemory(payload: CapturePayload): boolean {
+  return shouldFlush(payload) && payload.hook_event_name !== "PreCompact";
+}
+
+/**
+ * Which transcript this fire captures, and the subagent identity to stamp on it.
+ *
+ * Every event except SubagentStop reads the session transcript. SubagentStop
+ * reads the SUBAGENT's own file: subagent work is recorded in a separate
+ * transcript, never inline in the parent, so without this the entire contents of
+ * every Task/subagent run is invisible — the parent transcript shows only the
+ * tool call and its final result.
+ *
+ * The harness supplies `agent_transcript_path` on some versions; where it does
+ * not, the path is derived from the documented layout
+ * `<projects>/<slug>/<sessionId>/subagents/agent-<agentId>.jsonl` and must exist
+ * on disk before it is used — a guessed path that does not resolve yields no
+ * capture rather than a bogus cursor entry.
+ */
+export function resolveCaptureTarget(
+  payload: CapturePayload,
+): { transcriptPath?: string; agentId?: string; agentType?: string } {
+  const sessionTranscript = payload.transcript_path;
+  if (payload.hook_event_name !== "SubagentStop") return { transcriptPath: sessionTranscript };
+
+  const agentId = payload.agent_id;
+  const agentType = payload.agent_type;
+  const supplied = payload.agent_transcript_path;
+  if (supplied && existsSync(supplied)) return { transcriptPath: supplied, agentId, agentType };
+  if (!sessionTranscript || !agentId) return { transcriptPath: undefined };
+
+  const derived = join(
+    dirname(sessionTranscript),
+    basename(sessionTranscript, ".jsonl"),
+    "subagents",
+    `agent-${agentId}.jsonl`,
+  );
+  return existsSync(derived)
+    ? { transcriptPath: derived, agentId, agentType }
+    : { transcriptPath: undefined };
 }
 
 /**
@@ -170,8 +249,9 @@ export function runCapture(
   opts: RunCaptureOptions = {},
 ): { appended: number; flushed: boolean } {
   const projectRoot = opts.projectRoot ?? resolveProjectRoot(payload.cwd);
-  const transcriptPath = payload.transcript_path;
+  const { transcriptPath, agentId, agentType } = resolveCaptureTarget(payload);
   const flush = shouldFlush(payload);
+  const fullTail = readsFullTail(payload);
   if (!projectRoot) return { appended: 0, flushed: false };
 
   const scrub = opts.scrub ?? defaultScrub;
@@ -182,7 +262,7 @@ export function runCapture(
   // session boundaries. It must complete its local outbox append BEFORE the
   // detached shipper starts so this Stop flush can deliver the new revision.
   const finish = (appended: number): { appended: number; flushed: boolean } => {
-    if (flush) {
+    if (shouldScanMemory(payload)) {
       try {
         captureAgentMemory({
           projectRoot,
@@ -194,8 +274,8 @@ export function runCapture(
       } catch {
         /* memory is best-effort and must never interrupt trajectory capture */
       }
-      if (opts.spawnShipper !== false) spawnShipper(projectRoot);
     }
+    if (flush && opts.spawnShipper !== false) spawnShipper(projectRoot);
     return { appended, flushed: flush };
   };
 
@@ -215,19 +295,51 @@ export function runCapture(
   // then ends. Positional reads already make even a full-tail read O(unread
   // bytes), not O(file), so uncapping the once-per-turn Stop reintroduces no
   // O(n²) stall.
+  //
+  // Before slicing, reconcile the cursor with reality. Compaction REWRITES the
+  // transcript, which invalidates a byte offset in two ways:
+  //
+  //   • PreCompact set `rebaseline` — the bytes we already captured are about to
+  //     be replaced by a shorter summary, so resume from the new end rather than
+  //     re-reading a rewritten prefix as if it were new content.
+  //   • `size < cursor.offset` — the file shrank and no PreCompact was seen.
+  //     Without this guard the `cursor.offset < size` test below stays false
+  //     FOREVER and capture on this transcript silently stops for good.
+  //
+  // Both resume at the current end of file. `seq` stays monotonic so no later
+  // event can collide with one already spooled.
+  let readFrom = cursor.offset;
+  let rebaselined = false;
   let tailBuf: Buffer | undefined;
   let fd = -1;
   try {
     fd = openSync(transcriptPath, "r");
     const size = fstatSync(fd).size;
-    if (cursor.offset < size) tailBuf = readTail(fd, cursor.offset, size, flush ? Infinity : maxTailBytes);
+    if (cursor.rebaseline || size < cursor.offset) {
+      readFrom = size;
+      rebaselined = true;
+    }
+    if (readFrom < size) tailBuf = readTail(fd, readFrom, size, fullTail ? Infinity : maxTailBytes);
   } catch {
     return finish(0);
   } finally {
     if (fd >= 0) closeSync(fd);
   }
 
-  if (!tailBuf) return finish(0); // nothing new; a Stop still flushes the buffer
+  // A re-baseline must be PERSISTED even when it read nothing, and the
+  // `rebaseline` flag cleared with it. Leaving the flag set would re-baseline
+  // again on the next fire and skip everything written in between — turning a
+  // one-time compaction into permanent rolling data loss.
+  if (!tailBuf) {
+    if (rebaselined) {
+      state.set(transcriptPath, {
+        offset: readFrom,
+        seq: cursor.seq,
+        ...(cursor.model ? { model: cursor.model } : {}),
+      });
+    }
+    return finish(0); // nothing new; a boundary fire still flushes the buffer
+  }
 
   // Decode only the unread tail, then keep COMPLETE lines (drop a trailing
   // partial — held for the next fire: a still-writing line, or bytes beyond
@@ -249,11 +361,22 @@ export function runCapture(
   const sessionId = payload.session_id || "unknown";
   const project = payload.cwd || process.cwd();
   const normalize = codex ? normalizeCodexRollout : normalizeClaudeTranscript;
-  const { events, raws: rawLines, nextSeq, nextOffset } = normalize({
+  const { events, raws: rawLines, nextSeq, nextOffset, lastModel } = normalize({
     lines: completeLines,
-    ctx: { sessionId, project, transcriptPath, harness: src },
+    ctx: {
+      sessionId,
+      project,
+      transcriptPath,
+      harness: src,
+      // Set only on a SubagentStop fire; gives the subagent its own sid space
+      // and stamps parent_sid/agent_type (see resolveCaptureTarget).
+      ...(agentId ? { agentId } : {}),
+      ...(agentType ? { agentType } : {}),
+      // Codex announces the model out-of-band, so seed it from the cursor.
+      ...(cursor.model ? { model: cursor.model } : {}),
+    },
     startSeq: cursor.seq,
-    startOffset: cursor.offset,
+    startOffset: readFrom,
     scrub,
   });
 
@@ -353,7 +476,16 @@ export function runCapture(
   }
   // Always advance past consumed bytes — lines that produced no event (e.g.
   // empty/system markers) must not be re-scanned forever.
-  state.set(transcriptPath, { offset: nextOffset, seq: finalSeq });
+  //
+  // PreCompact arms the re-baseline HERE, after its own tail is safely spooled:
+  // everything up to the rewrite is now captured, so the next fire should resume
+  // at the rewritten file's end instead of trusting this offset.
+  state.set(transcriptPath, {
+    offset: nextOffset,
+    seq: finalSeq,
+    ...(payload.hook_event_name === "PreCompact" ? { rebaseline: true } : {}),
+    ...(lastModel ?? cursor.model ? { model: lastModel ?? cursor.model } : {}),
+  });
 
   return finish(events.length);
 }

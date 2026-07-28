@@ -16,7 +16,13 @@ Codex plugin-creator validator currently rejects Codex's supported `hooks`
 manifest field, so the Codex release gate is a real marketplace installation
 with `codex plugin marketplace add` followed by `codex plugin add`.
 Also run `claude --plugin-dir . plugin details augenta` and verify it reports
-the manifest version, one `connect` skill, four hooks, and no load errors.
+the manifest version, one `connect` skill, every event in `hooks/hooks.json`
+(currently eight), and no load errors.
+
+Codex trust-pins each hook by content hash in `~/.codex/config.toml`
+(`[hooks.state]`), so **any** edit to `hooks/hooks.json` re-prompts every Codex
+user for trust. Batch hook changes into a single deliberate release; never ship
+them incrementally.
 
 For a hosted dev release, follow the platform repository's
 `docs/deployment-runbook.md`. Connect a disposable project with:
@@ -47,6 +53,14 @@ Keep `CLAUDE_PLUGIN_ROOT` quoted in hook commands and express hook timeouts in
 seconds. Any harness-specific instructional wording must remain portable:
 describe the current harness's native user-input mechanism and never add
 Codex-only tools to Claude `allowed-tools`.
+
+`CLAUDE_PLUGIN_ROOT` belongs in `hooks/hooks.json` and nowhere else. It is
+exported only to processes the plugin system spawns — hooks and MCP servers —
+not to the shell behind an agent's Bash tool, where it is empty and expands to a
+broken `/scripts/...`. A skill that shells out to a plugin script must derive the
+path from the absolute skill directory the harness gives the model (Claude Code
+prepends `Base directory for this skill:`; Codex resolves the skill-root alias),
+which also pins the script to the version of the skill being followed.
 
 ## Releases
 

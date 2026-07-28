@@ -21,6 +21,21 @@ export interface CaptureCursor {
   offset: number;
   /** Next per-session sequence number to assign. */
   seq: number;
+  /**
+   * Set by PreCompact: the harness is about to REWRITE this transcript, so the
+   * stored `offset` is about to stop meaning anything. The next fire re-baselines
+   * to the file's current size instead of slicing from a stale offset, then
+   * clears this. PostCompact clears it immediately where the harness fires one
+   * (Codex); Claude Code may only fire PreCompact, which is why the next
+   * ORDINARY fire must also be able to consume it.
+   */
+  rebaseline?: boolean;
+  /**
+   * Last model seen on this transcript. Only Codex needs it — it announces the
+   * model on a `turn_context` line rather than per item, so a mid-turn fire
+   * whose tail no longer contains that line needs the value carried forward.
+   */
+  model?: string;
 }
 
 const ZERO: CaptureCursor = { offset: 0, seq: 0 };
@@ -45,15 +60,27 @@ export class CaptureState {
   }
 
   /** Cursor for a transcript; {offset:0, seq:0} when unseen or malformed.
-   *  Both fields must be non-negative INTEGERS: a corrupted float `seq` would
-   *  seed non-integer step seqs that the ingest door 400s (wedging the outbox
-   *  permanently), and a float `offset` would mis-slice the byte tail. A bad
-   *  cursor falls back to ZERO — a clean rescan beats a wedge. */
+   *  `offset` and `seq` must be non-negative INTEGERS: a corrupted float `seq`
+   *  would seed non-integer step seqs that the ingest door 400s (wedging the
+   *  outbox permanently), and a float `offset` would mis-slice the byte tail. A
+   *  bad cursor falls back to ZERO — a clean rescan beats a wedge.
+   *
+   *  The optional `rebaseline`/`model` hints are validated but NOT load-bearing,
+   *  so a bad value is dropped rather than nuking the whole cursor: they only
+   *  refine behavior, while a fallback to ZERO would force a full re-scan and
+   *  re-emit every line in the transcript as duplicate events. Wrong hint, right
+   *  bytes beats right hint, duplicated bytes. */
   get(transcriptPath: string): CaptureCursor {
     const c = this.readAll()[transcriptPath];
-    return c && Number.isInteger(c.offset) && c.offset >= 0 && Number.isInteger(c.seq) && c.seq >= 0
-      ? c
-      : { ...ZERO };
+    if (!c || !Number.isInteger(c.offset) || c.offset < 0 || !Number.isInteger(c.seq) || c.seq < 0) {
+      return { ...ZERO };
+    }
+    return {
+      offset: c.offset,
+      seq: c.seq,
+      ...(c.rebaseline === true ? { rebaseline: true } : {}),
+      ...(typeof c.model === "string" && c.model ? { model: c.model } : {}),
+    };
   }
 
   /** Persist the advanced cursor for a transcript (atomic). */

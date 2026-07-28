@@ -42,6 +42,17 @@ export type ToolStatus = "ok" | "error";
 export interface CaptureEvent {
   src: EventSource;
   sid: string;
+  /**
+   * For a SUBAGENT step, the sid of the session that spawned it. Subagents get
+   * their OWN `sid` (`<parentSid>/agent-<agentId>`) because their transcript is
+   * a separate file with its own independent seq counter — reusing the parent's
+   * sid would collide seqs inside one experience group (ship.ts groups on
+   * `src sid proj turn`). This field is what re-associates the two server-side.
+   * Absent on main-session steps.
+   */
+  parent_sid?: string;
+  /** Subagent kind (e.g. Explore, general-purpose) when the step came from one. */
+  agent_type?: string;
   proj: string;
   ts: string;
   seq: number;
@@ -58,6 +69,19 @@ export interface CaptureEvent {
   tool_status?: ToolStatus;
   in_tok?: number | null;
   out_tok?: number | null;
+  /**
+   * Cache tokens, reported separately from `in_tok` by both harnesses. These are
+   * frequently the MAJORITY of a turn's input volume and are billed at different
+   * rates, so a cost figure derived from `in_tok` alone is materially wrong.
+   * `cache_in_tok` is cache WRITES (Claude `cache_creation_input_tokens`);
+   * `cache_read_tok` is cache HITS (Claude `cache_read_input_tokens`, Codex
+   * `cached_input_tokens`). null (not absent) when the harness reported usage
+   * without them, so the cost benchmark can tell "unreported" from "zero".
+   */
+  cache_in_tok?: number | null;
+  cache_read_tok?: number | null;
+  /** Reasoning tokens billed as output, reported separately by Codex. */
+  reasoning_tok?: number | null;
   /** The generative model that produced the turn (e.g. claude-opus-4-8); omitted if unknown. */
   model?: string;
   /** Pre-scrubbed step text (verbatim, uncapped). */

@@ -38,6 +38,17 @@ interface CodexPayload {
   action?: unknown; // web_search_call: { type: "search", query, queries } | { type: "open_page", url }
   author?: string; // agent_message: sub-agent path this message is FROM
   recipient?: string; // agent_message: sub-agent path this message is TO
+  model?: string; // turn_context: the model configured for this turn
+  info?: { last_token_usage?: CodexTokenUsage }; // event_msg/token_count
+}
+
+/** `payload.info.last_token_usage` on an `event_msg`/`token_count` line. */
+interface CodexTokenUsage {
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  output_tokens?: number;
+  reasoning_output_tokens?: number;
 }
 
 interface CodexLine {
@@ -175,8 +186,35 @@ function classifyCodex(p: CodexPayload): {
   }
 }
 
+/**
+ * Back-stamp a `token_count` line's usage onto the assistant event it describes.
+ *
+ * Codex reports usage on a SEPARATE `event_msg` line emitted AFTER the assistant
+ * item it belongs to, so the only correct attachment point is the preceding
+ * assistant event in this batch. A `token_count` whose assistant event landed in
+ * an earlier hook fire has no target and is dropped — its numbers still reach the
+ * backend on the raw `data` channel, so nothing is lost outright, only
+ * un-normalized. `Stop` is the flush boundary and a turn's lines normally arrive
+ * in one fire, so this is the uncommon case.
+ */
+function stampCodexUsage(target: CaptureEvent | undefined, usage: CodexTokenUsage | undefined): void {
+  if (!target || !usage) return;
+  target.in_tok = usage.input_tokens ?? null;
+  target.out_tok = usage.output_tokens ?? null;
+  target.cache_read_tok = usage.cached_input_tokens ?? null;
+  target.cache_in_tok = usage.cache_write_input_tokens ?? null;
+  target.reasoning_tok = usage.reasoning_output_tokens ?? null;
+}
+
 /** One Codex rollout line → at most one {@link CaptureEvent} (only `response_item` lines map). */
-function normalizeCodexLine(line: CodexLine, ctx: NormalizeCtx, seq: number, off: number, scrub: Scrubber): CaptureEvent | null {
+function normalizeCodexLine(
+  line: CodexLine,
+  ctx: NormalizeCtx,
+  seq: number,
+  off: number,
+  scrub: Scrubber,
+  model?: string,
+): CaptureEvent | null {
   if (line.type !== "response_item" || !line.payload) return null;
   const cls = classifyCodex(line.payload);
   if (!cls) return null;
@@ -199,10 +237,14 @@ function normalizeCodexLine(line: CodexLine, ctx: NormalizeCtx, seq: number, off
     role: cls.role,
     ...(cls.tool_name !== undefined ? { tool_name: cls.tool_name } : {}),
     ...(cls.tool_status !== undefined ? { tool_status: cls.tool_status } : {}),
-    // Codex reports usage in a separate token_count event, not on the item line,
-    // so per-event token counts are unreported (null, not zero).
+    // Codex reports usage on a separate `event_msg`/`token_count` line, not on
+    // the item line. These stay null here and are back-stamped by
+    // stampCodexUsage when that line is reached later in the same batch.
     in_tok: null,
     out_tok: null,
+    // Model comes from the most recent `turn_context` line and carries forward
+    // across fires (it is stable for the turn); omitted until one is seen.
+    ...(model ? { model } : {}),
     text,
     ref: { path: ctx.transcriptPath, off },
   };
@@ -216,17 +258,48 @@ function normalizeCodexLine(line: CodexLine, ctx: NormalizeCtx, seq: number, off
 export function normalizeCodexRollout(opts: NormalizeOpts): NormalizeResult {
   const { lines, ctx, startSeq, startOffset } = opts;
   const scrub = opts.scrub ?? ((t) => t);
-  return tailToEvents(
+
+  // Two pieces of state carried along the in-order walk, because Codex reports
+  // them on lines SEPARATE from the items they describe:
+  //   • model — announced once per turn on a `turn_context` line. Seeded from
+  //     the cursor (ctx.model) so a mid-turn fire, whose tail no longer contains
+  //     that line, still stamps the right model.
+  //   • lastAssistant — the most recent assistant event, so a following
+  //     `token_count` line can back-stamp its usage onto it (see stampCodexUsage).
+  let model = ctx.model;
+  let lastAssistant: CaptureEvent | undefined;
+
+  const result = tailToEvents(
     lines,
     startSeq,
     startOffset,
     (sanitized, seq, off) => {
       if (!sanitized || typeof sanitized !== "object" || Array.isArray(sanitized)) return null;
-      return normalizeCodexLine(sanitized as CodexLine, ctx, seq, off, scrub);
+      const line = sanitized as CodexLine;
+
+      // Non-`response_item` lines never become events, but two of them carry
+      // metadata the items themselves lack. They still reach `raws` unchanged.
+      if (line.type === "turn_context") {
+        if (typeof line.payload?.model === "string") model = line.payload.model;
+        return null;
+      }
+      if (line.type === "event_msg" && line.payload?.type === "token_count") {
+        stampCodexUsage(lastAssistant, line.payload.info?.last_token_usage);
+        return null;
+      }
+
+      const event = normalizeCodexLine(line, ctx, seq, off, scrub, model);
+      // Held by reference: tailToEvents has already pushed it, so a later
+      // token_count in this same batch mutates the event that gets spooled.
+      if (event?.role === "assistant") lastAssistant = event;
+      return event;
     },
     // Codex sid is per-transcript, not per-line: the rollout filename's UUID
     // leads (present on every fire), hook-payload id as fallback — identical
     // to normalizeCodexLine's derivation.
     () => codexSessionFromPath(ctx.transcriptPath) || ctx.sessionId,
   );
+
+  // Surfaced so capture can persist it on the cursor and seed the next fire.
+  return model ? { ...result, lastModel: model } : result;
 }
