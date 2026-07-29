@@ -1,6 +1,6 @@
 ---
 name: connect
-description: Connect the current project to an Augenta Neurospace through a Neurolink. Use when the user runs /augenta:connect, invokes $augenta:connect, or asks to connect or enable Augenta. The user signs in to Augenta once, explicitly selects a Neurospace, and the project stores only a global profile reference and Neurolink id.
+description: Connect the current project to Augenta Neurospaces through Neurolinks. Use when the user runs /augenta:connect, invokes $augenta:connect, or asks to connect or enable Augenta. The user signs in to Augenta once, explicitly selects every Neurospace this project should feed, and the project stores only a global profile reference and its Neurolink ids.
 allowed-tools: AskUserQuestion, Bash, Read
 ---
 
@@ -8,9 +8,10 @@ allowed-tools: AskUserQuestion, Bash, Read
 
 Connect the current project to Augenta activity and project-memory capture.
 Connected projects send normalized activity steps, structurally sanitized raw
-transcript lines, and matching scrubbed memory documents through an inbound
-Neurolink to the explicitly selected Neurospace. Connection is per project and
-is the user's consent boundary.
+transcript lines, and matching scrubbed memory documents through one inbound
+Neurolink per explicitly selected Neurospace. **Every selected Neurospace
+receives the full record — the same activity and memory, complete, in each.**
+Connection is per project and is the user's consent boundary.
 
 You run the connect script yourself and drive it with `--json`. Each verb returns
 one JSON object and exits. The user's only jobs are answering one question and,
@@ -71,14 +72,25 @@ bun "$CONNECT" --json --probe
 
 Read-only. It starts no sign-in, so nothing has happened yet and you can still
 explain and ask. `alreadyConnected: true` means reconnecting will verify or change
-the Neurospace — continue, do not stop.
+which Neurospaces this project feeds — continue, do not stop.
+
+`destinations` lists the Neurospaces the project feeds right now; use it to
+pre-select in step 3. Two cases there need saying out loud rather than quietly
+dropping, because the project is still shipping to them and the answer in step 3
+replaces the whole set:
+
+- `unresolvedNeurolinkIds` — destinations whose Neurolink you cannot read at all.
+- a `destinations` entry with no `neurospaceName` — its Neurospace is no longer in
+  the organization's list, so it cannot be offered as an option in step 3 and will
+  be dropped by whatever the user answers.
 
 ## 2. Sign in, only if `--probe` said `need_login`
 
 Ask whether to sign in to Augenta, in one sentence: capture is per project, it
 sends this project's agent activity and matching project memory, and sign-in is
 stored globally in `~/.augenta/auth.json` while the project itself stores only a
-profile reference and Neurolink id. If the user declines, acknowledge and stop.
+profile reference and its Neurolink ids. If the user declines, acknowledge and
+stop.
 
 ```bash
 bun "$CONNECT" --json --login
@@ -102,30 +114,85 @@ bun "$CONNECT" --json --await-login
 - `status: "error"` — report `message`. `login_denied` means the user declined, so
   do not silently retry; `login_expired` means start again from `--login`.
 
-## 3. Choose the Neurospace
+## 3. Choose the Neurospaces
 
 This single question is both the consent gate and the target choice, so it is the
-one step that always happens. Using the harness's normal user-input mechanism,
-offer each entry from `neurospaces` plus an explicit option to not connect. Name
-the organization from `signedInAs`. If the user declines, acknowledge and stop.
+one step that always happens. **The answer is the complete set of destinations** —
+the project will feed exactly what the user selects here and nothing else. Ask it
+every time, including when the organization has only one Neurospace and including
+when the project is already connected. Never offer to keep the current selection
+without showing it; never treat one answer as authorization for more than one
+destination; never proceed on silence.
+
+Before the user answers, say — in one or two sentences, naming the organization
+from `signedInAs`:
+
+- every Neurospace they select receives the **full record**: this project's agent
+  activity, its raw transcript lines, and its project memory, complete, in each;
+- so **anyone with access to any selected Neurospace can read this project's
+  captured activity** — the audience is the union of all of them;
+- and, if `environment` is not `prod`, which environment this is.
+
+**If your harness's user-input mechanism can offer several options at once**, ask
+one question listing every entry from `neurospaces`, with the Neurospaces in
+`destinations` already selected, plus a final option `Don't connect this project`.
+
+**If it cannot**, ask in plain text: number the entries, mark the current
+destinations, and ask the user to reply with every number they want, or `none`.
+Then **restate the set by name and get a yes before running the verb** — a typed
+answer is your interpretation of what they meant, not something they saw
+rendered.
+
+If `Don't connect this project` comes back **together with** any Neurospace, that
+answer has no meaning: say so and ask again. Do not connect. If they decline,
+acknowledge and stop.
 
 ```bash
-bun "$CONNECT" --json --neurospace <id>
+bun "$CONNECT" --json --neurospace <id> --neurospace <id>
 ```
 
-Pass the `id`, never the name. If `--probe` returned `need_profile`, ask which
-organization first and add `--profile <profileId>`.
+Repeat `--neurospace` once per selected Neurospace. Pass the `id`s, never the
+names. If `--probe` returned `need_profile`, ask which organization first and add
+`--profile <profileId>`.
 
 ## 4. Confirm
 
-On `connected`, confirm that this project now feeds `neurospaceName` through
-`neurolinkId`, naming the environment if it is not prod. Mention that deleting
-`.augenta/config.json` or setting `AUGENTA_CAPTURE_ENABLED=0` disables activity
-and memory capture.
+On `connected`, name **every** entry in `destinations` — this project now feeds
+each of them, through that entry's `neurolinkId`. When there is more than one,
+restate that the full record goes to each, so the audience is the union. Name the
+environment if it is not `prod`. Restate that raw transcript records are
+structurally sanitized but **not** secret-scrubbed, and that this now applies to
+every destination you just named.
 
-On `status: "error"`, report `message`. Common causes are a missing Bun runtime,
-a declined or expired authorization, no active Neurospaces, or an organization
-not yet provisioned in Augenta.
+If `removed` is non-empty, name each removed Neurospace: this project **no longer
+sends** to it. Its Neurolink is **left in place and idle** — nothing was disabled
+or deleted; the user can remove it in Augenta if they want it gone.
+
+If `unresolvedNeurolinkIds` is present, say that this project listed those
+Neurolinks but they are no longer readable, so they have been dropped.
+
+On `partially_connected`, report the truth in that order: which destinations
+**are** live now (capture to them is on) — including the full-record and
+secret-scrubbing points above, which apply to them exactly as on `connected` —
+then which **failed**, with each `message`. A `failed` entry with
+`wasConnected: true` is a destination this project **was** feeding and no longer
+is; say that plainly rather than calling it a destination that could not be added.
+The project is connected to the subset in `destinations` and to nothing else.
+Re-running connect retries the rest; the failed destinations do **not** retry
+themselves. Do not describe the result as connected to everything the user
+selected.
+
+Mention that deleting `.augenta/config.json` or setting
+`AUGENTA_CAPTURE_ENABLED=0` disables activity and memory capture. There is no
+"select nothing" answer that disconnects an already-connected project — deleting
+the config is how the user turns it all off.
+
+On `status: "error"`, report `message`. `unknown_neurospace` means an id did not
+match the organization's live list and **nothing was created** — re-run `--probe`
+and ask again rather than guessing. `no_destination_linked` means no destination
+could be linked and no config was written. Other common causes are a missing Bun
+runtime, a declined or expired authorization, no active Neurospaces, or an
+organization not yet provisioned in Augenta.
 
 ## Agent constraints
 
@@ -144,6 +211,9 @@ not yet provisioned in Augenta.
   `--json` mode. Never run it, and never ask the user to paste a key to you.
 - Never hand-edit `.augenta/config.json`; the connect script owns permissions
   and layout.
+- Never add a destination the user did not select in the answer you just
+  received, and never carry a destination forward from a previous run without
+  showing it selected.
 - For Claude Code, name the command `/augenta:connect`.
 - For Codex, use `$augenta:connect` when skills are addressable, or the phrase
   "Connect Augenta."

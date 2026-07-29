@@ -21,6 +21,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   drain,
+  drainAll,
+  fanOutNotice,
   acquireLock,
   releaseLock,
   groupIntoExperiences,
@@ -34,7 +36,8 @@ import {
   DOCUMENT_TRUNCATION_MARKER,
   TRUNCATION_MARKER,
 } from "./ship";
-import { Outbox } from "./outbox";
+import { Outbox, LAG_STRIKES } from "./outbox";
+import { takeAuthNotice } from "./auth";
 import type { CaptureEvent, DocumentRecord, TrajectoryExperience, RawRecord } from "./event";
 
 function ev(seq: number, opts: Partial<CaptureEvent> = {}): CaptureEvent {
@@ -775,6 +778,257 @@ describe("drain against a real loopback endpoint", () => {
     box.append([ev(0)]);
     const res = await drain({ url: "http://127.0.0.1:1/v1/experiences", projectRoot: project });
     expect(res.shipped).toBe(0);
+    expect(res.lastStatus).toBe(0); // never a stale 2xx from earlier in the slice
     expect(box.readPending().records.length).toBe(1);
+  });
+});
+
+describe("fanOutNotice — the most GLOBAL problem wins", () => {
+  test("a credential problem outranks a per-Neurolink problem", () => {
+    // 401 is the shared credential; 403 is one link. Telling a signed-out user to
+    // go check a Neurospace would send them to fix the wrong thing.
+    expect(fanOutNotice("oauth", [403, 401])).toBe("relogin");
+    expect(fanOutNotice("oauth", [401, 403])).toBe("relogin");
+  });
+
+  test("one broken link still surfaces even when its peers are fine", () => {
+    expect(fanOutNotice("oauth", [202, 403])).toBe("connect");
+    expect(fanOutNotice("oauth", [202, 404])).toBe("connect");
+  });
+
+  test("healthy or merely transient outcomes raise nothing", () => {
+    expect(fanOutNotice("oauth", [202, 202])).toBeUndefined();
+    expect(fanOutNotice("oauth", [500, 0])).toBeUndefined();
+    expect(fanOutNotice("oauth", [])).toBeUndefined();
+  });
+});
+
+/**
+ * One spool, several Neurospaces. The point of every test here is ISOLATION: a
+ * destination that is broken must cost the others nothing.
+ */
+describe("fan-out across destinations", () => {
+  let project: string;
+  let box: Outbox;
+  /** Per-destination request log, keyed by the routing header. */
+  let seen: Map<string, number[][]>;
+  let statusFor: Map<string, number>;
+  let server: ReturnType<typeof Bun.serve>;
+
+  function startServer() {
+    seen = new Map();
+    server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const dest = req.headers.get("x-augenta-neurolink-id") ?? "";
+        const body = (await req.json()) as { experiences: TrajectoryExperience[] };
+        const seqs = body.experiences.flatMap((x) =>
+          Array.isArray(x.events) ? x.events.map((e) => e.seq) : [],
+        );
+        (seen.get(dest) ?? seen.set(dest, []).get(dest)!).push(seqs);
+        return new Response("", { status: statusFor.get(dest) ?? 202 });
+      },
+    });
+  }
+  const url = () => `http://127.0.0.1:${server.port}/v1/experiences`;
+  /** Every seq this destination received, across all its bodies. */
+  const seqsFor = (dest: string): number[] => (seen.get(dest) ?? []).flat().sort((a, b) => a - b);
+  const rejectedPath = () => join(project, ".augenta", "outbox", "rejected.jsonl");
+  const readRejected = (): Array<{
+    status: number;
+    destination?: string;
+    reason?: string;
+    experiences: TrajectoryExperience[];
+  }> => readFileSync(rejectedPath(), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+
+  const fanOut = (ids: Array<string | undefined>, token = "tok") =>
+    drainAll({
+      projectRoot: project,
+      url: url(),
+      authMode: "oauth",
+      neurolinkIds: ids,
+      token: () => Promise.resolve(token),
+    });
+
+  beforeEach(() => {
+    project = mkdtempSync(join(tmpdir(), "aug-fanout-"));
+    box = new Outbox(project);
+    statusFor = new Map();
+    startServer();
+  });
+  afterEach(() => {
+    server.stop(true);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  test("every destination receives the SAME records, and the spool reclaims", async () => {
+    box.append([ev(0, { turn: 1 }), ev(1, { turn: 1 })]);
+
+    const result = await fanOut(["nl_a", "nl_b"]);
+
+    expect(seqsFor("nl_a")).toEqual([0, 1]);
+    expect(seqsFor("nl_b")).toEqual([0, 1]);
+    expect(result.byDestination.get("nl_a")!.shipped).toBe(2);
+    expect(result.byDestination.get("nl_b")!.shipped).toBe(2);
+    expect(box.hasPendingBytes()).toBe(false); // min advanced, spool compacted
+  });
+
+  test("a broken destination costs the healthy one NOTHING, and catches up later", async () => {
+    // The core isolation guarantee. nl_a's cursor, quarantine, and slice
+    // boundaries must be untouchable by nl_b's failure.
+    statusFor.set("nl_b", 500);
+    box.append([ev(0, { turn: 1 }), ev(1, { turn: 1 })]);
+
+    await fanOut(["nl_a", "nl_b"]);
+    expect(seqsFor("nl_a")).toEqual([0, 1]); // drained
+    expect(box.pendingCount("nl_a")).toBe(0);
+    expect(box.pendingCount("nl_b")).toBe(2); // fully pending, nothing lost
+    expect(box.hasPendingBytes()).toBe(true); // min still pinned by nl_b
+
+    statusFor.delete("nl_b"); // the transient condition clears
+    startServer();
+    await fanOut(["nl_a", "nl_b"]);
+
+    expect(seqsFor("nl_b")).toEqual([0, 1]); // caught up
+    expect(seen.get("nl_a")).toBeUndefined(); // and nl_a was NOT asked to re-ship
+    expect(box.hasPendingBytes()).toBe(false);
+  });
+
+  test("a permanent rejection by ONE destination quarantines only that copy", async () => {
+    statusFor.set("nl_b", 422);
+    box.append([ev(0, { turn: 1 })]);
+
+    await fanOut(["nl_a", "nl_b"]);
+
+    expect(seqsFor("nl_a")).toEqual([0]); // accepted normally
+    const rejected = readRejected();
+    expect(rejected.length).toBe(1); // exactly one entry, not two
+    expect(rejected[0]!.status).toBe(422);
+    expect(rejected[0]!.destination).toBe("nl_b"); // attributable, so it is actionable
+    // Both destinations consumed the bytes — one by shipping, one by quarantine.
+    expect(box.hasPendingBytes()).toBe(false);
+  });
+
+  test("a 401 refreshes the credential exactly ONCE for the whole fan-out", async () => {
+    // Refreshing per destination would rotate the refresh-token chain N times
+    // back to back, which is how a user's session gets burned.
+    const calls: Array<boolean | undefined> = [];
+    statusFor.set("nl_a", 401);
+    statusFor.set("nl_b", 401);
+    box.append([ev(0, { turn: 1 })]);
+
+    await drainAll({
+      projectRoot: project,
+      url: url(),
+      authMode: "oauth",
+      neurolinkIds: ["nl_a", "nl_b"],
+      token: (refresh) => {
+        calls.push(refresh);
+        return Promise.resolve("tok");
+      },
+    });
+
+    expect(calls.filter(Boolean).length).toBe(1);
+  });
+
+  test("a duplicated destination id ships once, not twice", async () => {
+    box.append([ev(0, { turn: 1 })]);
+    await fanOut(["nl_a", "nl_a"]);
+    expect(seen.get("nl_a")!.length).toBe(1);
+  });
+
+  test("destinations at different offsets still receive the same UNION of records", async () => {
+    // Different cursors mean different slice boundaries, so the same turn can be
+    // grouped into one experience for one destination and two for another. What
+    // must hold is the set of records each one ends up with.
+    statusFor.set("nl_b", 500);
+    box.append([ev(0, { turn: 1 })]);
+    await fanOut(["nl_a", "nl_b"]); // nl_a takes seq 0; nl_b takes nothing
+
+    statusFor.delete("nl_b");
+    box.append([ev(1, { turn: 2 })]); // appended while the two are out of step
+    startServer();
+    await fanOut(["nl_a", "nl_b"]);
+
+    expect(seqsFor("nl_a")).toEqual([1]); // only what it had not seen
+    expect(seqsFor("nl_b")).toEqual([0, 1]); // its whole backlog, in one drain
+  });
+
+  test("an ordinary transient failure discards NOTHING and raises no sweep", async () => {
+    // Only a destination past its lag cap is ever sacrificed. A plain 403 on a
+    // small spool must leave the backlog intact and write no quarantine entry.
+    statusFor.set("nl_b", 403);
+    box.append([ev(0, { turn: 1 })]);
+
+    const result = await fanOut(["nl_a", "nl_b"]);
+
+    expect(result.derelict).toEqual([]);
+    expect(existsSync(rejectedPath())).toBe(false);
+    expect(box.pendingCount("nl_b")).toBe(1); // still there for the next drain
+    // The per-destination statuses are what the entrypoint maps to one notice.
+    const statuses = [...result.byDestination.values()].map((r) => r.lastStatus);
+    expect(fanOutNotice("oauth", statuses)).toBe("connect");
+  });
+
+  test("a derelict destination is only swept after repeated failures, then recorded loudly", async () => {
+    // A 403 is TRANSIENT, so it retries forever and would pin reclamation until
+    // MAX_SPOOL_BYTES started dropping records for EVERY destination. Three things
+    // make discarding its backlog defensible: it took LAG_STRIKES consecutive
+    // failures, it is written down, and the user is told in its own words.
+    statusFor.set("nl_b", 403);
+    const fanOutTiny = () =>
+      drainAll({
+        projectRoot: project,
+        url: url(),
+        authMode: "oauth",
+        neurolinkIds: ["nl_a", "nl_b"],
+        token: () => Promise.resolve("tok"),
+        maxDestLagBytes: 1, // production keeps MAX_DEST_LAG_BYTES
+      });
+
+    // A turn of real work per round, which is what makes a peer "progress" and so
+    // what the sweep actually keys on: it fires only while the spool is under
+    // pressure from ongoing capture, never against an idle project.
+    let seq = 0;
+    for (let round = 1; round < LAG_STRIKES; round++) {
+      box.append([ev(seq++, { turn: seq })]);
+      const early = await fanOutTiny();
+      expect(early.derelict).toEqual([]); // still on probation
+      expect(box.pendingCount("nl_b")).toBe(seq); // whole backlog intact
+      expect(existsSync(rejectedPath())).toBe(false);
+    }
+
+    box.append([ev(seq++, { turn: seq })]);
+    const result = await fanOutTiny();
+    expect(result.derelict.length).toBe(1);
+    expect(result.derelict[0]!.destKey).toBe("nl_b");
+
+    const rejected = readRejected();
+    expect(rejected[0]!.destination).toBe("nl_b");
+    expect(rejected[0]!.reason).toBe("destination_lag");
+
+    // Its OWN notice channel. takeAuthNotice would have been consumed alongside a
+    // 401 marker, and its "queued records will resume shipping" wording is false
+    // for records that were deleted.
+    const discarded = box.takeDiscarded();
+    expect(discarded?.[0]?.destKey).toBe("nl_b");
+    expect(takeAuthNotice(project)).toBeUndefined();
+
+    // nl_a never missed a record throughout.
+    expect(seqsFor("nl_a")).toEqual([...Array(seq).keys()]);
+  });
+
+  test("a platform key ships once, with no destination header", async () => {
+    box.append([ev(0, { turn: 1 })]);
+    const result = await drainAll({
+      projectRoot: project,
+      url: url(),
+      authMode: "api-key",
+      neurolinkIds: [undefined],
+      token: () => Promise.resolve("key_public.secret"),
+    });
+    expect(seqsFor("")).toEqual([0]); // arrived under the empty (absent) header
+    expect(result.byDestination.get("")!.shipped).toBe(1);
+    expect(box.hasPendingBytes()).toBe(false);
   });
 });

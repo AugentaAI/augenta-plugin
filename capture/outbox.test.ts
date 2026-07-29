@@ -16,10 +16,17 @@
  * Run: bun test capture/outbox.test.ts
  */
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, appendFileSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, appendFileSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Outbox, isDocumentRecord, isRawRecord, isCaptureEvent, type SpoolRecord } from "./outbox";
+import {
+  Outbox,
+  isDocumentRecord,
+  isRawRecord,
+  isCaptureEvent,
+  LAG_STRIKES,
+  type SpoolRecord,
+} from "./outbox";
 import type { CaptureEvent, DocumentRecord, RawRecord } from "./event";
 
 function ev(seq: number, text = `event ${seq}`): CaptureEvent {
@@ -269,6 +276,314 @@ describe("Outbox", () => {
 
     test("clearDropEpisode is a harmless no-op when no episode is active", () => {
       expect(() => box.clearDropEpisode()).not.toThrow();
+    });
+  });
+
+  /**
+   * One spool, N cursors. Every test above this block passes a `destKey` of
+   * undefined and is left untouched on purpose — that IS the compatibility
+   * proof for the single-destination (platform key) form.
+   */
+  describe("per-destination cursors — one spool feeding several Neurospaces", () => {
+    /** The cursor exactly as stored, so the on-disk contract can be asserted. */
+    function stored(o: Outbox): { shipped?: number; links?: Record<string, number> } {
+      return JSON.parse(readFileSync(o.cursorPath, "utf8"));
+    }
+
+    test("advancing one destination leaves the other's records pending", () => {
+      box.append([ev(0), ev(1)]);
+      box.registerDestinations(["nl_a", "nl_b"]);
+      box.advance(box.readPending(Infinity, "nl_a").endOffset, "nl_a");
+
+      expect(box.readPending(Infinity, "nl_a").records).toEqual([]);
+      expect(box.readPending(Infinity, "nl_b").records.map(tag)).toEqual([0, 1]);
+      expect(box.pendingCount("nl_b")).toBe(2);
+    });
+
+    test("the stored `shipped` scalar is the MIN across destinations", () => {
+      // An older build understands only `shipped`. The min makes it RE-SHIP what
+      // some destinations already took (idempotent); a max would make it SKIP
+      // what the laggard never saw.
+      box.append([ev(0), ev(1)]);
+      box.registerDestinations(["nl_a", "nl_b"]);
+      const end = box.readPending(Infinity, "nl_a").endOffset;
+      box.advance(end, "nl_a");
+
+      const cursor = stored(box);
+      expect(cursor.links).toEqual({ nl_a: end, nl_b: 0 });
+      expect(cursor.shipped).toBe(0);
+      expect(box.hasPendingBytes()).toBe(true); // min-gated, so still pending
+    });
+
+    test("compaction waits for the SLOWEST destination, then reclaims", () => {
+      box.append([ev(0), ev(1)]);
+      box.registerDestinations(["nl_a", "nl_b"]);
+
+      box.advance(box.readPending(Infinity, "nl_a").endOffset, "nl_a");
+      box.compact();
+      expect(box.hasPendingBytes()).toBe(true); // nl_b has not had these bytes
+      expect(box.readPending(Infinity, "nl_b").records.map(tag)).toEqual([0, 1]);
+
+      box.advance(box.readPending(Infinity, "nl_b").endOffset, "nl_b");
+      box.compact();
+      expect(box.hasPendingBytes()).toBe(false);
+    });
+
+    test("compaction zeroes EVERY destination, so a peer cannot skip the next append", () => {
+      // The trap: compact() renames the spool so offsets restart at 0. A key left
+      // at a nonzero offset would silently skip the next N bytes appended.
+      box.append([ev(0), ev(1)]);
+      box.registerDestinations(["nl_a", "nl_b"]);
+      for (const key of ["nl_a", "nl_b"]) {
+        box.advance(box.readPending(Infinity, key).endOffset, key);
+      }
+      box.compact();
+
+      expect(stored(box).links).toEqual({ nl_a: 0, nl_b: 0 });
+      box.append([ev(2)]);
+      expect(box.readPending(Infinity, "nl_a").records.map(tag)).toEqual([2]);
+      expect(box.readPending(Infinity, "nl_b").records.map(tag)).toEqual([2]);
+    });
+
+    test("a legacy scalar cursor is inherited by the single destination that earned it", () => {
+      box.append([ev(0), ev(1), ev(2)]);
+      const first = box.readPending(1);
+      box.advance(first.endOffset); // legacy single-cursor advance
+      box.registerDestinations(["nl_a"]);
+
+      // Everything below the scalar was already reclaimable, so inheriting it is
+      // bounded to the pending tail.
+      expect(stored(box).links).toEqual({ nl_a: first.endOffset });
+      expect(box.readPending(Infinity, "nl_a").records.map(tag)).toEqual([1, 2]);
+    });
+
+    test("migrating off the legacy scalar does NOT hand its pending tail to a new destination", () => {
+      // A 0.5.x project with an undrained spool, reconnected with a second
+      // Neurospace added. The tail was captured when only nl_a was a destination,
+      // so only nl_a may have it — `freshKeys` is how connect.ts says which is new.
+      box.append([ev(0), ev(1), ev(2)]);
+      const first = box.readPending(1);
+      box.advance(first.endOffset); // legacy scalar, mid-spool
+      const end = statSync(box.spoolPath).size;
+
+      box.registerDestinations(["nl_a", "nl_b"], { freshKeys: ["nl_b"] });
+
+      expect(stored(box).links).toEqual({ nl_a: first.endOffset, nl_b: end });
+      expect(box.readPending(Infinity, "nl_a").records.map(tag)).toEqual([1, 2]);
+      expect(box.readPending(Infinity, "nl_b").records).toEqual([]); // no back-fill
+    });
+
+    test("without a fresh-key hint, a multi-key legacy migration shares nothing", () => {
+      // The conservative reading when the caller cannot say which key is new: the
+      // tail is withheld rather than over-shared. connect.ts always passes the hint.
+      box.append([ev(0), ev(1)]);
+      box.advance(box.readPending(1).endOffset);
+      const end = statSync(box.spoolPath).size;
+
+      box.registerDestinations(["nl_a", "nl_b"]);
+      expect(stored(box).links).toEqual({ nl_a: end, nl_b: end });
+    });
+
+    test("a FIRST-TIME connection hands its whole spool to every destination", () => {
+      // There is no watermark to divide, so the conservative rule above must not
+      // fire — otherwise a brand-new project ships nothing on its first drain.
+      box.append([ev(0), ev(1)]);
+      box.registerDestinations(["nl_a", "nl_b"], { freshKeys: ["nl_a", "nl_b"] });
+
+      expect(stored(box).links).toEqual({ nl_a: 0, nl_b: 0 });
+      expect(box.readPending(Infinity, "nl_a").records.map(tag)).toEqual([0, 1]);
+      expect(box.readPending(Infinity, "nl_b").records.map(tag)).toEqual([0, 1]);
+    });
+
+    test("a NEWLY added destination seeds at the spool end — it never inherits a backlog", () => {
+      box.append([ev(0), ev(1)]);
+      box.registerDestinations(["nl_a"]);
+      const end = statSync(box.spoolPath).size;
+
+      box.registerDestinations(["nl_a", "nl_b"]);
+      // A Neurospace the user just added must not receive activity from before
+      // they consented to it.
+      expect(box.readPending(Infinity, "nl_b").records).toEqual([]);
+      expect(stored(box).links).toEqual({ nl_a: 0, nl_b: end });
+
+      box.append([ev(2)]);
+      expect(box.readPending(Infinity, "nl_b").records.map(tag)).toEqual([2]);
+      expect(box.readPending(Infinity, "nl_a").records.map(tag)).toEqual([0, 1, 2]);
+    });
+
+    test("a DESELECTED destination is dropped, which unpins compaction", () => {
+      box.append([ev(0)]);
+      box.registerDestinations(["nl_a", "nl_b"]);
+      box.advance(box.readPending(Infinity, "nl_a").endOffset, "nl_a");
+      box.compact();
+      expect(box.hasPendingBytes()).toBe(true); // nl_b still pins the spool
+
+      box.registerDestinations(["nl_a"]); // user removed nl_b
+      expect(stored(box).links).toEqual({ nl_a: statSync(box.spoolPath).size });
+      box.compact();
+      expect(box.hasPendingBytes()).toBe(false); // no longer wedged forever
+    });
+
+    test("registerDestinations is idempotent — no write when the set is unchanged", () => {
+      box.append([ev(0)]);
+      box.registerDestinations(["nl_a", "nl_b"]);
+      box.advance(box.readPending(Infinity, "nl_a").endOffset, "nl_a");
+      const before = stored(box);
+      box.registerDestinations(["nl_b", "nl_a"]); // same set, different order
+      expect(stored(box)).toEqual(before);
+    });
+
+    test("registerDestinations with an empty set leaves the cursor alone", () => {
+      box.append([ev(0)]);
+      box.advance(box.readPending().endOffset);
+      const before = stored(box);
+      box.registerDestinations([]);
+      expect(stored(box)).toEqual(before);
+    });
+
+    test("a corrupt links map falls back to the scalar rather than throwing", () => {
+      // Falling back to a MIN can only re-ship; defaulting a bad key could skip.
+      box.append([ev(0), ev(1)]);
+      const end = box.readPending(1).endOffset;
+      for (const links of [
+        { nl_a: -1 },
+        { nl_a: 1.5 },
+        { nl_a: "10" },
+        { nl_a: null },
+        { "": 0 },
+        [],
+        "nope",
+      ]) {
+        writeFileSync(box.cursorPath, JSON.stringify({ shipped: end, links }));
+        expect(() => box.readPending(Infinity, "nl_a")).not.toThrow();
+        expect(box.readPending(Infinity, "nl_a").records.map(tag)).toEqual([1]);
+      }
+    });
+
+    test("an UNSEEDED destKey reads 0 — it must never inherit a peer's position", () => {
+      // registerDestinations is what seeds keys, so this is a caller bug. Falling
+      // back to the min looks safe but is not: once every peer is caught up the min
+      // IS their position, which would hide from an unseeded destination every
+      // record it never received.
+      box.append([ev(0), ev(1)]);
+      box.registerDestinations(["nl_a", "nl_b"]);
+      for (const key of ["nl_a", "nl_b"]) {
+        box.advance(box.readPending(Infinity, key).endOffset, key);
+      }
+      expect(box.readPending(Infinity, "nl_unknown").records.map(tag)).toEqual([0, 1]);
+    });
+
+    test("a stored offset past the spool end RESETS, so nothing is skipped", () => {
+      // A crash or a reclaimed stale lock can interleave with compact(), leaving an
+      // offset beyond a spool that restarted at 0. Re-shipping is idempotent;
+      // trusting the stale offset (or clamping it to the END) would keep skipping,
+      // and nothing would flag it because it looks AHEAD of its peers, not behind.
+      box.append([ev(0)]);
+      writeFileSync(box.cursorPath, JSON.stringify({ shipped: 0, links: { nl_a: 999_999 } }));
+      expect(box.readPending(Infinity, "nl_a").records.map(tag)).toEqual([0]);
+    });
+
+    describe("enforceLag — bounding the wedged destination that would fill the spool", () => {
+      /** Drive `count` consecutive no-progress drains for `laggard`. */
+      const strike = (o: Outbox, laggard: string, healthy: string, count: number) => {
+        let swept: ReturnType<Outbox["enforceLag"]> = [];
+        for (let i = 0; i < count; i++) swept = o.enforceLag([healthy]);
+        return swept;
+      };
+
+      test("discards nothing until the laggard has failed LAG_STRIKES times", () => {
+        // The hysteresis IS the safety margin: one timed-out POST on the first
+        // drain after a week offline looks exactly like a dead Neurolink, and
+        // deleting a week of records on that evidence is the bug this prevents.
+        const tiny = new Outbox(home, { maxDestLagBytes: 10 });
+        tiny.append([ev(0), ev(1), ev(2)]);
+        tiny.registerDestinations(["nl_a", "nl_b"]);
+        tiny.advance(tiny.readPending(Infinity, "nl_a").endOffset, "nl_a");
+
+        for (let i = 1; i < LAG_STRIKES; i++) {
+          expect(tiny.enforceLag(["nl_a"])).toEqual([]); // still on probation
+          expect(tiny.pendingCount("nl_b")).toBe(3); // backlog intact
+        }
+        const swept = tiny.enforceLag(["nl_a"]);
+        expect(swept.length).toBe(1);
+        expect(swept[0]!.destKey).toBe("nl_b");
+        expect(tiny.pendingCount("nl_b")).toBe(0);
+      });
+
+      test("any successful ship RESETS the strike count", () => {
+        // A destination that is merely slow, failing intermittently, must never
+        // accumulate its way to a discard.
+        const tiny = new Outbox(home, { maxDestLagBytes: 10 });
+        tiny.append([ev(0), ev(1), ev(2)]);
+        tiny.registerDestinations(["nl_a", "nl_b"]);
+        tiny.advance(tiny.readPending(Infinity, "nl_a").endOffset, "nl_a");
+
+        for (let round = 0; round < 4; round++) {
+          strike(tiny, "nl_b", "nl_a", LAG_STRIKES - 1); // just short of the sweep
+          expect(tiny.enforceLag(["nl_a", "nl_b"])).toEqual([]); // nl_b shipped → reset
+        }
+        expect(tiny.pendingCount("nl_b")).toBe(3); // never discarded
+      });
+
+      test("two simultaneously-wedged destinations do not shield each other", () => {
+        // Measuring lag against the NEAREST peer let both sit behind together
+        // while the spool filled to MAX_SPOOL_BYTES and append began dropping
+        // records for everyone — the exact outcome this cap exists to prevent.
+        const tiny = new Outbox(home, { maxDestLagBytes: 10 });
+        tiny.append([ev(0), ev(1), ev(2)]);
+        tiny.registerDestinations(["nl_a", "nl_b", "nl_c"]);
+        tiny.advance(tiny.readPending(Infinity, "nl_a").endOffset, "nl_a");
+
+        const swept = strike(tiny, "", "nl_a", LAG_STRIKES);
+        expect(swept.map((s) => s.destKey).sort()).toEqual(["nl_b", "nl_c"]);
+        // Both were swept, so the spool is BOUNDED at roughly the cap instead of
+        // growing to MAX_SPOOL_BYTES. It is not emptied — the sweep deliberately
+        // keeps each laggard within the cap rather than at the leader.
+        const size = statSync(tiny.spoolPath).size;
+        const min = JSON.parse(readFileSync(tiny.cursorPath, "utf8")).shipped as number;
+        expect(size - min).toBeLessThanOrEqual(10);
+      });
+
+      test("the sweep keeps the laggard within the cap rather than at the leader", () => {
+        // Discard as little as possible: everything older than the cap goes, the
+        // rest is still deliverable, and the spool stays bounded at ~the cap.
+        const tiny = new Outbox(home, { maxDestLagBytes: 40 });
+        tiny.append([ev(0), ev(1), ev(2), ev(3)]);
+        const leader = tiny.readPending(Infinity, "nl_a").endOffset;
+        tiny.registerDestinations(["nl_a", "nl_b"]);
+        tiny.advance(leader, "nl_a");
+
+        const swept = strike(tiny, "nl_b", "nl_a", LAG_STRIKES);
+        expect(swept[0]!.to).toBe(leader - 40);
+        expect(swept[0]!.to).toBeLessThan(leader); // not fast-forwarded all the way
+      });
+
+      test("declares NOTHING derelict when no peer made progress", () => {
+        // A week offline must not discard the backlog — that is the case the
+        // spool exists to survive. No number of repeats changes that.
+        const tiny = new Outbox(home, { maxDestLagBytes: 10 });
+        tiny.append([ev(0), ev(1), ev(2)]);
+        tiny.registerDestinations(["nl_a", "nl_b"]);
+        for (let i = 0; i < LAG_STRIKES + 2; i++) expect(tiny.enforceLag([])).toEqual([]);
+        expect(tiny.readPending(Infinity, "nl_a").records.map(tag)).toEqual([0, 1, 2]);
+        expect(tiny.readPending(Infinity, "nl_b").records.map(tag)).toEqual([0, 1, 2]);
+      });
+
+      test("never fires for a single destination, however far behind", () => {
+        const tiny = new Outbox(home, { maxDestLagBytes: 0 });
+        tiny.append([ev(0), ev(1)]);
+        tiny.registerDestinations(["nl_a"]);
+        expect(tiny.enforceLag(["nl_a"])).toEqual([]);
+        expect(tiny.readPending(Infinity, "nl_a").records.map(tag)).toEqual([0, 1]);
+      });
+
+      test("leaves a laggard that is still WITHIN the cap alone", () => {
+        box.append([ev(0), ev(1)]); // well under the 16MB default
+        box.registerDestinations(["nl_a", "nl_b"]);
+        box.advance(box.readPending(Infinity, "nl_a").endOffset, "nl_a");
+        expect(box.enforceLag(["nl_a"])).toEqual([]);
+        expect(box.readPending(Infinity, "nl_b").records.map(tag)).toEqual([0, 1]);
+      });
     });
   });
 });

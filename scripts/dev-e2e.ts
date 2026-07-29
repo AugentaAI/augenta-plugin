@@ -83,23 +83,36 @@ async function json<T>(
   return (await response.json()) as T;
 }
 
-async function waitForExperience(
+/**
+ * Every landed row for this sid — one per destination the project feeds. Polls
+ * until every expected destination is COVERED, so a fan-out that only reached the
+ * first Neurospace fails the check instead of passing on the row that did arrive.
+ *
+ * Gating on coverage rather than row count matters: if the platform ever records
+ * more than one row per (sid, destination), a count would be satisfied by rows
+ * from a single destination and the coverage assertion below would then fail
+ * spuriously against a fan-out that was actually fine.
+ */
+async function waitForExperiences(
   profileId: string,
   gateway: string,
   sid: string,
+  expected: readonly string[],
   timeoutMs = 60_000,
-): Promise<ExperienceRow | undefined> {
+): Promise<ExperienceRow[]> {
   const started = Date.now();
+  let found: ExperienceRow[] = [];
   while (Date.now() - started < timeoutMs) {
     const page = await json<{ items?: ExperienceRow[] }>(
       profileId,
       `${gateway}/v1/experiences?limit=200`,
     );
-    const found = page.items?.find((item) => item.sid === sid);
-    if (found) return found;
+    found = page.items?.filter((item) => item.sid === sid) ?? [];
+    const landed = new Set(found.map((row) => row.neurolinkId));
+    if (expected.every((id) => landed.has(id))) return found;
     await Bun.sleep(1_000);
   }
-  return undefined;
+  return found;
 }
 
 let failures = 0;
@@ -114,12 +127,18 @@ const projectRoot = resolveTargetProject(
   process.cwd(),
 );
 const cfg = loadProjectConfig(projectRoot);
-if (cfg?.authMode !== "oauth" || !cfg.profileId || !cfg.neurolinkId) {
+if (cfg?.authMode !== "oauth" || !cfg.profileId || !cfg.neurolinkIds?.length) {
   console.error(
     `Connect ${projectRoot} with an Augenta sign-in before running this test.`,
   );
   process.exit(2);
 }
+/**
+ * Every destination the connected project feeds. The harness ships once and then
+ * asserts the record landed in EACH of them — that is the only end-to-end proof
+ * that fan-out reached more than the first Neurospace.
+ */
+const destinations = cfg.neurolinkIds;
 
 console.log(`dev-e2e — project=${projectRoot}`);
 const discovered = await augentaOAuthConfig(args.controlUrl);
@@ -148,15 +167,24 @@ check(
   "stored sign-in reaches /v1/me",
   `${me.user?.email || me.user?.id} · ${me.org?.name}`,
 );
-const { neurolink } = await json<{ neurolink: Neurolink }>(
-  cfg.profileId,
-  `${gateway}/v1/neurolinks/${encodeURIComponent(cfg.neurolinkId)}`,
-);
+const links = new Map<string, Neurolink>();
+for (const id of destinations) {
+  const { neurolink } = await json<{ neurolink: Neurolink }>(
+    cfg.profileId,
+    `${gateway}/v1/neurolinks/${encodeURIComponent(id)}`,
+  );
+  links.set(id, neurolink);
+  check(
+    neurolink.status === "active" &&
+      (neurolink.direction === "inbound" ||
+        neurolink.direction === "bidirectional"),
+    `configured Neurolink ${id} is active and inbound`,
+    `neurospace=${neurolink.neurospaceId}`,
+  );
+}
 check(
-  neurolink.status === "active" &&
-    (neurolink.direction === "inbound" ||
-      neurolink.direction === "bidirectional"),
-  "configured Neurolink is active and inbound",
+  new Set([...links.values()].map((l) => l.neurospaceId)).size === destinations.length,
+  "each destination is a DISTINCT Neurospace",
 );
 
 const tempProject = mkdtempSync(join(tmpdir(), "augenta-hosted-e2e-"));
@@ -169,7 +197,7 @@ try {
       {
         authMode: "oauth",
         profileId: cfg.profileId,
-        neurolinkId: cfg.neurolinkId,
+        neurolinkIds: destinations,
         endpoint: gateway,
       },
       null,
@@ -230,13 +258,18 @@ try {
   );
   check(!box.hasPendingBytes(), "durable outbox advanced after accepted delivery");
 
-  const row = await waitForExperience(cfg.profileId, gateway, sid);
-  check(Boolean(row), "experience landed and is visible to its user");
+  const rows = await waitForExperiences(cfg.profileId, gateway, sid, destinations);
+  check(rows.length > 0, "experience landed and is visible to its user");
+  // The load-bearing fan-out assertion: ONE ship reached EVERY destination, with
+  // the same bytes attributed to each Neurolink in turn.
+  const landed = new Set(rows.map((r) => r.neurolinkId));
   check(
-    row?.neurolinkId === cfg.neurolinkId,
-    "landed list row is attributed to the configured Neurolink",
+    destinations.every((id) => landed.has(id)),
+    `experience landed in all ${destinations.length} configured destination(s)`,
+    `landed=${[...landed].join(", ")}`,
   );
-  if (row) {
+
+  for (const row of rows) {
     const detail = await json<{
       experience: {
         sid?: string;
@@ -252,13 +285,14 @@ try {
     check(
       detail.experience.sid === sid &&
         detail.experience.v === 2 &&
-        detail.experience.neurolinkId === cfg.neurolinkId &&
-        detail.experience.neurolinkRevision === neurolink.revision &&
+        detail.experience.neurolinkId === row.neurolinkId &&
+        detail.experience.neurolinkRevision ===
+          links.get(row.neurolinkId)?.revision &&
         // Platform-side wire value in the routing snapshot, not ours to rename:
         // this asserts what the server recorded about the caller.
         detail.experience.routing?.caller?.type === "workos" &&
         detail.experience.routing?.caller?.userId === me.user.id,
-      "durable record preserves schema-v2 caller and Neurolink snapshot",
+      `durable record preserves schema-v2 caller and Neurolink snapshot (${row.neurolinkId})`,
     );
   }
 } finally {

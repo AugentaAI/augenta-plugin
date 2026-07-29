@@ -77,14 +77,33 @@ if (connectedRoot) {
   // noise. Leaving the marker unread also keeps it — it surfaces on the first
   // session after capture is re-enabled, which is when it becomes actionable.
   if (captureEnabled(cfg)) {
+    const action = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
+    const notices: string[] = [];
     const authNotice = takeAuthNotice(connectedRoot);
     if (authNotice) {
-      const action = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
       const reason =
         authNotice === "relogin"
           ? "a new Augenta sign-in"
           : "a valid inbound Neurolink";
-      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: `Augenta has queued capture waiting for ${reason}. Run ${action}; queued records will resume shipping after reconnecting.` } }));
+      notices.push(
+        `Augenta has queued capture waiting for ${reason}. Run ${action}; queued records will resume shipping after reconnecting.`,
+      );
+    }
+    // Reported SEPARATELY from the auth notice, and never merged into it: these
+    // records are gone, not queued, so the reconnect wording above would be a
+    // false reassurance — and takeAuthNotice reports only its most urgent marker,
+    // which would let a concurrent 401 swallow this entirely.
+    const discarded = new Outbox(connectedRoot).takeDiscarded();
+    if (discarded?.length) {
+      const detail = discarded
+        .map((d) => `${d.destKey} (spool bytes ${d.from}..${d.to})`)
+        .join(", ");
+      notices.push(
+        `Augenta DISCARDED unshipped records for ${discarded.length === 1 ? "a destination" : "destinations"} that fell too far behind its peers: ${detail}. Those records are gone and will not be retried. Capture to the other destinations is unaffected. If that destination should still receive this project, run ${action} to verify it, or remove it from the project's destinations.`,
+      );
+    }
+    if (notices.length > 0) {
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: notices.join(" ") } }));
     }
     // A stranded spool (a prior session's final Stop never fired, or failed
     // before it could drain) otherwise waits for THIS session's own Stop —
