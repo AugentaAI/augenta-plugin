@@ -80,13 +80,61 @@ describe("loadProjectConfig", () => {
     writeConfig(project, {
       authMode: "oauth",
       profileId: "profile_1",
-      neurolinkId: "link_1",
+      neurolinkIds: ["link_1", "link_2"],
     });
     expect(loadProjectConfig(project)).toEqual({
       authMode: "oauth",
       profileId: "profile_1",
-      neurolinkId: "link_1",
+      neurolinkIds: ["link_1", "link_2"],
       projectRoot: project,
+    });
+  });
+
+  describe("the destination set — widening a field is not migration", () => {
+    test("a pre-0.6.0 scalar `neurolinkId` is READ FORWARD as a one-element set", () => {
+      // Not a migration: the same id keeps meaning exactly what it meant, no
+      // credential is reused and no routing is re-derived, so there is no
+      // unexplained 401 for the no-migration policy to prevent. Rejecting it
+      // would silently stop capture for every already-connected project.
+      writeConfig(project, {
+        authMode: "oauth",
+        profileId: "profile_1",
+        neurolinkId: "link_1",
+      });
+      expect(loadProjectConfig(project)).toEqual({
+        authMode: "oauth",
+        profileId: "profile_1",
+        neurolinkIds: ["link_1"],
+        projectRoot: project,
+      });
+    });
+
+    test("the plural form wins when both spellings are present", () => {
+      writeConfig(project, {
+        authMode: "oauth",
+        profileId: "profile_1",
+        neurolinkId: "link_stale",
+        neurolinkIds: ["link_1"],
+      });
+      expect(loadProjectConfig(project)?.neurolinkIds).toEqual(["link_1"]);
+    });
+
+    test("duplicates collapse — one id must never become two cursor keys", () => {
+      writeConfig(project, {
+        authMode: "oauth",
+        profileId: "profile_1",
+        neurolinkIds: ["link_1", " link_1 ", "link_2"],
+      });
+      expect(loadProjectConfig(project)?.neurolinkIds).toEqual(["link_1", "link_2"]);
+    });
+
+    test("an empty or partly-invalid set is unparseable, never a partial route", () => {
+      // Shipping to a SUBSET of the destinations the user consented to, while
+      // reporting success, is the outcome worth failing closed to avoid.
+      for (const neurolinkIds of [[], ["link_1", 42], ["link_1", ""], "link_1_not_array"]) {
+        writeConfig(project, { authMode: "oauth", profileId: "profile_1", neurolinkIds });
+        expect(loadProjectConfig(project)).toBeUndefined();
+      }
     });
   });
 
@@ -157,8 +205,15 @@ describe("URL resolution", () => {
 describe("captureEnabled — config presence IS consent", () => {
   test("on with a config, off without", () => {
     expect(captureEnabled({ authMode: "api-key", apiKey: "k", projectRoot: "/p" })).toBe(true);
-    expect(captureEnabled({ authMode: "oauth", profileId: "profile_1", neurolinkId: "link_1", projectRoot: "/p" })).toBe(true);
+    expect(captureEnabled({ authMode: "oauth", profileId: "profile_1", neurolinkIds: ["link_1"], projectRoot: "/p" })).toBe(true);
     expect(captureEnabled(undefined)).toBe(false);
+  });
+
+  test("oauth consent needs at least one destination", () => {
+    // No destination means nowhere to ship — capture stays a silent no-op rather
+    // than spooling records with no route.
+    expect(captureEnabled({ authMode: "oauth", profileId: "profile_1", neurolinkIds: [], projectRoot: "/p" })).toBe(false);
+    expect(captureEnabled({ authMode: "oauth", profileId: "profile_1", projectRoot: "/p" })).toBe(false);
   });
 
   test("AUGENTA_INGEST_URL does NOT grant consent (redirect only)", () => {

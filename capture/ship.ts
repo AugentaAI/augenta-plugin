@@ -45,7 +45,13 @@
  */
 import { join, dirname } from "node:path";
 import { mkdirSync, openSync, writeSync, closeSync, unlinkSync, statSync, appendFileSync } from "node:fs";
-import { Outbox, isDocumentRecord, isRawRecord, type SpoolRecord } from "./outbox";
+import {
+  Outbox,
+  isDocumentRecord,
+  isRawRecord,
+  type DerelictDestination,
+  type SpoolRecord,
+} from "./outbox";
 import type { CaptureEvent, DocumentExperience, Experience, TrajectoryExperience } from "./event";
 import {
   experiencesUrl,
@@ -387,6 +393,14 @@ interface RejectedEntry {
   ts: string;
   status: number;
   error?: string;
+  /** Which destination rejected these bytes. A project may feed several, and the
+   *  same body can be accepted by one Neurospace and rejected by another, so a
+   *  quarantine entry is only actionable when it names the destination. Absent in
+   *  api-key mode, which has a single unnamed route. */
+  destination?: string;
+  /** Set when the entry records records DISCARDED rather than rejected — a
+   *  destination fast-forwarded past its lag cap (see Outbox.enforceLag). */
+  reason?: "destination_lag";
   experiences: Experience[];
 }
 
@@ -485,14 +499,14 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
   let lastStatus = 0;
 
   for (let i = 0; i < maxBatches; i++) {
-    const pending = box.readPending(maxBatch);
+    const pending = box.readPending(maxBatch, opts.neurolinkId);
     if (pending.records.length === 0) break;
 
     const experiences = groupIntoExperiences(pending.records).flatMap(boundExperienceSize);
     if (experiences.length === 0) {
       // Every group in this slice was zero-event (unshippable raws) — consume
       // it without a POST so orphaned raws can never wedge the spool.
-      box.advance(pending.endOffset);
+      box.advance(pending.endOffset, opts.neurolinkId);
       shipped += pending.records.length;
       if (!pending.hasMore) break;
       continue;
@@ -521,6 +535,7 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
             ts: new Date().toISOString(),
             status: lastStatus,
             ...(res.errText ? { error: res.errText } : {}),
+            ...(opts.neurolinkId ? { destination: opts.neurolinkId } : {}),
             experiences: body,
           });
           continue;
@@ -529,12 +544,18 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
         break;
       }
     } catch {
-      break; // network/timeout — leave the cursor, retry on the next trigger
+      // Network/timeout — leave the cursor, retry on the next trigger. Clearing
+      // `lastStatus` matters: a 2xx earlier in this slice would otherwise be
+      // reported as the drain's outcome, so the caller's 401-refresh check and
+      // its user-facing notice would both read a success. With N destinations
+      // aggregating on it, that stale read would mask a whole broken route.
+      lastStatus = 0;
+      break;
     }
     if (!sliceOk) break;
 
     if (quarantineBatch.length > 0) appendRejected(opts.projectRoot, quarantineBatch);
-    box.advance(pending.endOffset);
+    box.advance(pending.endOffset, opts.neurolinkId);
     shipped += pending.records.length;
     if (!pending.hasMore) break;
   }
@@ -547,6 +568,178 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
     if (!box.hasPendingBytes()) box.clearDropEpisode();
   }
   return { shipped, batches, lastStatus };
+}
+
+// --- fan-out across destinations --------------------------------------------
+
+export interface FanOutResult {
+  /** Per-destination outcome, keyed by Neurolink id (`""` in api-key mode). */
+  byDestination: Map<string, DrainResult>;
+  /** Destinations fast-forwarded past records they never received. */
+  derelict: DerelictDestination[];
+}
+
+/**
+ * The MOST GLOBAL notice across every destination's outcome.
+ *
+ * "relogin" outranks "connect" because the two have different scopes: a 401 is a
+ * problem with the CREDENTIAL, which every destination shares, while a 403/404 is
+ * a problem with ONE Neurolink. Telling a signed-out user to check a Neurospace
+ * would send them to fix the wrong thing. Pure.
+ */
+export function fanOutNotice(
+  authMode: AuthMode,
+  statuses: readonly number[],
+): "relogin" | "connect" | undefined {
+  let connect = false;
+  for (const status of statuses) {
+    const notice = shippingNotice(authMode, status);
+    if (notice === "relogin") return "relogin";
+    if (notice === "connect") connect = true;
+  }
+  return connect ? "connect" : undefined;
+}
+
+/**
+ * Ship the spool to EVERY destination the project feeds.
+ *
+ * The per-destination loop lives here rather than inside {@link drain} on
+ * purpose. `drain` already has exactly the right semantics for one destination —
+ * transient stops it, permanent quarantines and moves on, the cursor advances per
+ * slice — so scoping each call to a single Neurolink makes it *provable* that one
+ * broken destination cannot touch another's cursor, quarantine, or slice
+ * boundaries. A 422 for destination B quarantines only B's copy of those bytes;
+ * A advanced past them independently on its own 2xx.
+ *
+ * Destinations sit at different offsets and therefore see different slice
+ * boundaries, so the same turn may land as one record in one Neurospace and two
+ * in another. That is legal (record identity is content-derived and disjoint seq
+ * ranges merge on read) and idempotent per destination.
+ *
+ * Never throws for a SHIPPING failure — the same posture as `drain`, and a
+ * credential error on one destination is recorded and stepped over so the rest of
+ * the fan-out, the lag pass, and compaction all still run. It does throw on a
+ * malformed destination list, which is a caller bug that would corrupt cursors.
+ */
+export async function drainAll(opts: {
+  projectRoot: string;
+  url: string;
+  authMode: AuthMode;
+  /** One entry per configured Neurolink; `[undefined]` for a platform key. */
+  neurolinkIds: readonly (string | undefined)[];
+  /** Token supplier. Called with `true` at most ONCE for the whole fan-out. */
+  token: (refresh?: boolean) => Promise<string | undefined>;
+  maxBatch?: number;
+  /** Override the per-destination lag cap. Tests only — production uses
+   *  {@link MAX_DEST_LAG_BYTES}, since the cap is a data-retention policy. */
+  maxDestLagBytes?: number;
+}): Promise<FanOutResult> {
+  const box = new Outbox(opts.projectRoot, {
+    ...(opts.maxDestLagBytes !== undefined
+      ? { maxDestLagBytes: opts.maxDestLagBytes }
+      : {}),
+  });
+  const keys = [...new Set(opts.neurolinkIds)];
+  const byDestination = new Map<string, DrainResult>();
+  if (keys.length === 0) return { byDestination, derelict: [] };
+
+  const named = keys.filter((key): key is string => Boolean(key));
+  if (named.length > 0 && named.length !== keys.length) {
+    // A mixed list has no coherent meaning: the unnamed destination's advance
+    // writes the bare scalar and DROPS the whole map, clobbering the named
+    // destinations' cursors. Refuse rather than corrupt.
+    throw new Error(
+      "drainAll: neurolinkIds must be either all Neurolink ids or exactly [undefined]",
+    );
+  }
+  // Persist the destination set BEFORE the first POST. A crash between a
+  // destination's first 2xx and its first advance would otherwise re-seed it at a
+  // later spool end on restart and silently skip the records in between.
+  if (named.length === keys.length) box.registerDestinations(named);
+
+  // Keep total wall time inside the single-destination envelope: the outbox lock
+  // goes stale at STALE_LOCK_MS, and N × the old batch cap × the POST timeout
+  // would let a second shipper reclaim it mid-drain. The cost is real and worth
+  // naming: each destination drains at 1/N the slice budget, so recovering from a
+  // long offline stretch takes proportionally longer as destinations are added,
+  // and MAX_SPOOL_BYTES (which drops records for EVERYONE at capture time) comes
+  // correspondingly closer. Successive Stop fires continue where this one stopped.
+  const maxBatches = Math.max(1, Math.floor(50 / keys.length));
+
+  // Resolve the credential ONCE for the whole fan-out, before the loop.
+  //
+  // Calling the supplier per destination is not refresh-free: accessTokenForProfile
+  // rotates whenever the stored token is within a minute of expiring, and a
+  // fan-out is long enough (N × maxBatches × the 10s POST timeout) that a
+  // short-lived access token can cross that line mid-loop — so a per-destination
+  // call could rotate the refresh chain once per destination, which is exactly how
+  // a user's session gets burned. One value, reused; at most one explicit refresh
+  // on a 401, shared by every destination after it.
+  let token = await opts.token();
+  let refreshed = false;
+
+  for (const key of keys) {
+    const drainOne = (bearer: string | undefined) =>
+      drain({
+        url: opts.url,
+        token: bearer,
+        ...(key ? { neurolinkId: key } : {}),
+        authMode: opts.authMode,
+        projectRoot: opts.projectRoot,
+        ...(opts.maxBatch !== undefined ? { maxBatch: opts.maxBatch } : {}),
+        maxBatches,
+      });
+    try {
+      let result = await drainOne(token);
+      if (opts.authMode === "oauth" && result.lastStatus === 401 && !refreshed) {
+        refreshed = true;
+        token = await opts.token(true);
+        result = await drainOne(token);
+      }
+      byDestination.set(key ?? "", result);
+    } catch (error) {
+      // A credential error is global, but it must not skip the destinations after
+      // this one, nor the lag/compaction pass below — `drain` itself never throws,
+      // so the only thing that reaches here is the token supplier. Record it as a
+      // no-progress outcome and carry on.
+      byDestination.set(key ?? "", { shipped: 0, batches: 0, lastStatus: 0 });
+      if (error instanceof ReLoginRequiredError) markAuthNotice(opts.projectRoot, "relogin");
+    }
+  }
+
+  // A destination that is broken relative to a WORKING peer would otherwise pin
+  // reclamation until the spool cap starts dropping records for everyone.
+  const progressed = [...byDestination]
+    .filter(([, result]) => result.shipped > 0)
+    .map(([key]) => key);
+  const derelict = box.enforceLag(progressed);
+  if (derelict.length > 0) {
+    // Record the sacrifice, not the bytes: reading a multi-megabyte backlog into
+    // memory just to quarantine it is the cost this cap exists to avoid.
+    appendRejected(
+      opts.projectRoot,
+      derelict.map(({ destKey, from, to }) => ({
+        ts: new Date().toISOString(),
+        status: 0,
+        destination: destKey,
+        reason: "destination_lag" as const,
+        error: `discarded unshipped spool bytes ${from}..${to} — this destination fell more than the per-destination lag cap behind its peers`,
+        experiences: [],
+      })),
+    );
+    // Its OWN notice, not markAuthNotice("connect"): that one is consumed
+    // alongside any 401 marker and worded "queued records will resume shipping",
+    // which for a discard is both swallowable and false.
+    box.markDiscarded(derelict);
+  }
+
+  // A global pass after the loop, because the min can move for reasons no single
+  // drain saw: a fast-forward above raises it without anything having shipped.
+  // Order matters — compact first, then judge emptiness, so a still-overflowing
+  // spool cannot go silent on the next drop.
+  box.compact();
+  if (!box.hasPendingBytes()) box.clearDropEpisode();
+  return { byDestination, derelict };
 }
 
 // --- single-flight lock -----------------------------------------------------
@@ -595,37 +788,24 @@ if (import.meta.main) {
   const cfg = projectRoot ? loadProjectConfig(projectRoot) : undefined;
   if (cfg && captureEnabled(cfg) && acquireLock(cfg.projectRoot)) {
     try {
-      if (cfg.authMode === "oauth") {
-        const token = await accessTokenForProfile(cfg.profileId!);
-        let result = await drain({
-          url: experiencesUrl(cfg),
-          token,
-          neurolinkId: cfg.neurolinkId,
-          authMode: "oauth",
-          projectRoot: cfg.projectRoot,
-        });
-        if (result.lastStatus === 401) {
-          const refreshed = await accessTokenForProfile(cfg.profileId!, true);
-          result = await drain({
-            url: experiencesUrl(cfg),
-            token: refreshed,
-            neurolinkId: cfg.neurolinkId,
-            authMode: "oauth",
-            projectRoot: cfg.projectRoot,
-          });
-        }
-        const notice = shippingNotice("oauth", result.lastStatus);
-        if (notice) markAuthNotice(cfg.projectRoot, notice);
-      } else {
-        const result = await drain({
-          url: experiencesUrl(cfg),
-          token: cfg.apiKey,
-          authMode: "api-key",
-          projectRoot: cfg.projectRoot,
-        });
-        const notice = shippingNotice("api-key", result.lastStatus);
-        if (notice) markAuthNotice(cfg.projectRoot, notice);
-      }
+      // Both credential kinds now take the same path: oauth fans out to every
+      // configured Neurolink, a platform key ships once to the single unnamed
+      // route the key itself resolves server-side.
+      const result = await drainAll({
+        projectRoot: cfg.projectRoot,
+        url: experiencesUrl(cfg),
+        authMode: cfg.authMode,
+        neurolinkIds: cfg.authMode === "oauth" ? cfg.neurolinkIds! : [undefined],
+        token: (refresh) =>
+          cfg.authMode === "oauth"
+            ? accessTokenForProfile(cfg.profileId!, refresh)
+            : Promise.resolve(cfg.apiKey),
+      });
+      const notice = fanOutNotice(
+        cfg.authMode,
+        [...result.byDestination.values()].map((r) => r.lastStatus),
+      );
+      if (notice) markAuthNotice(cfg.projectRoot, notice);
     } catch (error) {
       // The outbox cursor was not advanced. Surface a single actionable notice
       // at the next SessionStart instead of losing queued records or spamming hooks.

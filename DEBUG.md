@@ -30,11 +30,11 @@ connecting a project has no environment to choose, so an agent that knows about
 one can offer a decision nobody can answer. And a flag would have to be applied
 to *every* verb: `--await-login` compares the pending grant's issuer and client id
 against fresh discovery and **clears the grant** on mismatch
-(`scripts/connect.ts:695`), so one verb missing the flag mid-flow throws away a
+(`scripts/connect.ts:973`), so one verb missing the flag mid-flow throws away a
 sign-in the user already authorized in their browser. A process-wide variable
 cannot be applied to only some of the verbs.
 
-Disclosure is unaffected. `environmentLabel` (`scripts/connect.ts:599`) reads the
+Disclosure is unaffected. `environmentLabel` (`scripts/connect.ts:826`) reads the
 same variable, so every payload's `environment` field becomes the literal URL
 instead of `prod`, and `SKILL.md` requires the agent to state a non-prod
 environment in both the Neurospace question and the confirmation. If a skill run
@@ -77,9 +77,12 @@ bun scripts/dev-e2e.ts \
   --control-url https://dev.augenta.ai
 ```
 
-The connect step needs an interactive terminal: the Neurospace choice is
-`alwaysAsk`, and `choose` refuses a non-TTY rather than print a menu nobody can
-answer. This is the positive human OAuth gate described in `AGENTS.md`; GitHub
+The connect step needs an interactive terminal: the Neurospace choice goes through
+`chooseMany`, which refuses a non-TTY rather than print a menu nobody can answer.
+It is a comma-separated multi-select (`1,3`) over every Neurospace, with the
+project's current destinations marked `[x]`, and it always asks — there is no
+auto-select even for a single Neurospace. **An empty answer connects nothing**, so
+the dev loop must type at least one number. This is the positive human OAuth gate described in `AGENTS.md`; GitHub
 Actions verifies the platform-key path instead and must never receive a human
 access or refresh token.
 
@@ -94,7 +97,7 @@ selection is a connect-time decision, recorded in the config.
 | `~/.augenta/auth.json` | completed sign-in | removes every stored profile; all connected projects need a fresh sign-in |
 | `~/.augenta/pending-login.json` | `--login` | abandons an in-flight grant |
 | `~/.augenta/state/connect-prompted.json` | SessionStart | the one-time connect offer fires again for that project |
-| `<project>/.augenta/config.json` | connect | disconnects the project; capture returns to a silent no-op |
+| `<project>/.augenta/config.json` | connect | disconnects the project from all destinations; capture returns to a silent no-op |
 
 A stale `pending-login.json` from another environment is self-healing: the next
 `--await-login` recognizes the foreign issuer, clears it, and asks for a fresh

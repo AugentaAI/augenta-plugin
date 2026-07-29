@@ -18,9 +18,9 @@ activity alone.
   diff.
 - **Build memory from real work.** Give Augenta a continuous record of agent
   activity instead of relying on someone to document every discovery by hand.
-- **Share learning across a Neurospace.** Turn isolated agent sessions into
+- **Share learning across your Neurospaces.** Turn isolated agent sessions into
   useful organizational context for the people and agents working alongside
-  them.
+  them. A project can feed one Neurospace or several.
 - **Capture without changing your workflow.** Once a project is connected,
   Augenta runs quietly in the background and tolerates temporary network
   failures without interrupting the agent.
@@ -80,8 +80,9 @@ in Claude's Code tab or ChatGPT's Codex mode.
 Connection is a deliberate per-project opt-in. Run `/augenta:connect` (Codex:
 `$augenta:connect` or "Connect Augenta") and answer in the chat:
 
-1. Pick the Neurospace this project should feed, or decline. That single choice is
-   the consent boundary.
+1. Pick **every** Neurospace this project should feed — one, several, or none.
+   That choice is the consent boundary, and **each one you pick receives the full
+   record**.
 2. The first time only, click the `auth.augenta.ai` link your agent shows you.
    Later projects reuse that sign-in and skip this step.
 
@@ -96,26 +97,51 @@ bun "<plugin-root>/scripts/connect.ts"
 
 Either way it reuses your owner-only global sign-in when possible, otherwise
 starts device login. It displays the authenticated organization, always requires
-you to select a Neurospace, creates or retargets an inbound agent Neurolink
-through the normal `/v1` API, verifies it, and writes this private, self-ignored
-project directory:
+you to select the Neurospaces, creates or reuses **one inbound agent Neurolink per
+selected Neurospace** through the normal `/v1` API, verifies each, and writes this
+private, self-ignored project directory:
 
 ```text
 <project>/.augenta/
 ├── .gitignore     "*"  — prevents the directory from being committed
-└── config.json    profileId, neurolinkId, optional endpoint (mode 0600)
+└── config.json    profileId, neurolinkIds, optional endpoint (mode 0600)
 ```
 
 Rotating access and refresh tokens live only in `~/.augenta/auth.json` (mode
 `0600`, inside a `0700` directory). The project stores no OAuth token,
 organization id, or Neurospace id. Autonomous services and CI can use the
-advanced `--api-key <AugentaKey>` option; the assigned Neurolink is derived
-server-side.
+advanced `--api-key <AugentaKey>` option; that path is single-destination and the
+assigned Neurolink is derived server-side.
 
 The presence of a **readable** `.augenta/config.json` is the project's consent to
 capture both agent activity and project memory. Delete that file—or the entire
 `.augenta/` directory—to stop capture for the project. Set
 `AUGENTA_CAPTURE_ENABLED=0` to disable both globally.
+
+### Sending to several Neurospaces
+
+A project can feed more than one Neurospace. Each gets its own inbound Neurolink,
+and **every one receives the full record** — the same activity steps, the same raw
+transcript lines, and the same memory documents, complete, in each. It is a copy
+to each destination, not a split between them.
+
+So the audience for a connected project is the **union** of everyone with access
+to any Neurospace you selected. That is the number worth thinking about before you
+add a second destination, and it is why the raw-transcript caveat above applies to
+each one.
+
+Re-running `/augenta:connect` **replaces the whole set**: the answer is the
+complete list of destinations, with the current ones shown already selected. A
+Neurospace you deselect stops receiving this project immediately — its id is
+dropped from `config.json` — while its Neurolink is left in place and idle on the
+platform, so nothing is disabled or deleted on your behalf and re-selecting it
+later picks up the same link. There is no "select nothing" answer that
+disconnects an already-connected project; deleting `.augenta/config.json` is how
+you turn it all off.
+
+One broken destination cannot stall the others: each keeps its own position in the
+project's outbox, so a Neurospace that is temporarily unreachable simply catches
+up on a later turn.
 
 ### Upgrading from an earlier version
 
@@ -126,6 +152,10 @@ per project after upgrading:
   script, under an authentication scheme the platform no longer accepts.
 - **Connected on 0.3.x** — the project's `authMode` uses the older `workos`
   spelling, replaced by the provider-neutral `oauth`.
+
+Projects connected on **0.5.x keep working** and need no action: their single
+Neurolink is read forward as a one-destination set. Re-run `/augenta:connect` when
+you want to add a second Neurospace.
 
 Neither is migrated automatically: reusing an old credential or routing decision
 would turn a clear reconnect into an unexplained authentication failure. Each such
@@ -155,7 +185,8 @@ finishes, it sends two complementary forms of activity to your Neurospace:
 > structurally sanitized to remove opaque reasoning artifacts, then uploaded.
 > Connecting a project consents to uploading both the scrubbed event stream
 > and these raw transcript records. Only connect projects whose agent
-> activity you are comfortable sending to your Augenta Neurospace.
+> activity you are comfortable sending to **every** Augenta Neurospace you
+> select.
 
 Project memory is captured separately from trajectory activity. Memory becomes
 standalone scrubbed Markdown document experiences; it is never appended to raw

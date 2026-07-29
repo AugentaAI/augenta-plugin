@@ -40,7 +40,7 @@ const KNOWN_HOOK_EVENTS = new Set([
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.5.1";
+const RELEASE_VERSION = "0.6.0";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -216,9 +216,15 @@ describe("the connect skill drives connect itself", () => {
   const flat = skill.replace(/\s+/g, " ");
 
   test("drives every JSON verb the CLI exposes", () => {
-    for (const verb of ["--json", "--probe", "--login", "--await-login", "--neurospace"]) {
-      expect(skill).toContain(verb);
+    // Word-boundary, not substring: a renamed `--neurospaces` would satisfy
+    // `toContain("--neurospace")` VACUOUSLY while the CLI verb no longer exists.
+    for (const verb of ["--json", "--probe", "--login", "--await-login", "--neurospace", "--profile"]) {
+      expect(skill).toMatch(new RegExp(`${verb}(?![\\w-])`));
     }
+  });
+
+  test("tells the agent the destination flag is repeatable", () => {
+    expect(flat).toMatch(/Repeat `--neurospace` once per selected Neurospace/);
   });
 
   test("resolves the script from the skill's own directory, never from $CLAUDE_PLUGIN_ROOT", () => {
@@ -281,6 +287,125 @@ describe("the connect skill drives connect itself", () => {
     // environmentLabel reads the variable, so `environment` still reports a
     // non-prod target and the agent still has to say so.
     expect(flat).toMatch(/not `prod`, say so/);
+  });
+});
+
+/**
+ * The consent gate is the one place a privacy invariant is enforced by INSTRUCTION
+ * rather than by code, so it is pinned the same way the rest of this file pins the
+ * identity-provider rule: a file the sentence is merely absent from constrains
+ * nothing the model generates.
+ */
+describe("the consent gate is plural, explicit, and fully disclosed", () => {
+  const skill = readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8");
+  const flat = skill.replace(/\s+/g, " ");
+  const agents = readFileSync(join(PLUGIN_ROOT, "AGENTS.md"), "utf8").replace(/\s+/g, " ");
+  const readme = readFileSync(join(PLUGIN_ROOT, "README.md"), "utf8").replace(/\s+/g, " ");
+
+  test("the answer is the COMPLETE set, with no keep-current shortcut", () => {
+    expect(flat).toMatch(/answer is the complete set of destinations/i);
+    // A "keep current settings" affordance looks helpful and IS a default, which
+    // is the specific way this invariant dies — so the PROHIBITION is what gets
+    // pinned. (Asserting the phrase is absent would only catch the ban itself.)
+    expect(flat).toMatch(/Never offer to keep the current selection without showing it/i);
+    expect(flat).toMatch(/Ask it every time/i);
+    expect(flat).toMatch(/never treat one answer as authorization for more than one destination/i);
+    expect(flat).toMatch(/never proceed on silence/i);
+  });
+
+  test("discloses the FULL RECORD and the UNION audience before the user answers", () => {
+    // The highest-value assertion in this release. A list of Neurospace names does
+    // not tell a user how many humans can read their transcripts; these sentences
+    // do, and without them a multi-select reasonably reads as "split between" or
+    // "primary plus backup".
+    expect(flat).toMatch(/full record/);
+    expect(flat).toMatch(/anyone with access to any selected Neurospace/i);
+    expect(flat).toMatch(/union/);
+    // And the raw-transcript caveat, whose weight scales with the audience.
+    expect(flat).toMatch(/not\*\* secret-scrubbed/);
+  });
+
+  test("the multi-select instruction stays portable across harnesses", () => {
+    // Codex has no AskUserQuestion, so the skill names the MECHANISM and gives a
+    // plain-text fallback — never a harness-internal parameter name.
+    expect(flat).toMatch(/can offer several options at once/i);
+    expect(flat).toMatch(/If it cannot\*\*, ask in plain text/i);
+    expect(skill).not.toMatch(/multiSelect/);
+    // The echo-back is asymmetric on purpose: a typed answer is an inference the
+    // user never saw rendered, and inference is what the invariant bans.
+    expect(flat).toMatch(/restate the set by name and get a yes/i);
+  });
+
+  test("a contradictory decline fails CLOSED instead of being guessed", () => {
+    expect(skill).toContain("Don't connect this project");
+    expect(flat).toMatch(/has no meaning: say so and ask again/i);
+    expect(flat).toMatch(/Do not connect\./);
+  });
+
+  test("removals are named, and are non-destructive", () => {
+    expect(flat).toMatch(/no longer\s+\*\*sends\*\*|no longer sends/i);
+    expect(flat).toMatch(/left in place and idle/i);
+    expect(flat).toMatch(/nothing was disabled\s*or deleted/i);
+  });
+
+  test("partial success has its own branch and is never reported as full success", () => {
+    expect(skill).toContain("partially_connected");
+    expect(skill).toContain("no_destination_linked");
+    expect(flat).toMatch(/Do not describe the result as connected to everything/i);
+    // A kept destination that failed is a CHANGE of state, not a failure to add.
+    expect(skill).toContain("wasConnected");
+    expect(flat).toMatch(/was\*\* feeding and no longer is/i);
+  });
+
+  test("selecting nothing is never described as disconnecting", () => {
+    // Writing no config leaves the previous destinations on disk and still
+    // shipping, so the one thing that must not be claimed is that capture stopped.
+    expect(agents).toMatch(/writing NOTHING leaves the previous set on disk and still shipping/i);
+    expect(agents).toMatch(/selecting nothing for an already-connected project changes nothing/i);
+    expect(flat).toMatch(/no "select nothing" answer that disconnects/i);
+  });
+
+  test("the discard path is documented as its own notice, with hysteresis", () => {
+    // Both were review findings: the reused reconnect notice was swallowable AND
+    // its wording was false, and a single failed request could discard a backlog.
+    expect(agents).toMatch(/LAG_STRIKES` \*\*consecutive\*\*/);
+    expect(agents).toMatch(/markDiscarded/);
+    expect(agents).toMatch(/an offline stretch .* can never trip it/i);
+    expect(agents).toMatch(/furthest destination rather than the nearest/i);
+  });
+
+  test("the skill reports EVERY destination, never just the first", () => {
+    expect(skill).toContain("destinations");
+    expect(flat).toMatch(/name \*\*every\*\* entry in `destinations`/i);
+    expect(skill).toContain("unresolvedNeurolinkIds");
+  });
+
+  test("AGENTS.md records the new consent semantics as invariants", () => {
+    for (const phrase of [
+      /complete set of destinations/,
+      /union/,
+      /left in place and idle/,
+      /subset of the set the user just confirmed/,
+      /platform-key path stays single-destination/i,
+      /widening a field's shape without changing its meaning is not migration/i,
+    ]) {
+      expect(agents).toMatch(phrase);
+    }
+  });
+
+  test("README states the plural consent step and the union audience", () => {
+    expect(readme).toMatch(/every\*\* Neurospace this project should feed/i);
+    expect(readme).toMatch(/union/);
+    // The old singular framing must not survive alongside the new one.
+    expect(readme).not.toMatch(/That single choice is the consent boundary/);
+  });
+
+  test("the platform-key single-destination ban is pinned in the source", () => {
+    // So the next reader does not "finish the job" by fanning out a path that has
+    // no consent gate and no field in which to express a route.
+    const source = readFileSync(join(PLUGIN_ROOT, "scripts", "connect.ts"), "utf8");
+    expect(source).toMatch(/capture requires exactly one/);
+    expect(source.replace(/\s+/g, " ")).toMatch(/This ban SURVIVES fan-out/);
   });
 });
 
