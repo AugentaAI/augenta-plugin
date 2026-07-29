@@ -43,6 +43,7 @@
  * together). Pure Bun/Node builtins so it runs from the installed plugin
  * location.
  */
+import { isMain } from "../runtime/node";
 import { join, dirname } from "node:path";
 import { mkdirSync, openSync, writeSync, closeSync, unlinkSync, statSync, appendFileSync } from "node:fs";
 import {
@@ -780,7 +781,7 @@ export function releaseLock(projectRoot: string): void {
   }
 }
 
-if (import.meta.main) {
+if (isMain(import.meta.url)) {
   // The capture hook passes the project root as argv[2]; the project's own
   // config (consent + key + optional endpoint) decides whether and where to
   // ship. Missing/invalid argv or config → silent exit.

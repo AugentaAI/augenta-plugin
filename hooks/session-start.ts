@@ -45,6 +45,7 @@ import { Outbox } from "../capture/outbox";
 import { spawnShipper } from "../capture/capture";
 import { captureAgentMemory } from "../capture/memory";
 import { takeAuthNotice } from "../capture/auth";
+import { readStdin } from "../runtime/node";
 
 // SessionStart passes a JSON payload on stdin; we need the transcript path (to
 // tell which harness we're in) and cwd (to find the project), and we must
@@ -52,7 +53,7 @@ import { takeAuthNotice } from "../capture/auth";
 let transcriptPath: string | undefined;
 let cwd: string | undefined;
 try {
-  const payload = JSON.parse(await Bun.stdin.text()) as { transcript_path?: unknown; cwd?: unknown };
+  const payload = JSON.parse(await readStdin()) as { transcript_path?: unknown; cwd?: unknown };
   if (typeof payload.transcript_path === "string") transcriptPath = payload.transcript_path;
   if (typeof payload.cwd === "string") cwd = payload.cwd;
 } catch {

@@ -40,7 +40,7 @@ const KNOWN_HOOK_EVENTS = new Set([
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.6.0";
+const RELEASE_VERSION = "0.6.1";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -642,6 +642,8 @@ describe("manifests — cross-harness packaging and one version", () => {
         expect(group.hooks).toHaveLength(1);
         for (const h of group.hooks) {
           expect(h.timeout).toBe(expectedTimeouts[event]);
+          expect(h.command).toStartWith("node ");
+          expect(h.command.toLowerCase()).not.toContain("bun");
           expect(h.command).toMatch(/"\$\{CLAUDE_PLUGIN_ROOT\}\//);
           const refs = referencedPaths(h.command);
           expect(refs.length, `hook command references no resolvable file: ${h.command}`)

@@ -1,6 +1,6 @@
 {
   "name": "augenta-plugin",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
@@ -8,6 +8,7 @@
   "homepage": "https://augenta.ai",
   "repository": "https://github.com/AugentaAI/augenta-plugin",
   "scripts": {
+    "build": "bun build hooks/session-start.ts hooks/user-prompt.ts capture/capture.ts capture/ship.ts scripts/connect.ts --target=node --outdir=dist",
     "test": "bun test",
     "test:e2e": "bun test __tests__/memory-capture.e2e.test.ts",
     "e2e:dev": "bun scripts/dev-e2e.ts",
