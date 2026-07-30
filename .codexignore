@@ -5,3 +5,8 @@ __tests__/
 bun.lock
 *.log
 .DS_Store
+
+# Contributor tooling: the repo's own dev skills (PR review, issue triage) that the
+# agentic CI workflows run. Neither manifest reaches .claude/ — both declare
+# "skills": "./skills/" — so this is bundle hygiene, not a correctness fix.
+.claude/

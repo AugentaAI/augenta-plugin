@@ -1,0 +1,123 @@
+name: Claude Auto-Triage
+
+# Fires the moment an issue OR a pull request is opened, and labels it for
+# documentation — no `@claude` mention required. This is the *only* step that
+# runs without a human in the loop; it classifies and labels, then stops.
+#
+# Every forward gate stays human-owned: triage never edits code, never starts
+# implementation, and merge is gated by branch protection (required CI check +
+# human approval).
+#
+# Labels: this repo has no `type:`/`area:`/`complexity:` schema — only GitHub's
+# defaults plus `codex`. So the agent is told to read `gh label list` first and
+# apply ONLY labels that already exist. Area and complexity have no label to hang
+# them on, so they are recorded in the triage comment as prose instead of being
+# dropped. Adding a label the repo doesn't have would fail the `gh issue edit`
+# call outright.
+#
+# Activation note: `issues` events read this file from the DEFAULT branch, so the
+# issue path goes live only after this is merged to `main`. `pull_request` events
+# read it from the PR head, so the PR path self-tests on the PR that adds it.
+#
+# Fork note: PRs from forks get a read-only token and no secrets, so this job
+# simply won't run for them — which is the safe default.
+
+on:
+  issues:
+    types: [opened]
+  pull_request:
+    types: [opened]
+
+concurrency:
+  group: auto-triage-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  triage-issue:
+    if: github.event_name == 'issues' && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read       # read the skill files + repo context (no write — triage never edits code)
+      issues: write        # apply labels + post the triage comment
+      id-token: write      # OAuth for the Claude action
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Auto-triage the new issue
+        uses: anthropics/claude-code-action@v1
+        env:
+          # Guarantee `gh` in the agent's shell is authenticated (same scoped token
+          # as this job's permissions) so label/comment calls can't silently no-op.
+          GH_TOKEN: ${{ github.token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: >-
+            A new issue was just opened: #${{ github.event.issue.number }}.
+            Use the `triage-issue` skill (.claude/skills/triage-issue/SKILL.md) to triage it:
+            read the issue, run `gh label list` FIRST and apply only best-fit labels that
+            already exist in this repo, check for duplicates, and post the single structured
+            triage comment with the "📋 triage-agent" marker. Record the affected area of the
+            plugin and your complexity estimate in the comment body — this repo has no
+            `area:`/`complexity:` labels.
+            NEVER invent a label. If no existing label fits a dimension, say so in the comment.
+            If the issue describes a vulnerability, flag it prominently in the comment and
+            never post exploit detail publicly — there is no `topic:security` label here.
+            HARD RULES: never start implementation and never edit code.
+            Labels + one triage comment only.
+          # NOTE: --allowed-tools must be ONE quoted, comma-separated arg. A space-
+          # separated list gets word-split by the action and shreds every Bash(...)
+          # pattern containing a space (e.g. "Bash(gh issue edit*)"), silently denying
+          # the agent's label/comment calls. Use the `:*` wildcard, not a bare `*`.
+          claude_args: >-
+            --allowed-tools
+            "Read,Grep,Glob,Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue list:*),Bash(gh issue comment:*),Bash(gh label list:*),Bash(git log:*),Bash(ls:*),Bash(cat:*),Bash(grep:*),Bash(find:*),Bash(jq:*)"
+            --model
+            claude-haiku-4-5-20251001
+
+  triage-pr:
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read       # read the diff + skill files (no write — triage never edits code)
+      pull-requests: write # apply labels + post the summary comment
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Auto-label the new PR
+        uses: anthropics/claude-code-action@v1
+        env:
+          # Guarantee `gh` in the agent's shell is authenticated (same scoped token
+          # as this job's permissions) so label/comment calls can't silently no-op.
+          GH_TOKEN: ${{ github.token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: >-
+            PR #${{ github.event.pull_request.number }} was just opened.
+            Label it for documentation: run `gh label list` FIRST, then read the diff
+            (gh pr diff) and the PR title/body, and apply only best-fit labels that already
+            exist in this repo. Apply `codex` when the change is specific to the Codex
+            harness. Post one concise comment with the "📋 triage-agent" marker listing the
+            labels applied, the plugin surface the diff touches (capture pipeline, hooks,
+            connect skill, connect script, packaging/manifests, CI, docs), and a one-line
+            summary of the PR's intent.
+            NEVER invent a label. If the diff touches security-sensitive code, say so in the
+            comment — there is no `topic:security` label here.
+            Note if the diff touches hooks/hooks.json: any edit there re-prompts every Codex
+            user for hook trust, so flag it for the reviewer.
+            HARD RULES: do NOT approve, merge, request changes, push commits, or edit code.
+            Labels + one summary comment only. The review itself is a separate workflow.
+          # See the note in the triage-issue job: one quoted, comma-separated arg; `:*` wildcard.
+          claude_args: >-
+            --allowed-tools
+            "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr edit:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*),Bash(gh label list:*),Bash(git diff:*),Bash(git log:*),Bash(ls:*),Bash(cat:*),Bash(grep:*),Bash(find:*),Bash(jq:*)"
+            --model
+            claude-haiku-4-5-20251001

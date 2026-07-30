@@ -1,0 +1,79 @@
+name: Claude Code Review
+
+# Autonomous PR review — fires the moment a PR is opened (or marked ready / reopened),
+# no @claude mention required. Runs this repo's own `review-github-pr` skill so the
+# review is consistent: the 👁️ review-agent marker, a resolved Approve/Request-changes/
+# Needs-discussion verdict, and the AGENTS.md invariants the skill enforces.
+#
+# Review-only: it comments, it does NOT edit code, approve, or merge — a human still
+# owns the formal approval.
+#
+# Why an LLM reviewer earns its keep here: `ci.yml` already proves the mechanical half
+# (typecheck, tests, a real marketplace install in both harnesses). What it cannot prove
+# is that a diff still honours AGENTS.md's privacy and cross-harness packaging
+# invariants — no credential through the agent, consent asked every time as a complete
+# destination set, an atomic version bump, a hook timeout that is the MINIMUM both
+# harnesses allow. Those are the checks this workflow exists for.
+#
+# Activation note: `pull_request` events read this file from the PR head, so this path
+# self-tests on the PR that adds it.
+#
+# Fork note: PRs from forks get a read-only token and no secrets, so this job simply
+# won't run for them — which is the safe default.
+#
+# Drafts are skipped until marked "ready for review" to avoid reviewing work-in-progress.
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  claude-review:
+    if: github.event.pull_request.draft == false && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read        # read the diff + skill files (no write — review never edits code)
+      pull-requests: write  # post the review comment
+      issues: read          # read the linked issue for intent
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        env:
+          # Guarantee `gh` in the agent's shell is authenticated (same scoped token
+          # as this job's permissions) so the review comment can't silently no-op.
+          GH_TOKEN: ${{ github.token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: '*'
+          prompt: >-
+            Review pull request #${{ github.event.pull_request.number }} using the
+            review-github-pr skill (.claude/skills/review-github-pr/SKILL.md): read the diff
+            and the linked issue, then assess it against AGENTS.md's invariants — privacy and
+            consent, cross-harness packaging, atomic version changes — plus correctness,
+            security, performance, consistency, and completeness. Post the single structured
+            "👁️ review-agent" comment with a resolved verdict (Approve / Request changes /
+            Needs discussion).
+            AGENTS.md is the source of truth for the invariants; read it, do not rely on
+            memory of it.
+            HARD RULES: do NOT formally approve the PR, do NOT merge, do NOT push commits or
+            edit code — post one review comment only. A human owns the final approval.
+          # --allowed-tools must be ONE quoted, comma-separated arg with `:*` wildcards.
+          # A space-separated list gets word-split by the action and shreds every Bash(...)
+          # pattern that contains a space, silently denying the agent's `gh pr comment`
+          # (the review post) while the job still reports success.
+          claude_args: >-
+            --allowed-tools
+            "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh label list:*),Bash(git log:*),Bash(git diff:*),Bash(ls:*),Bash(cat:*),Bash(grep:*),Bash(find:*),Bash(jq:*)"
+            --model
+            claude-opus-5
