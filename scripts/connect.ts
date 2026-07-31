@@ -21,6 +21,7 @@ import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { isMain } from "../runtime/node";
 import { ensureAugentaDir } from "../capture/augenta-dir";
 import {
   configPath,
@@ -91,7 +92,7 @@ interface Neurolink {
  * (AGENTS.md → Releases) alongside both plugin manifests, both marketplace files,
  * and package.json; the contract test pins all of them to one value.
  */
-export const PLUGIN_VERSION = "0.6.0";
+export const PLUGIN_VERSION = "0.6.1";
 
 class AugentaRequestError extends Error {
   constructor(
@@ -1310,7 +1311,7 @@ export async function connectWithApiKey(
   };
 }
 
-if (import.meta.main) {
+if (isMain(import.meta.url)) {
   const argv = process.argv.slice(2);
   // Read straight off argv: parseArgs itself can throw, and a caller that asked
   // for JSON must get JSON back even for a bad flag.

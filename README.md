@@ -92,7 +92,7 @@ script's `--json` verbs directly; none of them accepts or emits a credential.
 You can also run the script yourself for the interactive terminal flow:
 
 ```bash
-bun "<plugin-root>/scripts/connect.ts"
+node "<plugin-root>/dist/scripts/connect.js"
 ```
 
 Either way it reuses your owner-only global sign-in when possible, otherwise

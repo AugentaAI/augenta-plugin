@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.ts\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hooks/session-start.js\"",
             "timeout": 5
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt.ts\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hooks/user-prompt.js\"",
             "timeout": 5
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/capture/capture.ts\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/capture/capture.js\"",
             "timeout": 5
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/capture/capture.ts\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/capture/capture.js\"",
             "timeout": 10
           }
         ]
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/capture/capture.ts\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/capture/capture.js\"",
             "timeout": 10
           }
         ]
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/capture/capture.ts\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/capture/capture.js\"",
             "timeout": 3
           }
         ]
@@ -72,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/capture/capture.ts\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/capture/capture.js\"",
             "timeout": 10
           }
         ]
@@ -83,7 +83,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/capture/capture.ts\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/capture/capture.js\"",
             "timeout": 5
           }
         ]

@@ -10,13 +10,14 @@
  */
 import { TurnState } from "../capture/turn-cursor";
 import { projectConfig, captureEnabled } from "../capture/config";
+import { readStdin } from "../runtime/node";
 
 // Read what we need off the UserPromptSubmit payload (stdin). We must consume
 // stdin either way so the process doesn't hang.
 let transcriptPath: string | undefined;
 let cwd: string | undefined;
 try {
-  const payload = JSON.parse(await Bun.stdin.text()) as { transcript_path?: unknown; cwd?: unknown };
+  const payload = JSON.parse(await readStdin()) as { transcript_path?: unknown; cwd?: unknown };
   if (typeof payload.transcript_path === "string") transcriptPath = payload.transcript_path;
   if (typeof payload.cwd === "string") cwd = payload.cwd;
 } catch {

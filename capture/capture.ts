@@ -18,12 +18,13 @@
  * `<project>/.augenta/config.json` (see capture/config.ts). No config → silent
  * exit.
  *
- * Self-contained: only Bun/Node builtins + sibling capture modules, so it runs
+ * Self-contained: only Node builtins + sibling capture modules, so it runs
  * from the installed plugin location with no node_modules.
  */
 import { existsSync, openSync, fstatSync, readSync, closeSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { normalizeClaudeTranscript, normalizeCodexRollout, type Scrubber } from "./normalize";
 import type { CaptureEvent, RawRecord } from "./event";
 import { scrub as defaultScrub } from "./scrub";
@@ -33,6 +34,7 @@ import { TurnState } from "./turn-cursor";
 import { captureEnabled, projectConfig, resolveProjectRoot } from "./config";
 import { captureAgentMemory } from "./memory";
 import { isCodexHarness, sniffHarness } from "../hooks/harness";
+import { isMain, readStdin } from "../runtime/node";
 
 export interface CapturePayload {
   session_id?: string;
@@ -510,7 +512,7 @@ export function runCapture(
  */
 export function spawnShipper(projectRoot: string): void {
   try {
-    const child = spawn("bun", ["run", join(import.meta.dir, "ship.ts"), projectRoot], {
+    const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), "ship.js"), projectRoot], {
       detached: true,
       stdio: "ignore",
       env: process.env,
@@ -521,11 +523,11 @@ export function spawnShipper(projectRoot: string): void {
   }
 }
 
-if (import.meta.main) {
+if (isMain(import.meta.url)) {
   // Hook entrypoint: parse the payload, gate on the project's opt-in, run
   // capture, always exit 0.
   try {
-    const payload = JSON.parse(await Bun.stdin.text()) as CapturePayload;
+    const payload = JSON.parse(await readStdin()) as CapturePayload;
     if (captureEnabled(projectConfig(payload.cwd))) {
       runCapture(payload);
     }
