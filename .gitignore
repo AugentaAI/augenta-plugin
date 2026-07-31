@@ -6,6 +6,11 @@ node_modules/
 # Codex CLI local state — machine-local, not source
 .codex/
 
+# Claude Code's local worktree checkouts. `.claude/` itself IS tracked (it holds the
+# repo's dev skills), so this has to be scoped to the one subdirectory that is
+# machine-local — otherwise every contributor's worktrees show up as untracked noise.
+.claude/worktrees/
+
 # The plugin's own project-scoped state dir (config.json holds the API key) —
 # .augenta/ also self-gitignores via the .gitignore the plugin writes inside it,
 # but never commit one from this repo either.
