@@ -88,7 +88,7 @@ versioned marketplace descriptions at the same time.
 Augenta remains opt-in per project. Do not change telemetry APIs, payloads,
 consent semantics, or capture behavior without an explicit product decision.
 OAuth tokens stay in the owner-only global `~/.augenta/auth.json`; a connected
-project stores only a profile reference and its Neurolink ids. Capture must stay a
+project stores only a profile reference and its Connector ids. Capture must stay a
 silent no-op without project config, and `AUGENTA_CAPTURE_ENABLED=0` remains the
 global kill switch.
 
@@ -122,7 +122,7 @@ audience is the **union** of everyone with access to any of them. When more than
 one is selected, the confirmation also restates that raw transcript records are
 structurally sanitized but not secret-scrubbed. Destinations dropped from the set
 are **named** in the confirmation; they are removed from the project config, which
-stops shipping to them immediately, and their Neurolinks are **left in place and
+stops shipping to them immediately, and their Connectors are **left in place and
 idle** rather than disabled or deleted — the plugin makes no org-level destructive
 change on the strength of a menu answer, and a local removal cannot half-fail the
 way a network mutation can.
@@ -135,7 +135,7 @@ the previous set on disk and still shipping, so no confirmation may claim a
 destination was dropped unless a config was actually written — and selecting
 nothing for an already-connected project changes nothing rather than disconnecting
 it. Deleting `.augenta/config.json` remains the only off switch. Reconnecting never moves an existing
-Neurolink to a different Neurospace — a destination gets its own link, created
+Connector to a different Neurospace — a destination gets its own link, created
 once and adopted thereafter, so history already attached to a link keeps its
 route. A non-production `environment` must be stated to the user before they
 answer.
@@ -143,12 +143,12 @@ answer.
 **The platform-key path stays single-destination.** `--api-key` has no consent
 gate, and the config format it writes has no place to express a route — the key's
 server-side assignment *is* the routing decision, and the shipper sends no
-Neurolink header in that mode. `verifyApiKeyConnection` therefore continues to
-refuse a key assigned to more than one Neurolink. Fan-out exists because a human
+Connector header in that mode. `verifyApiKeyConnection` therefore continues to
+refuse a key assigned to more than one Connector. Fan-out exists because a human
 affirmed a set; nothing here affirms one.
 
 **One wedged destination must not cost the others.** Spool reclamation is gated on
-the slowest destination, so a permanently broken Neurolink — a 403 is transient and
+the slowest destination, so a permanently broken Connector — a 403 is transient and
 retries forever — would fill `MAX_SPOOL_BYTES` and start dropping records for every
 destination. `Outbox.enforceLag` bounds that by fast-forwarding a destination that
 falls more than `MAX_DEST_LAG_BYTES` behind the furthest one.
@@ -180,11 +180,10 @@ carried forward. A config this version cannot parse becomes session-start's
 one-time reconnect prompt, which is a clear ask; reusing an old credential or
 routing decision would instead surface later as an unexplained 401.
 
-Widening a field's shape without changing its meaning is not migration. A 0.5.x
-config's scalar `neurolinkId` parses as the one-element `neurolinkIds` set: the
-same link id keeps meaning exactly what it meant, no credential or routing
-decision is re-derived, and rejecting it would hand a silent capture outage plus a
-single reconnect prompt to every already-connected project for a change they did
-not ask for. What is still never carried forward is a config whose *meaning*
-changed (the pre-0.4.0 `authMode: "workos"` spelling, the pre-0.3.0 `{apiKey}`
-file) or that cannot be read at all. The write path emits only the plural form.
+`connectorIds` is the **only** routing key read, and only as an array. A scalar
+is not read forward, and neither is any other spelling: 0.7.0 renamed the
+routing surface end to end, so an id written against the old surface is a guess,
+not a migration. A config keyed the old way is simply unparseable and becomes
+the reconnect prompt — as does a config whose *meaning* changed (the pre-0.4.0
+`authMode: "workos"` spelling, the pre-0.3.0 `{apiKey}` file) or that cannot be
+read at all. The write path emits only the plural form.

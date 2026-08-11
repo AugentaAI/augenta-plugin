@@ -493,7 +493,7 @@ describe("Outbox", () => {
 
       test("discards nothing until the laggard has failed LAG_STRIKES times", () => {
         // The hysteresis IS the safety margin: one timed-out POST on the first
-        // drain after a week offline looks exactly like a dead Neurolink, and
+        // drain after a week offline looks exactly like a dead Connector, and
         // deleting a week of records on that evidence is the bug this prevents.
         const tiny = new Outbox(home, { maxDestLagBytes: 10 });
         tiny.append([ev(0), ev(1), ev(2)]);

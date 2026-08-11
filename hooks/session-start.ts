@@ -84,7 +84,7 @@ if (connectedRoot) {
       const reason =
         authNotice === "relogin"
           ? "a new Augenta sign-in"
-          : "a valid inbound Neurolink";
+          : "a valid inbound Connector";
       notices.push(
         `Augenta has queued capture waiting for ${reason}. Run ${action}; queued records will resume shipping after reconnecting.`,
       );

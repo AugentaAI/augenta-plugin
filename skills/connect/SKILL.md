@@ -1,6 +1,6 @@
 ---
 name: connect
-description: Connect the current project to Augenta Neurospaces through Neurolinks. Use when the user runs /augenta:connect, invokes $augenta:connect, or asks to connect or enable Augenta. The user signs in to Augenta once, explicitly selects every Neurospace this project should feed, and the project stores only a global profile reference and its Neurolink ids.
+description: Connect the current project to Augenta Neurospaces through Connectors. Use when the user runs /augenta:connect, invokes $augenta:connect, or asks to connect or enable Augenta. The user signs in to Augenta once, explicitly selects every Neurospace this project should feed, and the project stores only a global profile reference and its Connector ids.
 allowed-tools: AskUserQuestion, Bash, Read
 ---
 
@@ -9,7 +9,7 @@ allowed-tools: AskUserQuestion, Bash, Read
 Connect the current project to Augenta activity and project-memory capture.
 Connected projects send normalized activity steps, structurally sanitized raw
 transcript lines, and matching scrubbed memory documents through one inbound
-Neurolink per explicitly selected Neurospace. **Every selected Neurospace
+Connector per explicitly selected Neurospace. **Every selected Neurospace
 receives the full record — the same activity and memory, complete, in each.**
 Connection is per project and is the user's consent boundary.
 
@@ -79,7 +79,7 @@ pre-select in step 3. Two cases there need saying out loud rather than quietly
 dropping, because the project is still shipping to them and the answer in step 3
 replaces the whole set:
 
-- `unresolvedNeurolinkIds` — destinations whose Neurolink you cannot read at all.
+- `unresolvedConnectorIds` — destinations whose Connector you cannot read at all.
 - a `destinations` entry with no `neurospaceName` — its Neurospace is no longer in
   the organization's list, so it cannot be offered as an option in step 3 and will
   be dropped by whatever the user answers.
@@ -89,7 +89,7 @@ replaces the whole set:
 Ask whether to sign in to Augenta, in one sentence: capture is per project, it
 sends this project's agent activity and matching project memory, and sign-in is
 stored globally in `~/.augenta/auth.json` while the project itself stores only a
-profile reference and its Neurolink ids. If the user declines, acknowledge and
+profile reference and its Connector ids. If the user declines, acknowledge and
 stop.
 
 ```bash
@@ -158,18 +158,18 @@ names. If `--probe` returned `need_profile`, ask which organization first and ad
 ## 4. Confirm
 
 On `connected`, name **every** entry in `destinations` — this project now feeds
-each of them, through that entry's `neurolinkId`. When there is more than one,
+each of them, through that entry's `connectorId`. When there is more than one,
 restate that the full record goes to each, so the audience is the union. Name the
 environment if it is not `prod`. Restate that raw transcript records are
 structurally sanitized but **not** secret-scrubbed, and that this now applies to
 every destination you just named.
 
 If `removed` is non-empty, name each removed Neurospace: this project **no longer
-sends** to it. Its Neurolink is **left in place and idle** — nothing was disabled
+sends** to it. Its Connector is **left in place and idle** — nothing was disabled
 or deleted; the user can remove it in Augenta if they want it gone.
 
-If `unresolvedNeurolinkIds` is present, say that this project listed those
-Neurolinks but they are no longer readable, so they have been dropped.
+If `unresolvedConnectorIds` is present, say that this project listed those
+Connectors but they are no longer readable, so they have been dropped.
 
 On `partially_connected`, report the truth in that order: which destinations
 **are** live now (capture to them is on) — including the full-record and

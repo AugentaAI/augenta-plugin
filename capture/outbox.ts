@@ -15,10 +15,10 @@
  * documents. Layout (under <project>/.augenta/outbox/, created via
  * ensureAugentaDir so the dir always self-gitignores):
  *   spool.jsonl   append-only canonical records, one JSON per line
- *   cursor.json   { shipped: <min offset>, links?: { <neurolinkId>: <offset> } }
+ *   cursor.json   { shipped: <min offset>, links?: { <connectorId>: <offset> } }
  *
  * ONE spool, N cursors. A project may feed several Neurospaces, and each
- * destination is an independent Neurolink that can be down on its own, so each
+ * destination is an independent Connector that can be down on its own, so each
  * keeps its OWN byte offset in `links`. `shipped` is the derived MINIMUM across
  * them: it is what bounds reclamation (below), and writing the min rather than
  * the max is deliberate — an older build that only understands the scalar
@@ -53,7 +53,7 @@ export const MAX_SPOOL_BYTES = 50 * 1024 * 1024;
  * How far behind its peers one destination may fall before it is declared
  * DERELICT and fast-forwarded (see {@link Outbox.enforceLag}).
  *
- * Reclamation is min-gated, so without this a permanently broken Neurolink — a
+ * Reclamation is min-gated, so without this a permanently broken Connector — a
  * 403 is classified TRANSIENT and so retries forever — pins the spool until it
  * hits {@link MAX_SPOOL_BYTES}, at which point `append` starts refusing records
  * for EVERY destination. A third of the spool cap leaves room for the healthy
@@ -67,7 +67,7 @@ export const MAX_DEST_LAG_BYTES = 16 * 1024 * 1024;
  *
  * The hysteresis is the whole safety margin. A single transient failure — a 10s
  * POST timeout on a big body over a just-recovered link, a 429, a Neurospace-
- * scoped 5xx — looks identical to a dead Neurolink for exactly one drain, and
+ * scoped 5xx — looks identical to a dead Connector for exactly one drain, and
  * treating them the same would delete a week of offline capture on the first
  * reconnect. Over several consecutive drains they stop looking alike.
  */
@@ -448,7 +448,7 @@ export class Outbox {
    *     and ship nothing across {@link LAG_STRIKES} CONSECUTIVE drains, counted in
    *     the cursor. One timed-out POST on the first drain after a week offline
    *     must not cost a week of records: that request is exactly as likely to be
-   *     the recovering network as a dead Neurolink, and the difference only shows
+   *     the recovering network as a dead Connector, and the difference only shows
    *     up over several attempts. Any successful ship resets the count.
    *
    * Lag is measured against the FURTHEST destination, not the nearest. Measuring

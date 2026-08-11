@@ -94,11 +94,11 @@ For each path the diff touches, run the matching checks. A finding here is almos
   link must be reported and omitted. Conversely, writing nothing leaves the previous set
   on disk and still shipping — so no confirmation may claim a destination was dropped
   unless a config was actually written.
-- **Dropped destinations are named**, their Neurolinks are left in place and idle (never
-  disabled or deleted), and reconnecting never moves an existing Neurolink to a different
+- **Dropped destinations are named**, their Connectors are left in place and idle (never
+  disabled or deleted), and reconnecting never moves an existing Connector to a different
   Neurospace.
 - **The platform-key path stays single-destination.** `verifyApiKeyConnection` must still
-  refuse a key assigned to more than one Neurolink.
+  refuse a key assigned to more than one Connector.
 - A non-production `environment` must be stated to the user before they answer.
 
 ### `capture/` — the shipper and the spool
@@ -113,7 +113,7 @@ For each path the diff touches, run the matching checks. A finding here is almos
 - Capture stays a **silent no-op** without project config, and
   `AUGENTA_CAPTURE_ENABLED=0` remains a global kill switch.
 - Tokens stay in the owner-only global `~/.augenta/auth.json`; a connected project stores
-  only a profile reference and its Neurolink ids.
+  only a profile reference and its Connector ids.
 
 ### `hooks/hooks.json` — the Codex trust hash
 
@@ -138,11 +138,11 @@ For each path the diff touches, run the matching checks. A finding here is almos
 
 ### Config parsing — `capture/config.ts`
 
-- Stale configs are **reconnected, not migrated**. Widening a field's shape without
-  changing its meaning is not migration (a 0.5.x scalar `neurolinkId` still parses as the
-  one-element `neurolinkIds` set). A config whose *meaning* changed, or that cannot be
-  read, must become session-start's reconnect prompt. The write path emits only the
-  plural form.
+- Stale configs are **reconnected, not migrated**. `connectorIds` is the only routing
+  key read, and only as an array — no scalar and no other spelling is read forward.
+  A config whose *meaning* changed, that is keyed the old way, or that cannot be read,
+  must become session-start's reconnect prompt. The write path emits only the plural
+  form.
 
 ### Any runtime file — the identity provider
 

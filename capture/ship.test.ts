@@ -55,7 +55,7 @@ function ev(seq: number, opts: Partial<CaptureEvent> = {}): CaptureEvent {
 }
 
 describe("unified authentication headers", () => {
-  test("WorkOS uses bearer plus Neurolink; platform keys use AugentaKey", async () => {
+  test("WorkOS uses bearer plus Connector; platform keys use AugentaKey", async () => {
     const seen: Headers[] = [];
     const server = Bun.serve({
       port: 0,
@@ -73,15 +73,15 @@ describe("unified authentication headers", () => {
       server.stop(true);
     }
     expect(seen[0]!.get("authorization")).toBe("Bearer oauth-token");
-    expect(seen[0]!.get("x-augenta-neurolink-id")).toBe("link_1");
+    expect(seen[0]!.get("x-augenta-connector-id")).toBe("link_1");
     expect(seen[1]!.get("authorization")).toBe(
       "AugentaKey key_public.secret",
     );
-    expect(seen[1]!.get("x-augenta-neurolink-id")).toBeNull();
+    expect(seen[1]!.get("x-augenta-connector-id")).toBeNull();
   });
 
-  test("WorkOS shipping without a Neurolink fails transiently, never into quarantine", async () => {
-    // The door answers a missing X-Augenta-Neurolink-Id with 400, and 400 is a
+  test("WorkOS shipping without a Connector fails transiently, never into quarantine", async () => {
+    // The door answers a missing X-Augenta-Connector-Id with 400, and 400 is a
     // PERMANENT status here — so reaching it would quarantine real records to
     // rejected.jsonl. Throwing first routes it to drain()'s transient path,
     // which leaves the cursor exactly where it was.
@@ -98,7 +98,7 @@ describe("unified authentication headers", () => {
     try {
       await expect(
         postExperiences(url, "oauth-token", [experience], undefined, "oauth"),
-      ).rejects.toThrow("requires a Neurolink id");
+      ).rejects.toThrow("requires a Connector id");
     } finally {
       server.stop(true);
     }
@@ -784,7 +784,7 @@ describe("drain against a real loopback endpoint", () => {
 });
 
 describe("fanOutNotice — the most GLOBAL problem wins", () => {
-  test("a credential problem outranks a per-Neurolink problem", () => {
+  test("a credential problem outranks a per-Connector problem", () => {
     // 401 is the shared credential; 403 is one link. Telling a signed-out user to
     // go check a Neurospace would send them to fix the wrong thing.
     expect(fanOutNotice("oauth", [403, 401])).toBe("relogin");
@@ -820,7 +820,7 @@ describe("fan-out across destinations", () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
-        const dest = req.headers.get("x-augenta-neurolink-id") ?? "";
+        const dest = req.headers.get("x-augenta-connector-id") ?? "";
         const body = (await req.json()) as { experiences: TrajectoryExperience[] };
         const seqs = body.experiences.flatMap((x) =>
           Array.isArray(x.events) ? x.events.map((e) => e.seq) : [],
@@ -846,7 +846,7 @@ describe("fan-out across destinations", () => {
       projectRoot: project,
       url: url(),
       authMode: "oauth",
-      neurolinkIds: ids,
+      connectorIds: ids,
       token: () => Promise.resolve(token),
     });
 
@@ -921,7 +921,7 @@ describe("fan-out across destinations", () => {
       projectRoot: project,
       url: url(),
       authMode: "oauth",
-      neurolinkIds: ["nl_a", "nl_b"],
+      connectorIds: ["nl_a", "nl_b"],
       token: (refresh) => {
         calls.push(refresh);
         return Promise.resolve("tok");
@@ -981,7 +981,7 @@ describe("fan-out across destinations", () => {
         projectRoot: project,
         url: url(),
         authMode: "oauth",
-        neurolinkIds: ["nl_a", "nl_b"],
+        connectorIds: ["nl_a", "nl_b"],
         token: () => Promise.resolve("tok"),
         maxDestLagBytes: 1, // production keeps MAX_DEST_LAG_BYTES
       });
@@ -1024,7 +1024,7 @@ describe("fan-out across destinations", () => {
       projectRoot: project,
       url: url(),
       authMode: "api-key",
-      neurolinkIds: [undefined],
+      connectorIds: [undefined],
       token: () => Promise.resolve("key_public.secret"),
     });
     expect(seqsFor("")).toEqual([0]); // arrived under the empty (absent) header

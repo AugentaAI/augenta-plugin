@@ -344,16 +344,16 @@ export async function postExperiences(
   url: string,
   token: string | undefined,
   experiences: Experience[],
-  neurolinkId?: string,
+  connectorId?: string,
   authMode: AuthMode = "api-key",
 ): Promise<PostResult> {
-  // In oauth mode the Neurolink is the ROUTE — a platform key carries its own
+  // In oauth mode the Connector is the ROUTE — a platform key carries its own
   // assignment, a bearer token does not. The door answers a missing header with
   // 400, which is a PERMANENT status here, so the batch would be quarantined to
   // rejected.jsonl. Throwing instead puts it on the transient path: the cursor
   // holds and the records are still there once the caller is fixed.
-  if (authMode === "oauth" && !neurolinkId) {
-    throw new Error("shipping with an Augenta sign-in requires a Neurolink id");
+  if (authMode === "oauth" && !connectorId) {
+    throw new Error("shipping with an Augenta sign-in requires a Connector id");
   }
   const res = await fetch(url, {
     method: "POST",
@@ -363,8 +363,8 @@ export async function postExperiences(
         ? authMode === "oauth"
           ? {
               authorization: `Bearer ${token}`,
-              ...(neurolinkId
-                ? { "x-augenta-neurolink-id": neurolinkId }
+              ...(connectorId
+                ? { "x-augenta-connector-id": connectorId }
                 : {}),
             }
           : { authorization: `AugentaKey ${token}` }
@@ -432,7 +432,7 @@ function appendRejected(projectRoot: string, entries: RejectedEntry[]): void {
 export interface DrainOptions {
   url: string;
   token?: string;
-  neurolinkId?: string;
+  connectorId?: string;
   authMode?: AuthMode;
   /** Project root holding .augenta/ — the outbox being drained. */
   projectRoot: string;
@@ -499,14 +499,14 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
   let lastStatus = 0;
 
   for (let i = 0; i < maxBatches; i++) {
-    const pending = box.readPending(maxBatch, opts.neurolinkId);
+    const pending = box.readPending(maxBatch, opts.connectorId);
     if (pending.records.length === 0) break;
 
     const experiences = groupIntoExperiences(pending.records).flatMap(boundExperienceSize);
     if (experiences.length === 0) {
       // Every group in this slice was zero-event (unshippable raws) — consume
       // it without a POST so orphaned raws can never wedge the spool.
-      box.advance(pending.endOffset, opts.neurolinkId);
+      box.advance(pending.endOffset, opts.connectorId);
       shipped += pending.records.length;
       if (!pending.hasMore) break;
       continue;
@@ -520,7 +520,7 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
           opts.url,
           opts.token,
           body,
-          opts.neurolinkId,
+          opts.connectorId,
           opts.authMode,
         );
         lastStatus = res.status;
@@ -535,7 +535,7 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
             ts: new Date().toISOString(),
             status: lastStatus,
             ...(res.errText ? { error: res.errText } : {}),
-            ...(opts.neurolinkId ? { destination: opts.neurolinkId } : {}),
+            ...(opts.connectorId ? { destination: opts.connectorId } : {}),
             experiences: body,
           });
           continue;
@@ -555,7 +555,7 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
     if (!sliceOk) break;
 
     if (quarantineBatch.length > 0) appendRejected(opts.projectRoot, quarantineBatch);
-    box.advance(pending.endOffset, opts.neurolinkId);
+    box.advance(pending.endOffset, opts.connectorId);
     shipped += pending.records.length;
     if (!pending.hasMore) break;
   }
@@ -573,7 +573,7 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
 // --- fan-out across destinations --------------------------------------------
 
 export interface FanOutResult {
-  /** Per-destination outcome, keyed by Neurolink id (`""` in api-key mode). */
+  /** Per-destination outcome, keyed by Connector id (`""` in api-key mode). */
   byDestination: Map<string, DrainResult>;
   /** Destinations fast-forwarded past records they never received. */
   derelict: DerelictDestination[];
@@ -584,7 +584,7 @@ export interface FanOutResult {
  *
  * "relogin" outranks "connect" because the two have different scopes: a 401 is a
  * problem with the CREDENTIAL, which every destination shares, while a 403/404 is
- * a problem with ONE Neurolink. Telling a signed-out user to check a Neurospace
+ * a problem with ONE Connector. Telling a signed-out user to check a Neurospace
  * would send them to fix the wrong thing. Pure.
  */
 export function fanOutNotice(
@@ -606,7 +606,7 @@ export function fanOutNotice(
  * The per-destination loop lives here rather than inside {@link drain} on
  * purpose. `drain` already has exactly the right semantics for one destination —
  * transient stops it, permanent quarantines and moves on, the cursor advances per
- * slice — so scoping each call to a single Neurolink makes it *provable* that one
+ * slice — so scoping each call to a single Connector makes it *provable* that one
  * broken destination cannot touch another's cursor, quarantine, or slice
  * boundaries. A 422 for destination B quarantines only B's copy of those bytes;
  * A advanced past them independently on its own 2xx.
@@ -625,8 +625,8 @@ export async function drainAll(opts: {
   projectRoot: string;
   url: string;
   authMode: AuthMode;
-  /** One entry per configured Neurolink; `[undefined]` for a platform key. */
-  neurolinkIds: readonly (string | undefined)[];
+  /** One entry per configured Connector; `[undefined]` for a platform key. */
+  connectorIds: readonly (string | undefined)[];
   /** Token supplier. Called with `true` at most ONCE for the whole fan-out. */
   token: (refresh?: boolean) => Promise<string | undefined>;
   maxBatch?: number;
@@ -639,7 +639,7 @@ export async function drainAll(opts: {
       ? { maxDestLagBytes: opts.maxDestLagBytes }
       : {}),
   });
-  const keys = [...new Set(opts.neurolinkIds)];
+  const keys = [...new Set(opts.connectorIds)];
   const byDestination = new Map<string, DrainResult>();
   if (keys.length === 0) return { byDestination, derelict: [] };
 
@@ -649,7 +649,7 @@ export async function drainAll(opts: {
     // writes the bare scalar and DROPS the whole map, clobbering the named
     // destinations' cursors. Refuse rather than corrupt.
     throw new Error(
-      "drainAll: neurolinkIds must be either all Neurolink ids or exactly [undefined]",
+      "drainAll: connectorIds must be either all Connector ids or exactly [undefined]",
     );
   }
   // Persist the destination set BEFORE the first POST. A crash between a
@@ -683,7 +683,7 @@ export async function drainAll(opts: {
       drain({
         url: opts.url,
         token: bearer,
-        ...(key ? { neurolinkId: key } : {}),
+        ...(key ? { connectorId: key } : {}),
         authMode: opts.authMode,
         projectRoot: opts.projectRoot,
         ...(opts.maxBatch !== undefined ? { maxBatch: opts.maxBatch } : {}),
@@ -789,13 +789,13 @@ if (import.meta.main) {
   if (cfg && captureEnabled(cfg) && acquireLock(cfg.projectRoot)) {
     try {
       // Both credential kinds now take the same path: oauth fans out to every
-      // configured Neurolink, a platform key ships once to the single unnamed
+      // configured Connector, a platform key ships once to the single unnamed
       // route the key itself resolves server-side.
       const result = await drainAll({
         projectRoot: cfg.projectRoot,
         url: experiencesUrl(cfg),
         authMode: cfg.authMode,
-        neurolinkIds: cfg.authMode === "oauth" ? cfg.neurolinkIds! : [undefined],
+        connectorIds: cfg.authMode === "oauth" ? cfg.connectorIds! : [undefined],
         token: (refresh) =>
           cfg.authMode === "oauth"
             ? accessTokenForProfile(cfg.profileId!, refresh)
