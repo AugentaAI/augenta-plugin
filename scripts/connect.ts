@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Connect one project to its Neurolinks, by Augenta sign-in or a platform key.
+ * Connect one project to its Connectors, by Augenta sign-in or a platform key.
  *
  * Two front ends over the same core. A human running this in a terminal gets the
  * interactive prompts. An agent runs the `--json` verbs — `--probe`, `--login`,
@@ -9,10 +9,10 @@
  * a poll loop nobody can see. No verb accepts or emits a credential: tokens go
  * browser → `~/.augenta/auth.json`, and `--api-key` stays human/CI-only.
  *
- * A signed-in project may feed SEVERAL Neurospaces — one inbound Neurolink each,
+ * A signed-in project may feed SEVERAL Neurospaces — one inbound Connector each,
  * `--neurospace` repeated once per destination. The answer is always the complete
  * destination set, so this file's job is to make the config a faithful record of
- * what the user just confirmed and nothing more: see `establishNeurolinks` for the
+ * what the user just confirmed and nothing more: see `establishConnectors` for the
  * subset invariant and `linkForNeurospace` for why links are adopted, never moved.
  * A platform key stays single-destination (`verifyApiKeyConnection`).
  */
@@ -77,7 +77,7 @@ interface Neurospace {
   name: string;
 }
 
-interface Neurolink {
+interface Connector {
   id: string;
   kind: string;
   direction: "inbound" | "outbound" | "bidirectional";
@@ -87,11 +87,11 @@ interface Neurolink {
 }
 
 /**
- * Reported to the platform as Neurolink metadata. Part of the atomic release set
+ * Reported to the platform as Connector metadata. Part of the atomic release set
  * (AGENTS.md → Releases) alongside both plugin manifests, both marketplace files,
  * and package.json; the contract test pins all of them to one value.
  */
-export const PLUGIN_VERSION = "0.6.0";
+export const PLUGIN_VERSION = "0.7.0";
 
 class AugentaRequestError extends Error {
   constructor(
@@ -252,7 +252,7 @@ export function writeApiKeyConfig(
 export function writeOAuthConfig(
   projectRoot: string,
   profileId: string,
-  neurolinkIds: readonly string[],
+  connectorIds: readonly string[],
   endpoint?: string,
 ): string {
   const dir = ensureAugentaDir(projectRoot);
@@ -263,7 +263,7 @@ export function writeOAuthConfig(
       {
         authMode: "oauth",
         profileId,
-        neurolinkIds: [...neurolinkIds],
+        connectorIds: [...connectorIds],
         ...(endpoint ? { endpoint } : {}),
       },
       null,
@@ -517,21 +517,21 @@ async function selectedNeurospaces(
   );
 }
 
-async function currentNeurolink(
+async function currentConnector(
   profileId: string,
   gateway: string,
   id: string | undefined,
-): Promise<Neurolink | undefined> {
+): Promise<Connector | undefined> {
   if (!id) return undefined;
   const response = await fetchWithProfile(
     profileId,
-    `${gateway}/v1/neurolinks/${encodeURIComponent(id)}`,
+    `${gateway}/v1/connectors/${encodeURIComponent(id)}`,
   );
   if (response.status === 403 || response.status === 404) return undefined;
   if (!response.ok) {
-    throw new Error(`could not inspect the existing Neurolink (${response.status})`);
+    throw new Error(`could not inspect the existing Connector (${response.status})`);
   }
-  return ((await response.json()) as { neurolink: Neurolink }).neurolink;
+  return ((await response.json()) as { connector: Connector }).connector;
 }
 
 /**
@@ -543,13 +543,13 @@ async function priorLinks(
   profileId: string,
   gateway: string,
   ids: readonly string[],
-): Promise<Neurolink[]> {
-  const links: Neurolink[] = [];
+): Promise<Connector[]> {
+  const links: Connector[] = [];
   for (const id of ids) {
-    // `currentNeurolink` throws on anything other than 403/404, which would abort
+    // `currentConnector` throws on anything other than 403/404, which would abort
     // the whole reconnect — the opposite of this function's job. Any unreadable
     // prior link is treated as unresolved and reported by the caller.
-    const link = await currentNeurolink(profileId, gateway, id).catch(() => undefined);
+    const link = await currentConnector(profileId, gateway, id).catch(() => undefined);
     if (link) links.push(link);
   }
   return links;
@@ -568,7 +568,7 @@ async function priorLinks(
  *
  * Adoption is scoped to ids from THIS project's config, never matched against the
  * organization's live links by `projectName` — folder names are not unique across
- * an org, so that would let one user's `~/code/api` adopt another's Neurolink,
+ * an org, so that would let one user's `~/code/api` adopt another's Connector,
  * which is a misrouting bug strictly worse than a duplicate.
  */
 async function linkForNeurospace(
@@ -577,8 +577,8 @@ async function linkForNeurospace(
   profileId: string,
   gateway: string,
   neurospace: Neurospace,
-  adoptable: readonly Neurolink[],
-): Promise<{ neurolink: Neurolink; action: "adopted" | "created" }> {
+  adoptable: readonly Connector[],
+): Promise<{ connector: Connector; action: "adopted" | "created" }> {
   const name = basename(projectRoot);
   const fields = {
     neurospaceId: neurospace.id,
@@ -601,10 +601,10 @@ async function linkForNeurospace(
     // Refresh the mutable metadata only. `kind` is immutable and `neurospaceId`
     // already matches by construction, so neither is sent.
     const { kind: _kind, neurospaceId: _neurospaceId, ...mutableFields } = fields;
-    const neurolink = (
-      await bearerJson<{ neurolink: Neurolink }>(
+    const connector = (
+      await bearerJson<{ connector: Connector }>(
         profileId,
-        `${gateway}/v1/neurolinks/${encodeURIComponent(existing.id)}`,
+        `${gateway}/v1/connectors/${encodeURIComponent(existing.id)}`,
         {
           method: "PATCH",
           headers: {
@@ -613,17 +613,17 @@ async function linkForNeurospace(
           body: JSON.stringify({ ...mutableFields, _etag: existing._etag }),
         },
       )
-    ).neurolink;
-    return { neurolink, action: "adopted" };
+    ).connector;
+    return { connector, action: "adopted" };
   }
-  const neurolink = (
-    await bearerJson<{ neurolink: Neurolink }>(
+  const connector = (
+    await bearerJson<{ connector: Connector }>(
       profileId,
-      `${gateway}/v1/neurolinks`,
+      `${gateway}/v1/connectors`,
       { method: "POST", body: JSON.stringify(fields) },
     )
-  ).neurolink;
-  return { neurolink, action: "created" };
+  ).connector;
+  return { connector, action: "created" };
 }
 
 async function resolveOAuth(
@@ -641,23 +641,23 @@ async function resolveOAuth(
  */
 function priorConnection(
   projectRoot: string,
-): { profileId?: string; neurolinkIds?: string[] } | undefined {
+): { profileId?: string; connectorIds?: string[] } | undefined {
   if (!existsSync(join(projectRoot, ".augenta", "config.json"))) return undefined;
   try {
     const existing = loadProjectConfig(projectRoot);
     return existing?.authMode === "oauth"
-      ? { profileId: existing.profileId, neurolinkIds: existing.neurolinkIds }
+      ? { profileId: existing.profileId, connectorIds: existing.connectorIds }
       : undefined;
   } catch {
     return undefined;
   }
 }
 
-/** One destination's outcome. `neurolinkId` is present iff it verified. */
+/** One destination's outcome. `connectorId` is present iff it verified. */
 export interface DestinationResult {
   neurospaceId: string;
   neurospaceName: string;
-  neurolinkId?: string;
+  connectorId?: string;
   action?: "created" | "adopted";
   /** Why this destination failed. Never carries a credential. */
   message?: string;
@@ -671,10 +671,10 @@ export interface DestinationResult {
 
 /** A destination the user dropped from the set. */
 export interface RemovedDestination {
-  neurolinkId: string;
+  connectorId: string;
   neurospaceId: string;
   neurospaceName?: string;
-  /** The Neurolink is left alone on the platform — see below. */
+  /** The Connector is left alone on the platform — see below. */
   disposition: "left_in_place";
 }
 
@@ -694,41 +694,41 @@ export interface RemovedDestination {
  *
  * Destinations the user dropped are removed from the config — which stops
  * shipping to them immediately, locally, with no network call that could
- * half-fail after the user was told "done" — while their Neurolinks are LEFT IN
+ * half-fail after the user was told "done" — while their Connectors are LEFT IN
  * PLACE. Disabling or deleting them would be an org-level mutation with blast
  * radius nobody was asked about, would break re-selection (adoption only takes
  * `status: "active"` links, so a disabled one would come back as a sibling), and
  * `status` is outside the mutable field set this code has ever exercised.
  */
-async function establishNeurolinks(
+async function establishConnectors(
   projectRoot: string,
   args: Args,
   profileId: string,
   gateway: string,
   neurospaces: readonly Neurospace[],
-  priorNeurolinkIds: readonly string[],
+  priorConnectorIds: readonly string[],
   /** The organization's live Neurospaces, so removals can be NAMED rather than
    *  reported as bare ids. */
   available: readonly Neurospace[] = neurospaces,
   /** Prior links resolved by the caller, to avoid a second round of GETs. */
-  preresolved?: readonly Neurolink[],
+  preresolved?: readonly Connector[],
 ): Promise<{
   results: DestinationResult[];
   removed: RemovedDestination[];
   /** Prior destinations that could not be resolved at all. They are dropped from
    *  the config, so they must be reported rather than vanishing. */
-  unresolvedNeurolinkIds: string[];
+  unresolvedConnectorIds: string[];
   configPath?: string;
 }> {
-  const adoptable = preresolved ?? (await priorLinks(profileId, gateway, priorNeurolinkIds));
-  const unresolvedNeurolinkIds = priorNeurolinkIds.filter(
+  const adoptable = preresolved ?? (await priorLinks(profileId, gateway, priorConnectorIds));
+  const unresolvedConnectorIds = priorConnectorIds.filter(
     (id) => !adoptable.some((link) => link.id === id),
   );
   const priorNeurospaceIds = adoptable.map((link) => link.neurospaceId);
   const results: DestinationResult[] = [];
   for (const neurospace of neurospaces) {
     try {
-      const { neurolink, action } = await linkForNeurospace(
+      const { connector, action } = await linkForNeurospace(
         projectRoot,
         args,
         profileId,
@@ -736,20 +736,20 @@ async function establishNeurolinks(
         neurospace,
         adoptable,
       );
-      const verified = await bearerJson<{ neurolink: Neurolink }>(
+      const verified = await bearerJson<{ connector: Connector }>(
         profileId,
-        `${gateway}/v1/neurolinks/${encodeURIComponent(neurolink.id)}`,
+        `${gateway}/v1/connectors/${encodeURIComponent(connector.id)}`,
       );
       if (
-        verified.neurolink.status !== "active" ||
-        verified.neurolink.neurospaceId !== neurospace.id
+        verified.connector.status !== "active" ||
+        verified.connector.neurospaceId !== neurospace.id
       ) {
-        throw new Error("Neurolink verification failed");
+        throw new Error("Connector verification failed");
       }
       results.push({
         neurospaceId: neurospace.id,
         neurospaceName: neurospace.name,
-        neurolinkId: verified.neurolink.id,
+        connectorId: verified.connector.id,
         action,
       });
     } catch (error) {
@@ -765,7 +765,7 @@ async function establishNeurolinks(
   }
 
   const verifiedIds = results
-    .map((result) => result.neurolinkId)
+    .map((result) => result.connectorId)
     .filter((id): id is string => Boolean(id));
   // Removed means DESELECTED — its Neurospace is not in the set the user just
   // confirmed. A destination they kept but that failed to link is a failure, not a
@@ -778,14 +778,14 @@ async function establishNeurolinks(
     .map((link) => {
       const name = nameFor(link.neurospaceId);
       return {
-        neurolinkId: link.id,
+        connectorId: link.id,
         neurospaceId: link.neurospaceId,
         ...(name ? { neurospaceName: name } : {}),
         disposition: "left_in_place" as const,
       };
     });
 
-  if (verifiedIds.length === 0) return { results, removed, unresolvedNeurolinkIds };
+  if (verifiedIds.length === 0) return { results, removed, unresolvedConnectorIds };
   const configPath = writeOAuthConfig(
     projectRoot,
     profileId,
@@ -798,13 +798,13 @@ async function establishNeurolinks(
   // time the shipper runs that distinction is gone (see Outbox.registerDestinations).
   try {
     const freshKeys = results
-      .filter((result) => result.action === "created" && result.neurolinkId)
-      .map((result) => result.neurolinkId!);
+      .filter((result) => result.action === "created" && result.connectorId)
+      .map((result) => result.connectorId!);
     new Outbox(projectRoot).registerDestinations(verifiedIds, { freshKeys });
   } catch {
     /* the shipper reconciles the set on its own; never fail a connect over this */
   }
-  return { results, removed, unresolvedNeurolinkIds, configPath };
+  return { results, removed, unresolvedConnectorIds, configPath };
 }
 
 export async function connectProject(
@@ -817,7 +817,7 @@ export async function connectProject(
   console.log(
     `Signed in as ${selected.me.user.name || selected.me.user.email} to ${selected.me.org.name} (${selected.me.org.id}).`,
   );
-  const priorIds = prior?.neurolinkIds ?? [];
+  const priorIds = prior?.connectorIds ?? [];
   const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds);
   const available = await listNeurospaces(selected.profileId, gateway);
   const environment = environmentLabel(args);
@@ -862,8 +862,8 @@ export async function connectProject(
     return;
   }
 
-  const { results, removed, unresolvedNeurolinkIds, configPath: written } =
-    await establishNeurolinks(
+  const { results, removed, unresolvedConnectorIds, configPath: written } =
+    await establishConnectors(
       projectRoot,
       args,
       selected.profileId,
@@ -873,12 +873,12 @@ export async function connectProject(
       available,
       resolvedPrior,
     );
-  const live = results.filter((result) => result.neurolinkId);
-  const failed = results.filter((result) => !result.neurolinkId);
+  const live = results.filter((result) => result.connectorId);
+  const failed = results.filter((result) => !result.connectorId);
   if (live.length > 0) {
     console.log(
       `Wrote ${written} (0600). This project now feeds ${live
-        .map((result) => `${result.neurospaceName} (Neurolink ${result.neurolinkId})`)
+        .map((result) => `${result.neurospaceName} (Connector ${result.connectorId})`)
         .join(", ")}.`,
     );
     if (live.length > 1) {
@@ -901,12 +901,12 @@ export async function connectProject(
   if (written) {
     for (const entry of removed) {
       console.log(
-        `No longer sending to ${entry.neurospaceName ?? entry.neurospaceId}. Its Neurolink ${entry.neurolinkId} is left in place and idle — remove it in Augenta if you want it gone.`,
+        `No longer sending to ${entry.neurospaceName ?? entry.neurospaceId}. Its Connector ${entry.connectorId} is left in place and idle — remove it in Augenta if you want it gone.`,
       );
     }
-    if (unresolvedNeurolinkIds.length > 0) {
+    if (unresolvedConnectorIds.length > 0) {
       console.log(
-        `Dropped ${unresolvedNeurolinkIds.join(", ")}: this project listed ${unresolvedNeurolinkIds.length === 1 ? "that Neurolink" : "those Neurolinks"} but ${unresolvedNeurolinkIds.length === 1 ? "it is" : "they are"} no longer readable with this sign-in.`,
+        `Dropped ${unresolvedConnectorIds.join(", ")}: this project listed ${unresolvedConnectorIds.length === 1 ? "that Connector" : "those Connectors"} but ${unresolvedConnectorIds.length === 1 ? "it is" : "they are"} no longer readable with this sign-in.`,
       );
     }
   }
@@ -965,11 +965,11 @@ async function neurospaceStep(
  * The destinations this project currently feeds, resolved to Neurospace names so
  * the caller can pre-select them.
  *
- * Ids that cannot be resolved are reported in `unresolvedNeurolinkIds` rather
+ * Ids that cannot be resolved are reported in `unresolvedConnectorIds` rather
  * than dropped: the project is still SHIPPING to them, so silently omitting one
  * would quietly drop a live destination out of the pre-selection — and, because
  * the answer is the complete set, out of the project's config on the next
- * reconnect. Read-only; `currentNeurolink` already treats 403/404 as "not
+ * reconnect. Read-only; `currentConnector` already treats 403/404 as "not
  * visible" instead of an error.
  */
 async function priorDestinations(
@@ -978,29 +978,29 @@ async function priorDestinations(
   ids: readonly string[],
   neurospaces: readonly Neurospace[],
 ): Promise<{
-  destinations: Array<{ neurolinkId: string; neurospaceId: string; neurospaceName?: string }>;
-  unresolvedNeurolinkIds: string[];
+  destinations: Array<{ connectorId: string; neurospaceId: string; neurospaceName?: string }>;
+  unresolvedConnectorIds: string[];
 }> {
   const destinations: Array<{
-    neurolinkId: string;
+    connectorId: string;
     neurospaceId: string;
     neurospaceName?: string;
   }> = [];
-  const unresolvedNeurolinkIds: string[] = [];
+  const unresolvedConnectorIds: string[] = [];
   for (const id of ids) {
-    const link = await currentNeurolink(profileId, gateway, id).catch(() => undefined);
+    const link = await currentConnector(profileId, gateway, id).catch(() => undefined);
     if (!link) {
-      unresolvedNeurolinkIds.push(id);
+      unresolvedConnectorIds.push(id);
       continue;
     }
     const name = neurospaces.find((n) => n.id === link.neurospaceId)?.name;
     destinations.push({
-      neurolinkId: link.id,
+      connectorId: link.id,
       neurospaceId: link.neurospaceId,
       ...(name ? { neurospaceName: name } : {}),
     });
   }
-  return { destinations, unresolvedNeurolinkIds };
+  return { destinations, unresolvedConnectorIds };
 }
 
 /**
@@ -1017,7 +1017,7 @@ export async function probeConnection(
 ): Promise<JsonPayload> {
   const { oauth, gateway } = await resolveOAuth(args);
   const prior = priorConnection(resolved.projectRoot);
-  const priorIds = prior?.neurolinkIds ?? [];
+  const priorIds = prior?.connectorIds ?? [];
   const alreadyConnected = { alreadyConnected: priorIds.length > 0 };
   const usable = await usableProfiles(oauth, prior?.profileId);
   if (usable.length === 0) return { status: "need_login", ...alreadyConnected };
@@ -1169,17 +1169,17 @@ export async function connectToNeurospaces(
   // Iterate in LIVE-LIST order rather than flag order, so the config is
   // byte-deterministic however the caller happened to order its arguments.
   const neurospaces = available.filter((item) => requested.includes(item.id));
-  const { results, removed, unresolvedNeurolinkIds, configPath } = await establishNeurolinks(
+  const { results, removed, unresolvedConnectorIds, configPath } = await establishConnectors(
     resolved.projectRoot,
     args,
     picked.profileId,
     gateway,
     neurospaces,
-    prior?.neurolinkIds ?? [],
+    prior?.connectorIds ?? [],
     available,
   );
-  const destinations = results.filter((result) => result.neurolinkId);
-  const failed = results.filter((result) => !result.neurolinkId);
+  const destinations = results.filter((result) => result.connectorId);
+  const failed = results.filter((result) => !result.connectorId);
   if (destinations.length === 0) {
     return {
       status: "error",
@@ -1211,7 +1211,7 @@ export async function connectToNeurospaces(
     // Prior destinations dropped because they no longer resolve. Reported so the
     // caller can say they are gone instead of them vanishing from the config
     // unmentioned.
-    ...(unresolvedNeurolinkIds.length > 0 ? { unresolvedNeurolinkIds } : {}),
+    ...(unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {}),
     organization: picked.me.org.name,
     configPath,
   };
@@ -1246,9 +1246,9 @@ export async function runJsonVerb(
 export async function verifyApiKeyConnection(
   apiKey: string,
   gateway: string,
-): Promise<Neurolink> {
+): Promise<Connector> {
   const response = await fetch(
-    `${gateway.replace(/\/+$/, "")}/v1/neurolinks`,
+    `${gateway.replace(/\/+$/, "")}/v1/connectors`,
     {
       headers: { authorization: `AugentaKey ${apiKey}` },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -1262,51 +1262,51 @@ export async function verifyApiKeyConnection(
       }`,
     );
   }
-  const neurolinks = ((await response.json()) as { neurolinks?: Neurolink[] })
-    .neurolinks ?? [];
-  if (neurolinks.length === 0) {
-    throw new Error("the platform key is not assigned to a Neurolink");
+  const connectors = ((await response.json()) as { connectors?: Connector[] })
+    .connectors ?? [];
+  if (connectors.length === 0) {
+    throw new Error("the platform key is not assigned to a Connector");
   }
   // This ban SURVIVES fan-out, deliberately. A signed-in project fans out because
   // a human affirmed a set of Neurospaces; nothing on this path affirms anything —
   // there is no consent gate here, the config format it writes has no field to
-  // express a route, and the shipper sends no Neurolink header in api-key mode.
+  // express a route, and the shipper sends no Connector header in api-key mode.
   // A platform key's server-side assignment IS its routing decision, so with
   // several links visible there is no non-arbitrary pick and the plugin cannot
   // verify which one the door will choose. Fail loudly now rather than let a CI
   // pipeline discover it from where its transcripts landed. Fanning a key out to
   // several Neurospaces is a platform feature (assign the key to a link that does
   // it server-side, or issue one key per destination), not a plugin one.
-  if (neurolinks.length > 1) {
+  if (connectors.length > 1) {
     throw new Error(
-      `the platform key is assigned to ${neurolinks.length} Neurolinks; capture requires exactly one`,
+      `the platform key is assigned to ${connectors.length} Connectors; capture requires exactly one`,
     );
   }
-  const neurolink = neurolinks[0]!;
+  const connector = connectors[0]!;
   if (
-    neurolink.status !== "active" ||
-    (neurolink.direction !== "inbound" &&
-      neurolink.direction !== "bidirectional")
+    connector.status !== "active" ||
+    (connector.direction !== "inbound" &&
+      connector.direction !== "bidirectional")
   ) {
-    throw new Error("the platform key requires an active inbound Neurolink");
+    throw new Error("the platform key requires an active inbound Connector");
   }
-  return neurolink;
+  return connector;
 }
 
 export async function connectWithApiKey(
   projectRoot: string,
   apiKey: string,
   endpoint?: string,
-): Promise<{ path: string; neurolink: Neurolink }> {
+): Promise<{ path: string; connector: Connector }> {
   const gateway = (endpoint?.trim() || DEFAULT_GATEWAY).replace(/\/+$/, "");
-  const neurolink = await verifyApiKeyConnection(apiKey, gateway);
+  const connector = await verifyApiKeyConnection(apiKey, gateway);
   return {
     path: writeApiKeyConfig(
       projectRoot,
       apiKey,
       gateway === DEFAULT_GATEWAY ? undefined : gateway,
     ),
-    neurolink,
+    connector,
   };
 }
 
@@ -1341,13 +1341,13 @@ if (import.meta.main) {
       if (payload.status === "error") process.exitCode = 1;
     } else if (args.apiKey?.trim()) {
       const existed = existsSync(join(projectRoot, ".augenta", "config.json"));
-      const { path, neurolink } = await connectWithApiKey(
+      const { path, connector } = await connectWithApiKey(
         projectRoot,
         args.apiKey.trim(),
         args.endpoint,
       );
       console.log(
-        `${existed ? "Updated" : "Wrote"} ${path} (0600). Platform-key capture is enabled through Neurolink ${neurolink.id}.`,
+        `${existed ? "Updated" : "Wrote"} ${path} (0600). Platform-key capture is enabled through Connector ${connector.id}.`,
       );
       console.log(
         "Off switch: delete .augenta/config.json, or set AUGENTA_CAPTURE_ENABLED=0.",

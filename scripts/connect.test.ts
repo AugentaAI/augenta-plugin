@@ -217,11 +217,11 @@ describe("project config writers", () => {
     });
   });
 
-  test("oauth config contains only the profile, Neurolinks, and endpoint override", () => {
+  test("oauth config contains only the profile, Connectors, and endpoint override", () => {
     const path = writeOAuthConfig(
       project,
       "profile_123",
-      ["neurolink_456", "neurolink_789"],
+      ["connector_456", "connector_789"],
       "https://dev.example.com",
     );
     // Only the plural spelling is emitted: writing both would let an older
@@ -229,7 +229,7 @@ describe("project config writers", () => {
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
       authMode: "oauth",
       profileId: "profile_123",
-      neurolinkIds: ["neurolink_456", "neurolink_789"],
+      connectorIds: ["connector_456", "connector_789"],
       endpoint: "https://dev.example.com",
     });
   });
@@ -250,16 +250,16 @@ describe("CLI subprocess", () => {
 });
 
 describe("platform-key connection", () => {
-  test("verifies the assigned inbound Neurolink before writing config", async () => {
+  test("verifies the assigned inbound Connector before writing config", async () => {
     globalThis.fetch = (async (url, init) => {
-      expect(String(url)).toBe("https://gw.example.com/v1/neurolinks");
+      expect(String(url)).toBe("https://gw.example.com/v1/connectors");
       expect(new Headers(init?.headers).get("authorization")).toBe(
         "AugentaKey key_live.secret",
       );
       return Response.json({
-        neurolinks: [
+        connectors: [
           {
-            id: "neurolink_123",
+            id: "connector_123",
             kind: "agent",
             direction: "inbound",
             status: "active",
@@ -275,7 +275,7 @@ describe("platform-key connection", () => {
       "https://gw.example.com/",
     );
 
-    expect(result.neurolink.id).toBe("neurolink_123");
+    expect(result.connector.id).toBe("connector_123");
     expect(JSON.parse(readFileSync(result.path, "utf8"))).toEqual({
       authMode: "api-key",
       apiKey: "key_live.secret",
@@ -286,9 +286,9 @@ describe("platform-key connection", () => {
   test("does not enable capture for a disabled or outbound assignment", async () => {
     globalThis.fetch = (async (_url, _init) =>
       Response.json({
-        neurolinks: [
+        connectors: [
           {
-            id: "neurolink_out",
+            id: "connector_out",
             kind: "service",
             direction: "outbound",
             status: "active",
@@ -299,7 +299,7 @@ describe("platform-key connection", () => {
 
     await expect(
       connectWithApiKey(project, "key_live.secret", "https://gw.example.com"),
-    ).rejects.toThrow("active inbound Neurolink");
+    ).rejects.toThrow("active inbound Connector");
     expect(() =>
       statSync(join(project, ".augenta", "config.json")),
     ).toThrow();
@@ -323,7 +323,7 @@ describe("JSON verbs", () => {
   /** Links the fake control plane knows about, keyed by id. */
   let links: Map<string, Record<string, unknown>>;
 
-  /** Register a pre-existing Neurolink, as a prior connection would have. */
+  /** Register a pre-existing Connector, as a prior connection would have. */
   const seedLink = (id: string, neurospaceId: string) =>
     links.set(id, {
       id,
@@ -375,27 +375,27 @@ describe("JSON verbs", () => {
       }
       // Creates a link in whichever Neurospace the body asks for, so a fan-out
       // cannot pass by accident against a mock that always answers "ns-core".
-      if (path === `${GATEWAY}/v1/neurolinks` && method === "POST") {
+      if (path === `${GATEWAY}/v1/connectors` && method === "POST") {
         const body = JSON.parse(String((init as RequestInit).body)) as {
           neurospaceId: string;
         };
         const id =
           body.neurospaceId === "ns-core"
-            ? "neurolink_new"
-            : `neurolink_${body.neurospaceId}`;
+            ? "connector_new"
+            : `connector_${body.neurospaceId}`;
         seedLink(id, body.neurospaceId);
-        return Response.json({ neurolink: links.get(id) });
+        return Response.json({ connector: links.get(id) });
       }
-      if (path.startsWith(`${GATEWAY}/v1/neurolinks/`)) {
-        const id = decodeURIComponent(path.slice(`${GATEWAY}/v1/neurolinks/`.length));
+      if (path.startsWith(`${GATEWAY}/v1/connectors/`)) {
+        const id = decodeURIComponent(path.slice(`${GATEWAY}/v1/connectors/`.length));
         const existing = links.get(id);
-        if (!existing) return new Response("no such neurolink", { status: 404 });
+        if (!existing) return new Response("no such connector", { status: 404 });
         // A PATCH must never move a link between Neurospaces.
         if (method === "PATCH") {
           const body = JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>;
           expect(body).not.toHaveProperty("neurospaceId");
         }
-        return Response.json({ neurolink: existing });
+        return Response.json({ connector: existing });
       }
       return new Response(`unrouted: ${method} ${path}`, { status: 500 });
     }) as typeof fetch;
@@ -443,9 +443,9 @@ describe("JSON verbs", () => {
     // Reconnecting is how a user verifies or changes the destinations, so a prior
     // config is reported as fields and must never short-circuit the flow.
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["neurolink_old"]);
+    writeOAuthConfig(project, "profile_stale", ["connector_old"]);
     route();
-    seedLink("neurolink_old", "ns-scratch");
+    seedLink("connector_old", "ns-scratch");
 
     const payload = await probeConnection({ projectRoot: project }, baseArgs);
 
@@ -455,12 +455,12 @@ describe("JSON verbs", () => {
       // Resolved to a NAME, which is what the caller pre-selects with.
       destinations: [
         {
-          neurolinkId: "neurolink_old",
+          connectorId: "connector_old",
           neurospaceId: "ns-scratch",
           neurospaceName: "Scratch",
         },
       ],
-      unresolvedNeurolinkIds: [],
+      unresolvedConnectorIds: [],
     });
   });
 
@@ -469,7 +469,7 @@ describe("JSON verbs", () => {
     // destination from the pre-selection and, since the answer is the complete
     // set, from the config on the next reconnect.
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["neurolink_gone"]);
+    writeOAuthConfig(project, "profile_stale", ["connector_gone"]);
     route(); // nothing seeded — the GET 404s
 
     const payload = await probeConnection({ projectRoot: project }, baseArgs);
@@ -478,7 +478,7 @@ describe("JSON verbs", () => {
       status: "need_neurospace",
       alreadyConnected: true,
       destinations: [],
-      unresolvedNeurolinkIds: ["neurolink_gone"],
+      unresolvedConnectorIds: ["connector_gone"],
     });
   });
 
@@ -628,7 +628,7 @@ describe("JSON verbs", () => {
       status: "connected",
       destinations: [
         {
-          neurolinkId: "neurolink_new",
+          connectorId: "connector_new",
           neurospaceId: "ns-core",
           neurospaceName: "Augenta Core",
           action: "created",
@@ -637,7 +637,7 @@ describe("JSON verbs", () => {
     });
     // No top-level scalar alias: it would invite the caller to report only the
     // first destination, which is the under-disclosure this release must prevent.
-    expect(payload).not.toHaveProperty("neurolinkId");
+    expect(payload).not.toHaveProperty("connectorId");
     expect(payload).not.toHaveProperty("neurospaceName");
     expect(JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")))
       .toEqual({
@@ -646,12 +646,12 @@ describe("JSON verbs", () => {
           { issuer: ISSUER, clientId: "client_public", gateway: GATEWAY },
           "org_1",
         ),
-        neurolinkIds: ["neurolink_new"],
+        connectorIds: ["connector_new"],
         endpoint: GATEWAY,
       });
   });
 
-  test("connecting SEVERAL Neurospaces creates one Neurolink each", async () => {
+  test("connecting SEVERAL Neurospaces creates one Connector each", async () => {
     await signIn();
     route();
 
@@ -665,8 +665,8 @@ describe("JSON verbs", () => {
     expect((payload.destinations as Array<{ neurospaceId: string }>).map((d) => d.neurospaceId))
       .toEqual(["ns-core", "ns-scratch"]);
     expect(
-      JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).neurolinkIds,
-    ).toEqual(["neurolink_new", "neurolink_ns-scratch"]);
+      JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).connectorIds,
+    ).toEqual(["connector_new", "connector_ns-scratch"]);
   });
 
   test("a kept destination's link is ADOPTED, never stolen for a new one", async () => {
@@ -674,9 +674,9 @@ describe("JSON verbs", () => {
     // neurospaceId onto it. Under fan-out that would steal the link belonging to a
     // destination the user KEPT and relabel history already attached to it.
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["neurolink_new"]);
+    writeOAuthConfig(project, "profile_stale", ["connector_new"]);
     route();
-    seedLink("neurolink_new", "ns-core"); // prior connection to ns-core
+    seedLink("connector_new", "ns-core"); // prior connection to ns-core
 
     const payload = await connectToNeurospaces({ projectRoot: project }, {
       ...baseArgs,
@@ -686,14 +686,14 @@ describe("JSON verbs", () => {
     expect(payload).toMatchObject({
       status: "connected",
       destinations: [
-        { neurospaceId: "ns-core", neurolinkId: "neurolink_new", action: "adopted" },
-        { neurospaceId: "ns-scratch", neurolinkId: "neurolink_ns-scratch", action: "created" },
+        { neurospaceId: "ns-core", connectorId: "connector_new", action: "adopted" },
+        { neurospaceId: "ns-scratch", connectorId: "connector_ns-scratch", action: "created" },
       ],
     });
     // Exactly one POST — for the ADDED destination only. (The route's PATCH
     // handler separately asserts no neurospaceId is ever sent.)
-    expect(requests.filter((r) => r === `POST ${GATEWAY}/v1/neurolinks`).length).toBe(1);
-    expect(requests.some((r) => r === `PATCH ${GATEWAY}/v1/neurolinks/neurolink_new`)).toBe(true);
+    expect(requests.filter((r) => r === `POST ${GATEWAY}/v1/connectors`).length).toBe(1);
+    expect(requests.some((r) => r === `PATCH ${GATEWAY}/v1/connectors/connector_new`)).toBe(true);
   });
 
   test("a DESELECTED destination is dropped from config but never destroyed", async () => {
@@ -701,10 +701,10 @@ describe("JSON verbs", () => {
     // deleting the link would be an org-level mutation nobody was asked about, and
     // a network call that can half-fail after the user was told "done".
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["neurolink_new", "neurolink_ns-scratch"]);
+    writeOAuthConfig(project, "profile_stale", ["connector_new", "connector_ns-scratch"]);
     route();
-    seedLink("neurolink_new", "ns-core");
-    seedLink("neurolink_ns-scratch", "ns-scratch");
+    seedLink("connector_new", "ns-core");
+    seedLink("connector_ns-scratch", "ns-scratch");
 
     const payload = await connectToNeurospaces({ projectRoot: project }, {
       ...baseArgs,
@@ -715,7 +715,7 @@ describe("JSON verbs", () => {
       status: "connected",
       removed: [
         {
-          neurolinkId: "neurolink_ns-scratch",
+          connectorId: "connector_ns-scratch",
           neurospaceId: "ns-scratch",
           neurospaceName: "Scratch",
           disposition: "left_in_place",
@@ -723,11 +723,11 @@ describe("JSON verbs", () => {
       ],
     });
     expect(
-      JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).neurolinkIds,
-    ).toEqual(["neurolink_new"]);
+      JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).connectorIds,
+    ).toEqual(["connector_new"]);
     // Nothing destructive, and no attempt to disable the dropped link.
     expect(requests.some((r) => r.startsWith("DELETE "))).toBe(false);
-    expect(requests.some((r) => r === `PATCH ${GATEWAY}/v1/neurolinks/neurolink_ns-scratch`)).toBe(false);
+    expect(requests.some((r) => r === `PATCH ${GATEWAY}/v1/connectors/connector_ns-scratch`)).toBe(false);
   });
 
   test("one bad id fails the WHOLE set closed — nothing created, no config", async () => {
@@ -746,7 +746,7 @@ describe("JSON verbs", () => {
       code: "unknown_neurospace",
       unknown: ["ns-typo"],
     });
-    expect(requests.some((r) => r === `POST ${GATEWAY}/v1/neurolinks`)).toBe(false);
+    expect(requests.some((r) => r === `POST ${GATEWAY}/v1/connectors`)).toBe(false);
     expect(() => statSync(join(project, ".augenta", "config.json"))).toThrow();
   });
 
@@ -755,11 +755,11 @@ describe("JSON verbs", () => {
     // confirmed. Shipping to fewer places than authorized never violates consent.
     await signIn();
     route({
-      [`POST ${GATEWAY}/v1/neurolinks`]: () => {
+      [`POST ${GATEWAY}/v1/connectors`]: () => {
         // First call (ns-core) succeeds, second (ns-scratch) fails.
-        if (!links.has("neurolink_new")) {
-          seedLink("neurolink_new", "ns-core");
-          return Response.json({ neurolink: links.get("neurolink_new") });
+        if (!links.has("connector_new")) {
+          seedLink("connector_new", "ns-core");
+          return Response.json({ connector: links.get("connector_new") });
         }
         return new Response("neurospace unavailable", { status: 503 });
       },
@@ -772,20 +772,20 @@ describe("JSON verbs", () => {
 
     expect(payload).toMatchObject({
       status: "partially_connected",
-      destinations: [{ neurospaceId: "ns-core", neurolinkId: "neurolink_new" }],
+      destinations: [{ neurospaceId: "ns-core", connectorId: "connector_new" }],
       failed: [{ neurospaceId: "ns-scratch", neurospaceName: "Scratch" }],
     });
     const written = JSON.parse(
       readFileSync(join(project, ".augenta", "config.json"), "utf8"),
-    ).neurolinkIds as string[];
-    expect(written).toEqual(["neurolink_new"]);
-    expect(written.every((id) => id !== "neurolink_ns-scratch")).toBe(true);
+    ).connectorIds as string[];
+    expect(written).toEqual(["connector_new"]);
+    expect(written.every((id) => id !== "connector_ns-scratch")).toBe(true);
   });
 
   test("when NO destination links, nothing is written at all", async () => {
     await signIn();
     route({
-      [`POST ${GATEWAY}/v1/neurolinks`]: () =>
+      [`POST ${GATEWAY}/v1/connectors`]: () =>
         new Response("neurospace unavailable", { status: 503 }),
     });
 
@@ -802,15 +802,15 @@ describe("JSON verbs", () => {
     // "Could not link X" reads as "X was not added". When X was already a
     // destination, the state actually changed: it is no longer being fed.
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["neurolink_new", "neurolink_ns-scratch"]);
+    writeOAuthConfig(project, "profile_stale", ["connector_new", "connector_ns-scratch"]);
     route({
       // The link RESOLVES (so it is a known prior destination) but updating it
       // fails — which is what separates "kept but failed" from "unresolvable".
-      [`PATCH ${GATEWAY}/v1/neurolinks/neurolink_ns-scratch`]: () =>
+      [`PATCH ${GATEWAY}/v1/connectors/connector_ns-scratch`]: () =>
         new Response("gone sideways", { status: 503 }),
     });
-    seedLink("neurolink_new", "ns-core");
-    seedLink("neurolink_ns-scratch", "ns-scratch");
+    seedLink("connector_new", "ns-core");
+    seedLink("connector_ns-scratch", "ns-scratch");
 
     const payload = await connectToNeurospaces({ projectRoot: project }, {
       ...baseArgs,
@@ -827,9 +827,9 @@ describe("JSON verbs", () => {
 
   test("a prior link that no longer resolves is reported, not silently dropped", async () => {
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["neurolink_new", "neurolink_ghost"]);
+    writeOAuthConfig(project, "profile_stale", ["connector_new", "connector_ghost"]);
     route();
-    seedLink("neurolink_new", "ns-core"); // neurolink_ghost 404s
+    seedLink("connector_new", "ns-core"); // connector_ghost 404s
 
     const payload = await connectToNeurospaces({ projectRoot: project }, {
       ...baseArgs,
@@ -838,20 +838,20 @@ describe("JSON verbs", () => {
 
     expect(payload).toMatchObject({
       status: "connected",
-      unresolvedNeurolinkIds: ["neurolink_ghost"],
+      unresolvedConnectorIds: ["connector_ghost"],
     });
     expect(
-      JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).neurolinkIds,
-    ).toEqual(["neurolink_new"]);
+      JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).connectorIds,
+    ).toEqual(["connector_new"]);
   });
 
   test("an unreadable prior link does not abort the whole reconnect", async () => {
-    // currentNeurolink throws on anything but 403/404; priorLinks must absorb that
+    // currentConnector throws on anything but 403/404; priorLinks must absorb that
     // — an unreadable prior link is exactly when reconnecting has to keep working.
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["neurolink_boom"]);
+    writeOAuthConfig(project, "profile_stale", ["connector_boom"]);
     route({
-      [`GET ${GATEWAY}/v1/neurolinks/neurolink_boom`]: () =>
+      [`GET ${GATEWAY}/v1/connectors/connector_boom`]: () =>
         new Response("upstream on fire", { status: 500 }),
     });
 
@@ -862,7 +862,7 @@ describe("JSON verbs", () => {
 
     expect(payload).toMatchObject({
       status: "connected",
-      unresolvedNeurolinkIds: ["neurolink_boom"],
+      unresolvedConnectorIds: ["connector_boom"],
     });
   });
 
@@ -871,9 +871,9 @@ describe("JSON verbs", () => {
     // the shipper runs, a pre-fan-out cursor cannot tell which key earned its
     // watermark. See Outbox.registerDestinations.
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["neurolink_new"]);
+    writeOAuthConfig(project, "profile_stale", ["connector_new"]);
     route();
-    seedLink("neurolink_new", "ns-core");
+    seedLink("connector_new", "ns-core");
 
     const box = new Outbox(project);
     box.append([
@@ -889,8 +889,8 @@ describe("JSON verbs", () => {
     const cursor = JSON.parse(readFileSync(box.cursorPath, "utf8")) as {
       links?: Record<string, number>;
     };
-    expect(cursor.links!["neurolink_new"]).toBe(1); // adopted → inherits
-    expect(cursor.links!["neurolink_ns-scratch"]).toBe(statSync(box.spoolPath).size);
+    expect(cursor.links!["connector_new"]).toBe(1); // adopted → inherits
+    expect(cursor.links!["connector_ns-scratch"]).toBe(statSync(box.spoolPath).size);
   });
 
   test("a repeated id is one destination, not two", async () => {
@@ -903,7 +903,7 @@ describe("JSON verbs", () => {
     });
 
     expect((payload.destinations as unknown[]).length).toBe(1);
-    expect(requests.filter((r) => r === `POST ${GATEWAY}/v1/neurolinks`).length).toBe(1);
+    expect(requests.filter((r) => r === `POST ${GATEWAY}/v1/connectors`).length).toBe(1);
   });
 
   test("connecting without a sign-in never writes a config", async () => {

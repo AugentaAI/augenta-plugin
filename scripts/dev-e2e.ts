@@ -38,7 +38,7 @@ interface MeResponse {
   org: { id: string; name: string };
 }
 
-interface Neurolink {
+interface Connector {
   id: string;
   neurospaceId: string;
   direction: "inbound" | "outbound" | "bidirectional";
@@ -49,7 +49,7 @@ interface Neurolink {
 interface ExperienceRow {
   path: string;
   sid: string;
-  neurolinkId: string;
+  connectorId: string;
   caller?: { type?: string };
 }
 
@@ -108,7 +108,7 @@ async function waitForExperiences(
       `${gateway}/v1/experiences?limit=200`,
     );
     found = page.items?.filter((item) => item.sid === sid) ?? [];
-    const landed = new Set(found.map((row) => row.neurolinkId));
+    const landed = new Set(found.map((row) => row.connectorId));
     if (expected.every((id) => landed.has(id))) return found;
     await Bun.sleep(1_000);
   }
@@ -127,7 +127,7 @@ const projectRoot = resolveTargetProject(
   process.cwd(),
 );
 const cfg = loadProjectConfig(projectRoot);
-if (cfg?.authMode !== "oauth" || !cfg.profileId || !cfg.neurolinkIds?.length) {
+if (cfg?.authMode !== "oauth" || !cfg.profileId || !cfg.connectorIds?.length) {
   console.error(
     `Connect ${projectRoot} with an Augenta sign-in before running this test.`,
   );
@@ -138,7 +138,7 @@ if (cfg?.authMode !== "oauth" || !cfg.profileId || !cfg.neurolinkIds?.length) {
  * asserts the record landed in EACH of them — that is the only end-to-end proof
  * that fan-out reached more than the first Neurospace.
  */
-const destinations = cfg.neurolinkIds;
+const destinations = cfg.connectorIds;
 
 console.log(`dev-e2e — project=${projectRoot}`);
 const discovered = await augentaOAuthConfig(args.controlUrl);
@@ -167,19 +167,19 @@ check(
   "stored sign-in reaches /v1/me",
   `${me.user?.email || me.user?.id} · ${me.org?.name}`,
 );
-const links = new Map<string, Neurolink>();
+const links = new Map<string, Connector>();
 for (const id of destinations) {
-  const { neurolink } = await json<{ neurolink: Neurolink }>(
+  const { connector } = await json<{ connector: Connector }>(
     cfg.profileId,
-    `${gateway}/v1/neurolinks/${encodeURIComponent(id)}`,
+    `${gateway}/v1/connectors/${encodeURIComponent(id)}`,
   );
-  links.set(id, neurolink);
+  links.set(id, connector);
   check(
-    neurolink.status === "active" &&
-      (neurolink.direction === "inbound" ||
-        neurolink.direction === "bidirectional"),
-    `configured Neurolink ${id} is active and inbound`,
-    `neurospace=${neurolink.neurospaceId}`,
+    connector.status === "active" &&
+      (connector.direction === "inbound" ||
+        connector.direction === "bidirectional"),
+    `configured Connector ${id} is active and inbound`,
+    `neurospace=${connector.neurospaceId}`,
   );
 }
 check(
@@ -197,7 +197,7 @@ try {
       {
         authMode: "oauth",
         profileId: cfg.profileId,
-        neurolinkIds: destinations,
+        connectorIds: destinations,
         endpoint: gateway,
       },
       null,
@@ -232,7 +232,7 @@ try {
         turn: 1,
         kind: "msg",
         role: "assistant",
-        text: "Verified through the real durable outbox and Neurolink",
+        text: "Verified through the real durable outbox and Connector",
       },
     ]),
     "real plugin outbox accepted the test turn",
@@ -261,8 +261,8 @@ try {
   const rows = await waitForExperiences(cfg.profileId, gateway, sid, destinations);
   check(rows.length > 0, "experience landed and is visible to its user");
   // The load-bearing fan-out assertion: ONE ship reached EVERY destination, with
-  // the same bytes attributed to each Neurolink in turn.
-  const landed = new Set(rows.map((r) => r.neurolinkId));
+  // the same bytes attributed to each Connector in turn.
+  const landed = new Set(rows.map((r) => r.connectorId));
   check(
     destinations.every((id) => landed.has(id)),
     `experience landed in all ${destinations.length} configured destination(s)`,
@@ -274,8 +274,8 @@ try {
       experience: {
         sid?: string;
         v?: number;
-        neurolinkId?: string;
-        neurolinkRevision?: number;
+        connectorId?: string;
+        connectorRevision?: number;
         routing?: { caller?: { type?: string; userId?: string } };
       };
     }>(
@@ -285,14 +285,14 @@ try {
     check(
       detail.experience.sid === sid &&
         detail.experience.v === 2 &&
-        detail.experience.neurolinkId === row.neurolinkId &&
-        detail.experience.neurolinkRevision ===
-          links.get(row.neurolinkId)?.revision &&
+        detail.experience.connectorId === row.connectorId &&
+        detail.experience.connectorRevision ===
+          links.get(row.connectorId)?.revision &&
         // Platform-side wire value in the routing snapshot, not ours to rename:
         // this asserts what the server recorded about the caller.
         detail.experience.routing?.caller?.type === "workos" &&
         detail.experience.routing?.caller?.userId === me.user.id,
-      `durable record preserves schema-v2 caller and Neurolink snapshot (${row.neurolinkId})`,
+      `durable record preserves schema-v2 caller and Connector snapshot (${row.connectorId})`,
     );
   }
 } finally {

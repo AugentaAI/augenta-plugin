@@ -97,21 +97,21 @@ bun "<plugin-root>/scripts/connect.ts"
 
 Either way it reuses your owner-only global sign-in when possible, otherwise
 starts device login. It displays the authenticated organization, always requires
-you to select the Neurospaces, creates or reuses **one inbound agent Neurolink per
+you to select the Neurospaces, creates or reuses **one inbound agent Connector per
 selected Neurospace** through the normal `/v1` API, verifies each, and writes this
 private, self-ignored project directory:
 
 ```text
 <project>/.augenta/
 ├── .gitignore     "*"  — prevents the directory from being committed
-└── config.json    profileId, neurolinkIds, optional endpoint (mode 0600)
+└── config.json    profileId, connectorIds, optional endpoint (mode 0600)
 ```
 
 Rotating access and refresh tokens live only in `~/.augenta/auth.json` (mode
 `0600`, inside a `0700` directory). The project stores no OAuth token,
 organization id, or Neurospace id. Autonomous services and CI can use the
 advanced `--api-key <AugentaKey>` option; that path is single-destination and the
-assigned Neurolink is derived server-side.
+assigned Connector is derived server-side.
 
 The presence of a **readable** `.augenta/config.json` is the project's consent to
 capture both agent activity and project memory. Delete that file—or the entire
@@ -120,7 +120,7 @@ capture both agent activity and project memory. Delete that file—or the entire
 
 ### Sending to several Neurospaces
 
-A project can feed more than one Neurospace. Each gets its own inbound Neurolink,
+A project can feed more than one Neurospace. Each gets its own inbound Connector,
 and **every one receives the full record** — the same activity steps, the same raw
 transcript lines, and the same memory documents, complete, in each. It is a copy
 to each destination, not a split between them.
@@ -133,7 +133,7 @@ each one.
 Re-running `/augenta:connect` **replaces the whole set**: the answer is the
 complete list of destinations, with the current ones shown already selected. A
 Neurospace you deselect stops receiving this project immediately — its id is
-dropped from `config.json` — while its Neurolink is left in place and idle on the
+dropped from `config.json` — while its Connector is left in place and idle on the
 platform, so nothing is disabled or deleted on your behalf and re-selecting it
 later picks up the same link. There is no "select nothing" answer that
 disconnects an already-connected project; deleting `.augenta/config.json` is how
@@ -152,12 +152,13 @@ per project after upgrading:
   script, under an authentication scheme the platform no longer accepts.
 - **Connected on 0.3.x** — the project's `authMode` uses the older `workos`
   spelling, replaced by the provider-neutral `oauth`.
+- **Connected before 0.7.0** — the routing key in `config.json` was renamed to
+  `connectorIds`, along with the API route and header behind it. Every project
+  connected on an earlier version must re-run `/augenta:connect`; there is no
+  fallback read, so an unconverted project simply has no destination configured
+  and captures nothing.
 
-Projects connected on **0.5.x keep working** and need no action: their single
-Neurolink is read forward as a one-destination set. Re-run `/augenta:connect` when
-you want to add a second Neurospace.
-
-Neither is migrated automatically: reusing an old credential or routing decision
+None of these is migrated automatically: reusing an old credential or routing decision
 would turn a clear reconnect into an unexplained authentication failure. Each such
 project instead gets one automatic prompt to run `/augenta:connect` again, which
 is now a single question and, at most, one link to click. Anything already queued
@@ -279,7 +280,7 @@ The main implementation lives in:
 
 - `hooks/` — lifecycle entrypoints for supported coding agents
 - `capture/` — normalization, scrubbing, durable buffering, and delivery
-- `scripts/connect.ts` — sign-in, Neurolink selection, safe project config, and
+- `scripts/connect.ts` — sign-in, Connector selection, safe project config, and
   the agent-driven `--json` verbs
 - `scripts/dev-e2e.ts` — hosted sign-in/profile/plugin/durable-landing verification
 - `skills/connect/` — the guided connection flow

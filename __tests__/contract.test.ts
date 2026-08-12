@@ -40,7 +40,7 @@ const KNOWN_HOOK_EVENTS = new Set([
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.6.0";
+const RELEASE_VERSION = "0.7.0";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -132,7 +132,7 @@ describe("skill frontmatter", () => {
         expect(existsSync(metadataPath)).toBe(true);
         const metadata = readFileSync(metadataPath, "utf8");
         expect(metadata).toContain('display_name: "Connect Augenta"');
-        expect(metadata).toContain('short_description: "Connect this project through a Neurolink"');
+        expect(metadata).toContain('short_description: "Connect this project through a Connector"');
         expect(metadata).toContain('default_prompt: "Use $augenta:connect to connect Augenta for this project."');
         expect(metadata).toContain("allow_implicit_invocation: true");
       });
@@ -377,7 +377,7 @@ describe("the consent gate is plural, explicit, and fully disclosed", () => {
   test("the skill reports EVERY destination, never just the first", () => {
     expect(skill).toContain("destinations");
     expect(flat).toMatch(/name \*\*every\*\* entry in `destinations`/i);
-    expect(skill).toContain("unresolvedNeurolinkIds");
+    expect(skill).toContain("unresolvedConnectorIds");
   });
 
   test("AGENTS.md records the new consent semantics as invariants", () => {
@@ -387,7 +387,10 @@ describe("the consent gate is plural, explicit, and fully disclosed", () => {
       /left in place and idle/,
       /subset of the set the user just confirmed/,
       /platform-key path stays single-destination/i,
-      /widening a field's shape without changing its meaning is not migration/i,
+      // 0.7.0 replaced the read-forward with a hard break: `connectorIds` is
+      // the only routing key read, and only as an array.
+      /`connectorIds` is the \*\*only\*\* routing key read/i,
+      /a scalar is not read forward/i,
     ]) {
       expect(agents).toMatch(phrase);
     }
@@ -532,7 +535,7 @@ describe("manifests — cross-harness packaging and one version", () => {
 
   test("all release surfaces agree on ONE version", () => {
     const packageJson = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf8"));
-    // connect.ts reports its version to the platform as Neurolink metadata, so
+    // connect.ts reports its version to the platform as Connector metadata, so
     // it is a release surface too — and the only one not expressed as JSON, which
     // is exactly how it drifted a release behind before this assertion existed.
     const connectSource = readFileSync(join(PLUGIN_ROOT, "scripts", "connect.ts"), "utf8");

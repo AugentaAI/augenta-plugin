@@ -2,7 +2,7 @@
  * Project-scoped capture consent and routing.
  *
  * Human projects keep only a global sign-in profile reference and the
- * authoritative Neurolink ids — one per Neurospace the user selected. Machine
+ * authoritative Connector ids — one per Neurospace the user selected. Machine
  * projects may instead hold a platform-managed API key. No organization or
  * Neurospace coordinate is accepted from project config.
  *
@@ -15,14 +15,12 @@
  * routing would trade a clear reconnect for an unexplained 401, so it parses to
  * undefined and session-start.ts turns that into a one-time reconnect prompt.
  *
- * WIDENING a field's shape without changing its meaning is not migration. A
- * pre-0.6.0 scalar `neurolinkId` names a live link and ships successfully today,
- * so it is read forward as the one-element `neurolinkIds` set: same id, same
- * meaning, no credential reused and no routing decision re-derived, therefore no
- * 401 for the policy to prevent. Rejecting it would instead hand a silent
- * capture outage plus a single reconnect prompt to every already-connected
- * project, for a change they never asked for. The write path emits only the
- * plural form.
+ * 0.7.0 renamed the routing key to `connectorIds` and reads NOTHING else. A
+ * config written by an older plugin uses the previous key, so it parses to
+ * undefined and prompts a reconnect — the same treatment every other
+ * unparseable config gets. There is no read-forward: the id it holds is a
+ * routing decision made against a surface that has been renamed end to end,
+ * and honouring it silently would be a guess, not a migration.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -40,16 +38,15 @@ export interface ProjectConfig {
    * entry per selected Neurospace; never empty in a parsed oauth config. Absent
    * in api-key mode, where the key's own assignment is the route.
    */
-  neurolinkIds?: string[];
+  connectorIds?: string[];
   apiKey?: string;
   endpoint?: string;
   projectRoot: string;
 }
 
 /**
- * Destinations, newest format first. An ARRAY is the current format; a bare
- * string is the pre-0.6.0 spelling of the SAME routing decision and is read
- * forward as one element (see the file header).
+ * Destinations. An ARRAY is the ONLY accepted shape — a scalar is not read, and
+ * neither is any other spelling of the key (see the file header).
  *
  * Returns `[]` for anything unusable, which the caller turns into an
  * unparseable config. One bad member poisons the whole list rather than being
@@ -58,15 +55,8 @@ export interface ProjectConfig {
  * id would otherwise become two cursor keys double-POSTing the same bytes to the
  * same Neurospace on every drain.
  */
-function parseNeurolinkIds(value: {
-  neurolinkIds?: unknown;
-  neurolinkId?: unknown;
-}): string[] {
-  const raw = Array.isArray(value.neurolinkIds)
-    ? value.neurolinkIds
-    : typeof value.neurolinkId === "string"
-      ? [value.neurolinkId]
-      : [];
+function parseConnectorIds(value: { connectorIds?: unknown }): string[] {
+  const raw = Array.isArray(value.connectorIds) ? value.connectorIds : [];
   const ids: string[] = [];
   for (const item of raw) {
     if (typeof item !== "string") return [];
@@ -100,8 +90,7 @@ export function loadProjectConfig(
     const value = JSON.parse(readFileSync(configPath(projectRoot), "utf8")) as {
       authMode?: unknown;
       profileId?: unknown;
-      neurolinkIds?: unknown;
-      neurolinkId?: unknown;
+      connectorIds?: unknown;
       apiKey?: unknown;
       endpoint?: unknown;
     };
@@ -112,12 +101,12 @@ export function loadProjectConfig(
     if (value.authMode === "oauth") {
       const profileId =
         typeof value.profileId === "string" ? value.profileId.trim() : "";
-      const neurolinkIds = parseNeurolinkIds(value);
-      if (!profileId || neurolinkIds.length === 0) return undefined;
+      const connectorIds = parseConnectorIds(value);
+      if (!profileId || connectorIds.length === 0) return undefined;
       return {
         authMode: "oauth",
         profileId,
-        neurolinkIds,
+        connectorIds,
         ...(endpoint ? { endpoint } : {}),
         projectRoot,
       };
@@ -166,6 +155,6 @@ export function captureKilled(): boolean {
 export function captureEnabled(cfg: ProjectConfig | undefined): boolean {
   if (!cfg || captureKilled()) return false;
   return cfg.authMode === "oauth"
-    ? Boolean(cfg.profileId) && (cfg.neurolinkIds?.length ?? 0) > 0
+    ? Boolean(cfg.profileId) && (cfg.connectorIds?.length ?? 0) > 0
     : Boolean(cfg.apiKey);
 }

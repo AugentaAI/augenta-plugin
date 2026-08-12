@@ -1,7 +1,7 @@
 /**
  * Tests for config.ts — project-scoped config resolution and the consent gate.
  *
- * Contract under test: project consent and a Neurolink or platform key travel
+ * Contract under test: project consent and a Connector or platform key travel
  * together in `<project>/.augenta/config.json` (found by walking UP from cwd); no env var
  * and no home-dir file can stand in for it; AUGENTA_INGEST_URL only redirects
  * the destination; AUGENTA_CAPTURE_ENABLED=0|false kills capture everywhere.
@@ -80,59 +80,54 @@ describe("loadProjectConfig", () => {
     writeConfig(project, {
       authMode: "oauth",
       profileId: "profile_1",
-      neurolinkIds: ["link_1", "link_2"],
+      connectorIds: ["link_1", "link_2"],
     });
     expect(loadProjectConfig(project)).toEqual({
       authMode: "oauth",
       profileId: "profile_1",
-      neurolinkIds: ["link_1", "link_2"],
+      connectorIds: ["link_1", "link_2"],
       projectRoot: project,
     });
   });
 
-  describe("the destination set — widening a field is not migration", () => {
-    test("a pre-0.6.0 scalar `neurolinkId` is READ FORWARD as a one-element set", () => {
-      // Not a migration: the same id keeps meaning exactly what it meant, no
-      // credential is reused and no routing is re-derived, so there is no
-      // unexplained 401 for the no-migration policy to prevent. Rejecting it
-      // would silently stop capture for every already-connected project.
+  describe("the destination set — `connectorIds` is the only routing key", () => {
+    test("a scalar `connectorId` is NOT read forward", () => {
+      // 0.7.0 renamed the routing surface end to end. Honouring a scalar would
+      // be guessing at a routing decision made against the old surface, so it
+      // falls through to the ordinary unparseable-config reconnect prompt.
       writeConfig(project, {
         authMode: "oauth",
         profileId: "profile_1",
-        neurolinkId: "link_1",
+        connectorId: "link_1",
       });
-      expect(loadProjectConfig(project)).toEqual({
-        authMode: "oauth",
-        profileId: "profile_1",
-        neurolinkIds: ["link_1"],
-        projectRoot: project,
-      });
+      expect(loadProjectConfig(project)).toBeUndefined();
     });
 
-    test("the plural form wins when both spellings are present", () => {
+    test("a config keyed by any other spelling is unparseable", () => {
+      // A pre-0.7.0 project lands here: it has a routing key, just not this
+      // one. Reconnecting is the ask; silently capturing nothing is not.
       writeConfig(project, {
         authMode: "oauth",
         profileId: "profile_1",
-        neurolinkId: "link_stale",
-        neurolinkIds: ["link_1"],
+        someOtherRoutingKey: ["link_1"],
       });
-      expect(loadProjectConfig(project)?.neurolinkIds).toEqual(["link_1"]);
+      expect(loadProjectConfig(project)).toBeUndefined();
     });
 
     test("duplicates collapse — one id must never become two cursor keys", () => {
       writeConfig(project, {
         authMode: "oauth",
         profileId: "profile_1",
-        neurolinkIds: ["link_1", " link_1 ", "link_2"],
+        connectorIds: ["link_1", " link_1 ", "link_2"],
       });
-      expect(loadProjectConfig(project)?.neurolinkIds).toEqual(["link_1", "link_2"]);
+      expect(loadProjectConfig(project)?.connectorIds).toEqual(["link_1", "link_2"]);
     });
 
     test("an empty or partly-invalid set is unparseable, never a partial route", () => {
       // Shipping to a SUBSET of the destinations the user consented to, while
       // reporting success, is the outcome worth failing closed to avoid.
-      for (const neurolinkIds of [[], ["link_1", 42], ["link_1", ""], "link_1_not_array"]) {
-        writeConfig(project, { authMode: "oauth", profileId: "profile_1", neurolinkIds });
+      for (const connectorIds of [[], ["link_1", 42], ["link_1", ""], "link_1_not_array"]) {
+        writeConfig(project, { authMode: "oauth", profileId: "profile_1", connectorIds });
         expect(loadProjectConfig(project)).toBeUndefined();
       }
     });
@@ -142,10 +137,11 @@ describe("loadProjectConfig", () => {
     // Not migrated on purpose: an unparseable config becomes session-start's
     // one-time reconnect prompt, which is a clear ask instead of a stale routing
     // decision reused behind the user's back.
+    // Routing is otherwise VALID here, so the rejection isolates `authMode`.
     writeConfig(project, {
       authMode: "workos",
       profileId: "profile_1",
-      neurolinkId: "link_1",
+      connectorIds: ["link_1"],
     });
     expect(loadProjectConfig(project)).toBeUndefined();
   });
@@ -205,14 +201,14 @@ describe("URL resolution", () => {
 describe("captureEnabled — config presence IS consent", () => {
   test("on with a config, off without", () => {
     expect(captureEnabled({ authMode: "api-key", apiKey: "k", projectRoot: "/p" })).toBe(true);
-    expect(captureEnabled({ authMode: "oauth", profileId: "profile_1", neurolinkIds: ["link_1"], projectRoot: "/p" })).toBe(true);
+    expect(captureEnabled({ authMode: "oauth", profileId: "profile_1", connectorIds: ["link_1"], projectRoot: "/p" })).toBe(true);
     expect(captureEnabled(undefined)).toBe(false);
   });
 
   test("oauth consent needs at least one destination", () => {
     // No destination means nowhere to ship — capture stays a silent no-op rather
     // than spooling records with no route.
-    expect(captureEnabled({ authMode: "oauth", profileId: "profile_1", neurolinkIds: [], projectRoot: "/p" })).toBe(false);
+    expect(captureEnabled({ authMode: "oauth", profileId: "profile_1", connectorIds: [], projectRoot: "/p" })).toBe(false);
     expect(captureEnabled({ authMode: "oauth", profileId: "profile_1", projectRoot: "/p" })).toBe(false);
   });
 
