@@ -4,16 +4,16 @@
  *
  * Two front ends over the same core. A human running this in a terminal gets the
  * interactive prompts. An agent runs the `--json` verbs — `--probe`, `--login`,
- * `--await-login`, `--neurospace` — each of which returns one JSON object and
+ * `--await-login`, `--workspace` — each of which returns one JSON object and
  * exits, so the sign-in link reaches the user in a bounded call instead of after
  * a poll loop nobody can see. No verb accepts or emits a credential: tokens go
  * browser → `~/.augenta/auth.json`, and `--api-key` stays human/CI-only.
  *
- * A signed-in project may feed SEVERAL Neurospaces — one inbound Connector each,
- * `--neurospace` repeated once per destination. The answer is always the complete
+ * A signed-in project may feed SEVERAL Workspaces — one inbound Connector each,
+ * `--workspace` repeated once per destination. The answer is always the complete
  * destination set, so this file's job is to make the config a faithful record of
  * what the user just confirmed and nothing more: see `establishConnectors` for the
- * subset invariant and `linkForNeurospace` for why links are adopted, never moved.
+ * subset invariant and `linkForWorkspace` for why links are adopted, never moved.
  * A platform key stays single-destination (`verifyApiKeyConnection`).
  */
 import { execFileSync } from "node:child_process";
@@ -56,9 +56,9 @@ interface Args {
   login?: boolean;
   awaitLogin?: boolean;
   waitSeconds?: number;
-  /** Every Neurospace the project should feed. `--neurospace` is repeatable and
+  /** Every Workspace the project should feed. `--workspace` is repeatable and
    *  the list is the COMPLETE destination set, not an addition. */
-  neurospaces?: string[];
+  workspaces?: string[];
   profile?: string;
 }
 
@@ -72,7 +72,7 @@ interface MeResponse {
   org: { id: string; name: string };
 }
 
-interface Neurospace {
+interface Workspace {
   id: string;
   name: string;
 }
@@ -82,7 +82,7 @@ interface Connector {
   kind: string;
   direction: "inbound" | "outbound" | "bidirectional";
   status: "active" | "disabled";
-  neurospaceId: string;
+  workspaceId: string;
   _etag?: string;
 }
 
@@ -91,7 +91,7 @@ interface Connector {
  * (AGENTS.md → Releases) alongside both plugin manifests, both marketplace files,
  * and package.json; the contract test pins all of them to one value.
  */
-export const PLUGIN_VERSION = "0.7.0";
+export const PLUGIN_VERSION = "0.8.0";
 
 class AugentaRequestError extends Error {
   constructor(
@@ -133,12 +133,12 @@ export function parseArgs(argv: string[]): Args {
         throw new Error("--harness must be claude-code or codex");
       }
       args.harness = value;
-    } else if (flag === "--neurospace") {
+    } else if (flag === "--workspace") {
       // Repeatable rather than comma-separated: `valueFor` keeps validating each
-      // occurrence, so `--neurospace --profile p` still fails loudly. Splitting a
+      // occurrence, so `--workspace --profile p` still fails loudly. Splitting a
       // string would move that check inside the value, where an empty segment or
       // a stray comma becomes a silent mis-selection instead of an error.
-      (args.neurospaces ??= []).push(valueFor(flag, i++));
+      (args.workspaces ??= []).push(valueFor(flag, i++));
     } else if (flag === "--profile") {
       args.profile = valueFor(flag, i++);
     } else if (flag === "--wait") {
@@ -286,7 +286,7 @@ function detectedHarness(args: Args): "claude-code" | "codex" {
 
 /**
  * Numbered interactive pick of ONE. A single option is auto-selected — there is
- * nothing to decide. The Neurospace choice deliberately does NOT come through
+ * nothing to decide. The Workspace choice deliberately does NOT come through
  * here; see {@link chooseMany}.
  */
 async function choose<T>(
@@ -321,7 +321,7 @@ async function choose<T>(
  * The consent gate: numbered MULTI-pick returning the complete selected set.
  *
  * This function has no shortcut, and that is the point of it being separate from
- * {@link choose}. WHICH Neurospaces a project feeds is the user's consent
+ * {@link choose}. WHICH Workspaces a project feeds is the user's consent
  * decision, so it is asked every time — including when the organization has only
  * one, and including when the project is already connected, where the current set
  * is shown pre-selected and must be re-affirmed rather than kept by default (see
@@ -373,7 +373,7 @@ async function chooseMany<T>(
         `Not a choice: ${bad}. Enter numbers from 1 to ${values.length}, separated by commas.`,
       );
     }
-    throw new Error("no valid Neurospace selection was given");
+    throw new Error("no valid Workspace selection was given");
   } finally {
     rl.close();
   }
@@ -489,31 +489,31 @@ async function selectOrCreateProfile(
   return saveVerifiedLogin(oauth, await deviceLogin(oauth));
 }
 
-async function listNeurospaces(
+async function listWorkspaces(
   profileId: string,
   gateway: string,
-): Promise<Neurospace[]> {
-  const { neurospaces } = await bearerJson<{ neurospaces: Neurospace[] }>(
+): Promise<Workspace[]> {
+  const { workspaces } = await bearerJson<{ workspaces: Workspace[] }>(
     profileId,
-    `${gateway}/v1/neurospaces`,
+    `${gateway}/v1/workspaces`,
   );
-  if (neurospaces.length === 0) {
-    throw new Error("the authenticated organization has no active Neurospaces");
+  if (workspaces.length === 0) {
+    throw new Error("the authenticated organization has no active Workspaces");
   }
-  return neurospaces;
+  return workspaces;
 }
 
-async function selectedNeurospaces(
+async function selectedWorkspaces(
   profileId: string,
   gateway: string,
   preselectedIds: readonly string[] = [],
-  available?: readonly Neurospace[],
-): Promise<Neurospace[]> {
+  available?: readonly Workspace[],
+): Promise<Workspace[]> {
   return chooseMany(
-    "Choose every Neurospace this project should feed (each one receives the full record):",
-    [...(available ?? (await listNeurospaces(profileId, gateway)))],
-    (neurospace) => `${neurospace.name} (${neurospace.id})`,
-    { preselected: (neurospace) => preselectedIds.includes(neurospace.id) },
+    "Choose every Workspace this project should feed (each one receives the full record):",
+    [...(available ?? (await listWorkspaces(profileId, gateway)))],
+    (workspace) => `${workspace.name} (${workspace.id})`,
+    { preselected: (workspace) => preselectedIds.includes(workspace.id) },
   );
 }
 
@@ -556,14 +556,14 @@ async function priorLinks(
 }
 
 /**
- * The one link that carries this project into `neurospace` — adopted when one of
+ * The one link that carries this project into `workspace` — adopted when one of
  * this project's prior links ALREADY points there, otherwise created.
  *
- * `neurospaceId` is never mutated. The pre-fan-out code retargeted the single
- * link by PATCHing a new `neurospaceId` onto it, which under fan-out would (a)
+ * `workspaceId` is never mutated. The pre-fan-out code retargeted the single
+ * link by PATCHing a new `workspaceId` onto it, which under fan-out would (a)
  * steal a link belonging to a destination the user KEPT and (b) relabel the route
  * of history already attached to that link. Adopt-or-create instead makes "one
- * link per (project, Neurospace)" a stable identity, so re-running connect with
+ * link per (project, Workspace)" a stable identity, so re-running connect with
  * the same answer converges instead of accumulating siblings.
  *
  * Adoption is scoped to ids from THIS project's config, never matched against the
@@ -571,17 +571,17 @@ async function priorLinks(
  * an org, so that would let one user's `~/code/api` adopt another's Connector,
  * which is a misrouting bug strictly worse than a duplicate.
  */
-async function linkForNeurospace(
+async function linkForWorkspace(
   projectRoot: string,
   args: Args,
   profileId: string,
   gateway: string,
-  neurospace: Neurospace,
+  workspace: Workspace,
   adoptable: readonly Connector[],
 ): Promise<{ connector: Connector; action: "adopted" | "created" }> {
   const name = basename(projectRoot);
   const fields = {
-    neurospaceId: neurospace.id,
+    workspaceId: workspace.id,
     kind: "agent",
     direction: "inbound",
     name,
@@ -595,12 +595,12 @@ async function linkForNeurospace(
     (link) =>
       link.kind === "agent" &&
       link.status === "active" &&
-      link.neurospaceId === neurospace.id,
+      link.workspaceId === workspace.id,
   );
   if (existing) {
-    // Refresh the mutable metadata only. `kind` is immutable and `neurospaceId`
+    // Refresh the mutable metadata only. `kind` is immutable and `workspaceId`
     // already matches by construction, so neither is sent.
-    const { kind: _kind, neurospaceId: _neurospaceId, ...mutableFields } = fields;
+    const { kind: _kind, workspaceId: _workspaceId, ...mutableFields } = fields;
     const connector = (
       await bearerJson<{ connector: Connector }>(
         profileId,
@@ -655,8 +655,8 @@ function priorConnection(
 
 /** One destination's outcome. `connectorId` is present iff it verified. */
 export interface DestinationResult {
-  neurospaceId: string;
-  neurospaceName: string;
+  workspaceId: string;
+  workspaceName: string;
   connectorId?: string;
   action?: "created" | "adopted";
   /** Why this destination failed. Never carries a credential. */
@@ -672,18 +672,18 @@ export interface DestinationResult {
 /** A destination the user dropped from the set. */
 export interface RemovedDestination {
   connectorId: string;
-  neurospaceId: string;
-  neurospaceName?: string;
+  workspaceId: string;
+  workspaceName?: string;
   /** The Connector is left alone on the platform — see below. */
   disposition: "left_in_place";
 }
 
 /**
- * Link every selected Neurospace, verify each, then write the config ONCE.
+ * Link every selected Workspace, verify each, then write the config ONCE.
  *
  * Verification is per destination and NON-FATAL. The single-destination code
  * threw on a failed verify, which under fan-out would let one unreachable
- * Neurospace lose the two that worked.
+ * Workspace lose the two that worked.
  *
  * The config is written once, at the end, containing only the destinations that
  * verified — never incrementally. That yields the invariant worth stating plainly:
@@ -705,11 +705,11 @@ async function establishConnectors(
   args: Args,
   profileId: string,
   gateway: string,
-  neurospaces: readonly Neurospace[],
+  workspaces: readonly Workspace[],
   priorConnectorIds: readonly string[],
-  /** The organization's live Neurospaces, so removals can be NAMED rather than
+  /** The organization's live Workspaces, so removals can be NAMED rather than
    *  reported as bare ids. */
-  available: readonly Neurospace[] = neurospaces,
+  available: readonly Workspace[] = workspaces,
   /** Prior links resolved by the caller, to avoid a second round of GETs. */
   preresolved?: readonly Connector[],
 ): Promise<{
@@ -724,16 +724,16 @@ async function establishConnectors(
   const unresolvedConnectorIds = priorConnectorIds.filter(
     (id) => !adoptable.some((link) => link.id === id),
   );
-  const priorNeurospaceIds = adoptable.map((link) => link.neurospaceId);
+  const priorWorkspaceIds = adoptable.map((link) => link.workspaceId);
   const results: DestinationResult[] = [];
-  for (const neurospace of neurospaces) {
+  for (const workspace of workspaces) {
     try {
-      const { connector, action } = await linkForNeurospace(
+      const { connector, action } = await linkForWorkspace(
         projectRoot,
         args,
         profileId,
         gateway,
-        neurospace,
+        workspace,
         adoptable,
       );
       const verified = await bearerJson<{ connector: Connector }>(
@@ -742,24 +742,24 @@ async function establishConnectors(
       );
       if (
         verified.connector.status !== "active" ||
-        verified.connector.neurospaceId !== neurospace.id
+        verified.connector.workspaceId !== workspace.id
       ) {
         throw new Error("Connector verification failed");
       }
       results.push({
-        neurospaceId: neurospace.id,
-        neurospaceName: neurospace.name,
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
         connectorId: verified.connector.id,
         action,
       });
     } catch (error) {
       results.push({
-        neurospaceId: neurospace.id,
-        neurospaceName: neurospace.name,
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
         message: error instanceof Error ? error.message : String(error),
         // A destination the project ALREADY fed is being dropped, not merely not
         // added. Same message either way would hide a change of state.
-        ...(priorNeurospaceIds.includes(neurospace.id) ? { wasConnected: true } : {}),
+        ...(priorWorkspaceIds.includes(workspace.id) ? { wasConnected: true } : {}),
       });
     }
   }
@@ -767,20 +767,20 @@ async function establishConnectors(
   const verifiedIds = results
     .map((result) => result.connectorId)
     .filter((id): id is string => Boolean(id));
-  // Removed means DESELECTED — its Neurospace is not in the set the user just
+  // Removed means DESELECTED — its Workspace is not in the set the user just
   // confirmed. A destination they kept but that failed to link is a failure, not a
   // removal, and must never be reported as one.
-  const selectedIds = neurospaces.map((neurospace) => neurospace.id);
+  const selectedIds = workspaces.map((workspace) => workspace.id);
   const nameFor = (id: string): string | undefined =>
-    available.find((neurospace) => neurospace.id === id)?.name;
+    available.find((workspace) => workspace.id === id)?.name;
   const removed = adoptable
-    .filter((link) => !selectedIds.includes(link.neurospaceId))
+    .filter((link) => !selectedIds.includes(link.workspaceId))
     .map((link) => {
-      const name = nameFor(link.neurospaceId);
+      const name = nameFor(link.workspaceId);
       return {
         connectorId: link.id,
-        neurospaceId: link.neurospaceId,
-        ...(name ? { neurospaceName: name } : {}),
+        workspaceId: link.workspaceId,
+        ...(name ? { workspaceName: name } : {}),
         disposition: "left_in_place" as const,
       };
     });
@@ -793,7 +793,7 @@ async function establishConnectors(
     gateway === DEFAULT_GATEWAY ? undefined : gateway,
   );
   // Stamp the outbox's destination map here, while we still know which links were
-  // just CREATED. A newly added Neurospace must not inherit the pending tail a
+  // just CREATED. A newly added Workspace must not inherit the pending tail a
   // pre-fan-out cursor accumulated for the destination that earned it, and by the
   // time the shipper runs that distinction is gone (see Outbox.registerDestinations).
   try {
@@ -819,38 +819,38 @@ export async function connectProject(
   );
   const priorIds = prior?.connectorIds ?? [];
   const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds);
-  const available = await listNeurospaces(selected.profileId, gateway);
+  const available = await listWorkspaces(selected.profileId, gateway);
   const environment = environmentLabel(args);
 
   // BEFORE the answer, not after. This is the disclosure the consent invariant
-  // turns on (AGENTS.md → Privacy invariants): a list of Neurospace names does not
+  // turns on (AGENTS.md → Privacy invariants): a list of Workspace names does not
   // tell anyone how many people can read their transcripts, and a warning that
   // arrives after the selection cannot change it.
   console.log(
-    "Every Neurospace you select receives the FULL record — this project's agent activity, its raw transcript lines (structurally sanitized, but NOT secret-scrubbed), and its project memory, complete, in each.",
+    "Every Workspace you select receives the FULL record — this project's agent activity, its raw transcript lines (structurally sanitized, but NOT secret-scrubbed), and its project memory, complete, in each.",
   );
   console.log(
-    "So anyone with access to ANY Neurospace you select can read this project's captured activity: the audience is the union of all of them.",
+    "So anyone with access to ANY Workspace you select can read this project's captured activity: the audience is the union of all of them.",
   );
   if (environment !== "prod") {
     console.log(`This is the ${environment} environment, not production.`);
   }
 
-  const neurospaces = await selectedNeurospaces(
+  const workspaces = await selectedWorkspaces(
     selected.profileId,
     gateway,
-    resolvedPrior.map((link) => link.neurospaceId),
+    resolvedPrior.map((link) => link.workspaceId),
     available,
   );
-  if (neurospaces.length === 0) {
+  if (workspaces.length === 0) {
     // "Nothing connected" would be false for a project that is already connected:
     // leaving the config untouched means it keeps shipping to every prior
     // destination. Selecting nothing is not the off switch; deleting the file is.
     if (priorIds.length > 0) {
       const current = resolvedPrior
         .map((link) => {
-          const name = available.find((n) => n.id === link.neurospaceId)?.name;
-          return name ?? link.neurospaceId;
+          const name = available.find((n) => n.id === link.workspaceId)?.name;
+          return name ?? link.workspaceId;
         })
         .join(", ");
       console.log(
@@ -868,7 +868,7 @@ export async function connectProject(
       args,
       selected.profileId,
       gateway,
-      neurospaces,
+      workspaces,
       priorIds,
       available,
       resolvedPrior,
@@ -878,7 +878,7 @@ export async function connectProject(
   if (live.length > 0) {
     console.log(
       `Wrote ${written} (0600). This project now feeds ${live
-        .map((result) => `${result.neurospaceName} (Connector ${result.connectorId})`)
+        .map((result) => `${result.workspaceName} (Connector ${result.connectorId})`)
         .join(", ")}.`,
     );
     if (live.length > 1) {
@@ -892,8 +892,8 @@ export async function connectProject(
   for (const result of failed) {
     console.log(
       result.wasConnected
-        ? `Could not link ${result.neurospaceName}, which this project WAS feeding: ${result.message}. It has been dropped — re-run connect to restore it.`
-        : `Could not link ${result.neurospaceName}: ${result.message}`,
+        ? `Could not link ${result.workspaceName}, which this project WAS feeding: ${result.message}. It has been dropped — re-run connect to restore it.`
+        : `Could not link ${result.workspaceName}: ${result.message}`,
     );
   }
   // Only true once a config actually replaced the old one. With nothing written,
@@ -901,7 +901,7 @@ export async function connectProject(
   if (written) {
     for (const entry of removed) {
       console.log(
-        `No longer sending to ${entry.neurospaceName ?? entry.neurospaceId}. Its Connector ${entry.connectorId} is left in place and idle — remove it in Augenta if you want it gone.`,
+        `No longer sending to ${entry.workspaceName ?? entry.workspaceId}. Its Connector ${entry.connectorId} is left in place and idle — remove it in Augenta if you want it gone.`,
       );
     }
     if (unresolvedConnectorIds.length > 0) {
@@ -943,26 +943,26 @@ function secondsUntil(timestamp: number): number {
 
 /** Signed in and ready to choose a target. Also the terminal state of a
  *  successful `--await-login`, saving the caller a round trip. */
-async function neurospaceStep(
+async function workspaceStep(
   profileId: string,
   gateway: string,
   me: MeResponse,
 ): Promise<JsonPayload> {
-  const neurospaces = await listNeurospaces(profileId, gateway);
+  const workspaces = await listWorkspaces(profileId, gateway);
   return {
-    status: "need_neurospace",
+    status: "need_workspace",
     profileId,
     signedInAs: {
       name: me.user.name || me.user.email,
       email: me.user.email,
       organization: me.org.name,
     },
-    neurospaces: neurospaces.map(({ id, name }) => ({ id, name })),
+    workspaces: workspaces.map(({ id, name }) => ({ id, name })),
   };
 }
 
 /**
- * The destinations this project currently feeds, resolved to Neurospace names so
+ * The destinations this project currently feeds, resolved to Workspace names so
  * the caller can pre-select them.
  *
  * Ids that cannot be resolved are reported in `unresolvedConnectorIds` rather
@@ -976,15 +976,15 @@ async function priorDestinations(
   profileId: string,
   gateway: string,
   ids: readonly string[],
-  neurospaces: readonly Neurospace[],
+  workspaces: readonly Workspace[],
 ): Promise<{
-  destinations: Array<{ connectorId: string; neurospaceId: string; neurospaceName?: string }>;
+  destinations: Array<{ connectorId: string; workspaceId: string; workspaceName?: string }>;
   unresolvedConnectorIds: string[];
 }> {
   const destinations: Array<{
     connectorId: string;
-    neurospaceId: string;
-    neurospaceName?: string;
+    workspaceId: string;
+    workspaceName?: string;
   }> = [];
   const unresolvedConnectorIds: string[] = [];
   for (const id of ids) {
@@ -993,11 +993,11 @@ async function priorDestinations(
       unresolvedConnectorIds.push(id);
       continue;
     }
-    const name = neurospaces.find((n) => n.id === link.neurospaceId)?.name;
+    const name = workspaces.find((n) => n.id === link.workspaceId)?.name;
     destinations.push({
       connectorId: link.id,
-      neurospaceId: link.neurospaceId,
-      ...(name ? { neurospaceName: name } : {}),
+      workspaceId: link.workspaceId,
+      ...(name ? { workspaceName: name } : {}),
     });
   }
   return { destinations, unresolvedConnectorIds };
@@ -1008,7 +1008,7 @@ async function priorDestinations(
  * needs to describe the choice and get consent before anything leaves the machine.
  *
  * An existing connection is reported as fields, not a terminal status — the skill
- * must still be able to reconnect a project to verify or change which Neurospaces
+ * must still be able to reconnect a project to verify or change which Workspaces
  * it feeds.
  */
 export async function probeConnection(
@@ -1032,7 +1032,7 @@ export async function probeConnection(
       })),
     };
   }
-  const step = await neurospaceStep(usable[0]!.profileId, gateway, usable[0]!.me);
+  const step = await workspaceStep(usable[0]!.profileId, gateway, usable[0]!.me);
   return {
     ...step,
     ...alreadyConnected,
@@ -1040,7 +1040,7 @@ export async function probeConnection(
       usable[0]!.profileId,
       gateway,
       priorIds,
-      step.neurospaces as Neurospace[],
+      step.workspaces as Workspace[],
     )),
   };
 }
@@ -1099,7 +1099,7 @@ export async function awaitLogin(args: Args): Promise<JsonPayload> {
     }
     const { profileId, me } = await saveVerifiedLogin(oauth, result.tokens);
     clearPendingLogin();
-    return neurospaceStep(profileId, gateway, me);
+    return workspaceStep(profileId, gateway, me);
   } catch (error) {
     if (error instanceof ReLoginRequiredError) {
       clearPendingLogin();
@@ -1114,7 +1114,7 @@ export async function awaitLogin(args: Args): Promise<JsonPayload> {
 }
 
 /**
- * Finish: bind the project to the chosen Neurospaces. The answer is the COMPLETE
+ * Finish: bind the project to the chosen Workspaces. The answer is the COMPLETE
  * destination set — what the project feeds after this call, and nothing else.
  *
  * Every id must be one the organization actually has. Validation happens for the
@@ -1123,7 +1123,7 @@ export async function awaitLogin(args: Args): Promise<JsonPayload> {
  * user saw rendered, so none of it is trustworthy. Failing closed beats quietly
  * misrouting a project's transcripts, or connecting a subset nobody confirmed.
  */
-export async function connectToNeurospaces(
+export async function connectToWorkspaces(
   resolved: ResolvedProject,
   args: Args,
 ): Promise<JsonPayload> {
@@ -1155,26 +1155,26 @@ export async function connectToNeurospaces(
       message: `no usable sign-in matches profile ${args.profile}`,
     };
   }
-  const available = await listNeurospaces(picked.profileId, gateway);
-  const requested = [...new Set(args.neurospaces ?? [])];
+  const available = await listWorkspaces(picked.profileId, gateway);
+  const requested = [...new Set(args.workspaces ?? [])];
   const unknown = requested.filter((id) => !available.some((item) => item.id === id));
   if (unknown.length > 0) {
     return {
       status: "error",
-      code: "unknown_neurospace",
+      code: "unknown_workspace",
       unknown,
-      message: `${unknown.join(", ")} ${unknown.length === 1 ? "is not an active Neurospace" : "are not active Neurospaces"} in ${picked.me.org.name}; nothing was created`,
+      message: `${unknown.join(", ")} ${unknown.length === 1 ? "is not an active Workspace" : "are not active Workspaces"} in ${picked.me.org.name}; nothing was created`,
     };
   }
   // Iterate in LIVE-LIST order rather than flag order, so the config is
   // byte-deterministic however the caller happened to order its arguments.
-  const neurospaces = available.filter((item) => requested.includes(item.id));
+  const workspaces = available.filter((item) => requested.includes(item.id));
   const { results, removed, unresolvedConnectorIds, configPath } = await establishConnectors(
     resolved.projectRoot,
     args,
     picked.profileId,
     gateway,
-    neurospaces,
+    workspaces,
     prior?.connectorIds ?? [],
     available,
   );
@@ -1185,7 +1185,7 @@ export async function connectToNeurospaces(
       status: "error",
       code: "no_destination_linked",
       message: `no destination could be linked; no config was written (${failed
-        .map((result) => `${result.neurospaceName}: ${result.message}`)
+        .map((result) => `${result.workspaceName}: ${result.message}`)
         .join("; ")})`,
     };
   }
@@ -1198,9 +1198,9 @@ export async function connectToNeurospaces(
     ...(failed.length > 0
       ? {
           failed: failed.map(
-            ({ neurospaceId, neurospaceName, message, wasConnected }) => ({
-              neurospaceId,
-              neurospaceName,
+            ({ workspaceId, workspaceName, message, wasConnected }) => ({
+              workspaceId,
+              workspaceName,
               message,
               ...(wasConnected ? { wasConnected } : {}),
             }),
@@ -1231,7 +1231,7 @@ export async function runJsonVerb(
         "--api-key is a human/CI path and is not available in --json mode; run it directly in a terminal",
     };
   }
-  if (args.neurospaces?.length) return connectToNeurospaces(resolved, args);
+  if (args.workspaces?.length) return connectToWorkspaces(resolved, args);
   if (args.awaitLogin) return awaitLogin(args);
   if (args.login) return startLogin(args);
   if (args.probe) return probeConnection(resolved, args);
@@ -1239,7 +1239,7 @@ export async function runJsonVerb(
     status: "error",
     code: "no_verb",
     message:
-      "--json requires one of --probe, --login, --await-login, or --neurospace <id> (repeatable)",
+      "--json requires one of --probe, --login, --await-login, or --workspace <id> (repeatable)",
   };
 }
 
@@ -1268,14 +1268,14 @@ export async function verifyApiKeyConnection(
     throw new Error("the platform key is not assigned to a Connector");
   }
   // This ban SURVIVES fan-out, deliberately. A signed-in project fans out because
-  // a human affirmed a set of Neurospaces; nothing on this path affirms anything —
+  // a human affirmed a set of Workspaces; nothing on this path affirms anything —
   // there is no consent gate here, the config format it writes has no field to
   // express a route, and the shipper sends no Connector header in api-key mode.
   // A platform key's server-side assignment IS its routing decision, so with
   // several links visible there is no non-arbitrary pick and the plugin cannot
   // verify which one the door will choose. Fail loudly now rather than let a CI
   // pipeline discover it from where its transcripts landed. Fanning a key out to
-  // several Neurospaces is a platform feature (assign the key to a link that does
+  // several Workspaces is a platform feature (assign the key to a link that does
   // it server-side, or issue one key per destination), not a plugin one.
   if (connectors.length > 1) {
     throw new Error(
@@ -1354,7 +1354,7 @@ if (import.meta.main) {
       );
     } else if (!input.isTTY) {
       throw new Error(
-        "signing in needs an interactive terminal; agents should use --json with --probe/--login/--await-login/--neurospace, and --api-key is for autonomous or CI clients.",
+        "signing in needs an interactive terminal; agents should use --json with --probe/--login/--await-login/--workspace, and --api-key is for autonomous or CI clients.",
       );
     } else {
       await connectProject(projectRoot, args);

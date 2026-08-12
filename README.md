@@ -5,11 +5,17 @@ which approaches failed, why a decision was made, and what finally worked. Most
 of that context disappears when the session ends.
 
 Augenta turns that work into durable, shared context. This plugin captures the
-agent activity from projects you choose and sends it to your Augenta Neurospace,
+agent activity from projects you choose and sends it to your Augenta Workspace,
 giving Augenta the source material it needs to build memory from how your team
 actually works. It also preserves the high-signal project memory your agents
 have already written, so useful context does not have to be reconstructed from
 activity alone.
+
+> An Augenta **Workspace** is a shared destination in your organization's
+> account — where captured experience lands and memory is built. It is not a
+> folder on your machine and has nothing to do with your editor's workspace.
+> The thing on your machine is always a **project**; a project feeds one
+> Workspace or several.
 
 ## Why use it?
 
@@ -18,9 +24,9 @@ activity alone.
   diff.
 - **Build memory from real work.** Give Augenta a continuous record of agent
   activity instead of relying on someone to document every discovery by hand.
-- **Share learning across your Neurospaces.** Turn isolated agent sessions into
+- **Share learning across your Workspaces.** Turn isolated agent sessions into
   useful organizational context for the people and agents working alongside
-  them. A project can feed one Neurospace or several.
+  them. A project can feed one Workspace or several.
 - **Capture without changing your workflow.** Once a project is connected,
   Augenta runs quietly in the background and tolerates temporary network
   failures without interrupting the agent.
@@ -80,7 +86,7 @@ in Claude's Code tab or ChatGPT's Codex mode.
 Connection is a deliberate per-project opt-in. Run `/augenta:connect` (Codex:
 `$augenta:connect` or "Connect Augenta") and answer in the chat:
 
-1. Pick **every** Neurospace this project should feed — one, several, or none.
+1. Pick **every** Workspace this project should feed — one, several, or none.
    That choice is the consent boundary, and **each one you pick receives the full
    record**.
 2. The first time only, click the `auth.augenta.ai` link your agent shows you.
@@ -97,8 +103,8 @@ bun "<plugin-root>/scripts/connect.ts"
 
 Either way it reuses your owner-only global sign-in when possible, otherwise
 starts device login. It displays the authenticated organization, always requires
-you to select the Neurospaces, creates or reuses **one inbound agent Connector per
-selected Neurospace** through the normal `/v1` API, verifies each, and writes this
+you to select the Workspaces, creates or reuses **one inbound agent Connector per
+selected Workspace** through the normal `/v1` API, verifies each, and writes this
 private, self-ignored project directory:
 
 ```text
@@ -109,7 +115,7 @@ private, self-ignored project directory:
 
 Rotating access and refresh tokens live only in `~/.augenta/auth.json` (mode
 `0600`, inside a `0700` directory). The project stores no OAuth token,
-organization id, or Neurospace id. Autonomous services and CI can use the
+organization id, or Workspace id. Autonomous services and CI can use the
 advanced `--api-key <AugentaKey>` option; that path is single-destination and the
 assigned Connector is derived server-side.
 
@@ -118,21 +124,21 @@ capture both agent activity and project memory. Delete that file—or the entire
 `.augenta/` directory—to stop capture for the project. Set
 `AUGENTA_CAPTURE_ENABLED=0` to disable both globally.
 
-### Sending to several Neurospaces
+### Sending to several Workspaces
 
-A project can feed more than one Neurospace. Each gets its own inbound Connector,
+A project can feed more than one Workspace. Each gets its own inbound Connector,
 and **every one receives the full record** — the same activity steps, the same raw
 transcript lines, and the same memory documents, complete, in each. It is a copy
 to each destination, not a split between them.
 
 So the audience for a connected project is the **union** of everyone with access
-to any Neurospace you selected. That is the number worth thinking about before you
+to any Workspace you selected. That is the number worth thinking about before you
 add a second destination, and it is why the raw-transcript caveat above applies to
 each one.
 
 Re-running `/augenta:connect` **replaces the whole set**: the answer is the
 complete list of destinations, with the current ones shown already selected. A
-Neurospace you deselect stops receiving this project immediately — its id is
+Workspace you deselect stops receiving this project immediately — its id is
 dropped from `config.json` — while its Connector is left in place and idle on the
 platform, so nothing is disabled or deleted on your behalf and re-selecting it
 later picks up the same link. There is no "select nothing" answer that
@@ -140,7 +146,7 @@ disconnects an already-connected project; deleting `.augenta/config.json` is how
 you turn it all off.
 
 One broken destination cannot stall the others: each keeps its own position in the
-project's outbox, so a Neurospace that is temporarily unreachable simply catches
+project's outbox, so a Workspace that is temporarily unreachable simply catches
 up on a later turn.
 
 ### Upgrading from an earlier version
@@ -169,7 +175,7 @@ not lost, in the meantime.
 
 Each prompt-to-stop cycle becomes one turn in Augenta. During the turn, the
 plugin records the agent's messages, tool calls, and outcomes. When the turn
-finishes, it sends two complementary forms of activity to your Neurospace:
+finishes, it sends two complementary forms of activity to your Workspace:
 
 - **Normalized events:** structured trajectory steps whose text is scrubbed
   client-side for common credential patterns, including private keys, JWTs,
@@ -186,7 +192,7 @@ finishes, it sends two complementary forms of activity to your Neurospace:
 > structurally sanitized to remove opaque reasoning artifacts, then uploaded.
 > Connecting a project consents to uploading both the scrubbed event stream
 > and these raw transcript records. Only connect projects whose agent
-> activity you are comfortable sending to **every** Augenta Neurospace you
+> activity you are comfortable sending to **every** Augenta Workspace you
 > select.
 
 Project memory is captured separately from trajectory activity. Memory becomes

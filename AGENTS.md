@@ -94,7 +94,7 @@ global kill switch.
 
 **No credential passes through the agent.** The line is what a process *handles*,
 not who starts it. The agent is the normal caller of `scripts/connect.ts --json`
-(`--probe`, `--login`, `--await-login`, `--neurospace`): those verbs never accept
+(`--probe`, `--login`, `--await-login`, `--workspace`): those verbs never accept
 a credential as an argument and never emit an access token, refresh token, or
 device code in their payload, so tokens travel browser → `~/.augenta/auth.json`
 without touching a transcript. Do not add a `--json` verb or field that breaks
@@ -102,11 +102,11 @@ that. Platform keys are different — `--api-key` takes a secret on the command
 line, so it stays a human/CI path, is rejected in `--json` mode, and is never run
 by the agent. Never ask a user to paste any credential into chat.
 
-**Consent stays explicit and in the user's hands.** Which Neurospaces a project
+**Consent stays explicit and in the user's hands.** Which Workspaces a project
 feeds is the user's decision, asked every time, and the answer is always the
 **complete set of destinations** — never defaulted, never inferred, never carried
 forward from a previous run. It is asked when the organization has exactly one
-Neurospace (the user still affirms it) and when the project is already connected
+Workspace (the user still affirms it) and when the project is already connected
 (the current set is shown pre-selected and must be re-affirmed). Moving that
 question from a terminal menu into the harness's user-input mechanism is fine;
 removing it, defaulting it, or offering a "keep current" shortcut is not. One
@@ -116,7 +116,7 @@ any. `chooseMany` in `scripts/connect.ts` is deliberately a separate function fr
 
 **More than one destination is a stronger disclosure, not the same one repeated.**
 Before the user answers, and again when confirming, they are told that every
-selected Neurospace receives the **full record** — the same activity, raw
+selected Workspace receives the **full record** — the same activity, raw
 transcript lines, and memory documents, complete, in each — so the effective
 audience is the **union** of everyone with access to any of them. When more than
 one is selected, the confirmation also restates that raw transcript records are
@@ -135,7 +135,7 @@ the previous set on disk and still shipping, so no confirmation may claim a
 destination was dropped unless a config was actually written — and selecting
 nothing for an already-connected project changes nothing rather than disconnecting
 it. Deleting `.augenta/config.json` remains the only off switch. Reconnecting never moves an existing
-Connector to a different Neurospace — a destination gets its own link, created
+Connector to a different Workspace — a destination gets its own link, created
 once and adopted thereafter, so history already attached to a link keeps its
 route. A non-production `environment` must be stated to the user before they
 answer.

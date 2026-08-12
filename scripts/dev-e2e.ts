@@ -40,7 +40,7 @@ interface MeResponse {
 
 interface Connector {
   id: string;
-  neurospaceId: string;
+  workspaceId: string;
   direction: "inbound" | "outbound" | "bidirectional";
   status: "active" | "disabled";
   revision: number;
@@ -86,7 +86,7 @@ async function json<T>(
 /**
  * Every landed row for this sid — one per destination the project feeds. Polls
  * until every expected destination is COVERED, so a fan-out that only reached the
- * first Neurospace fails the check instead of passing on the row that did arrive.
+ * first Workspace fails the check instead of passing on the row that did arrive.
  *
  * Gating on coverage rather than row count matters: if the platform ever records
  * more than one row per (sid, destination), a count would be satisfied by rows
@@ -136,7 +136,7 @@ if (cfg?.authMode !== "oauth" || !cfg.profileId || !cfg.connectorIds?.length) {
 /**
  * Every destination the connected project feeds. The harness ships once and then
  * asserts the record landed in EACH of them — that is the only end-to-end proof
- * that fan-out reached more than the first Neurospace.
+ * that fan-out reached more than the first Workspace.
  */
 const destinations = cfg.connectorIds;
 
@@ -179,12 +179,12 @@ for (const id of destinations) {
       (connector.direction === "inbound" ||
         connector.direction === "bidirectional"),
     `configured Connector ${id} is active and inbound`,
-    `neurospace=${connector.neurospaceId}`,
+    `workspace=${connector.workspaceId}`,
   );
 }
 check(
-  new Set([...links.values()].map((l) => l.neurospaceId)).size === destinations.length,
-  "each destination is a DISTINCT Neurospace",
+  new Set([...links.values()].map((l) => l.workspaceId)).size === destinations.length,
+  "each destination is a DISTINCT Workspace",
 );
 
 const tempProject = mkdtempSync(join(tmpdir(), "augenta-hosted-e2e-"));

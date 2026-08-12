@@ -284,7 +284,7 @@ describe("Outbox", () => {
    * undefined and is left untouched on purpose — that IS the compatibility
    * proof for the single-destination (platform key) form.
    */
-  describe("per-destination cursors — one spool feeding several Neurospaces", () => {
+  describe("per-destination cursors — one spool feeding several Workspaces", () => {
     /** The cursor exactly as stored, so the on-disk contract can be asserted. */
     function stored(o: Outbox): { shipped?: number; links?: Record<string, number> } {
       return JSON.parse(readFileSync(o.cursorPath, "utf8"));
@@ -359,7 +359,7 @@ describe("Outbox", () => {
 
     test("migrating off the legacy scalar does NOT hand its pending tail to a new destination", () => {
       // A 0.5.x project with an undrained spool, reconnected with a second
-      // Neurospace added. The tail was captured when only nl_a was a destination,
+      // Workspace added. The tail was captured when only nl_a was a destination,
       // so only nl_a may have it — `freshKeys` is how connect.ts says which is new.
       box.append([ev(0), ev(1), ev(2)]);
       const first = box.readPending(1);
@@ -401,7 +401,7 @@ describe("Outbox", () => {
       const end = statSync(box.spoolPath).size;
 
       box.registerDestinations(["nl_a", "nl_b"]);
-      // A Neurospace the user just added must not receive activity from before
+      // A Workspace the user just added must not receive activity from before
       // they consented to it.
       expect(box.readPending(Infinity, "nl_b").records).toEqual([]);
       expect(stored(box).links).toEqual({ nl_a: 0, nl_b: end });

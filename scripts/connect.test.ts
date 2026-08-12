@@ -24,7 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   awaitLogin,
-  connectToNeurospaces,
+  connectToWorkspaces,
   connectWithApiKey,
   parseArgs,
   probeConnection,
@@ -98,9 +98,9 @@ describe("parseArgs", () => {
       json: true,
       awaitLogin: true,
     });
-    expect(parseArgs(["--json", "--neurospace", "ns-core"])).toEqual({
+    expect(parseArgs(["--json", "--workspace", "ws-default"])).toEqual({
       json: true,
-      neurospaces: ["ns-core"],
+      workspaces: ["ws-default"],
     });
     expect(parseArgs(["--json", "--await-login", "--wait", "240"])).toEqual({
       json: true,
@@ -263,7 +263,7 @@ describe("platform-key connection", () => {
             kind: "agent",
             direction: "inbound",
             status: "active",
-            neurospaceId: "ns-core",
+            workspaceId: "ws-default",
           },
         ],
       });
@@ -292,7 +292,7 @@ describe("platform-key connection", () => {
             kind: "service",
             direction: "outbound",
             status: "active",
-            neurospaceId: "ns-core",
+            workspaceId: "ws-default",
           },
         ],
       })) as typeof fetch;
@@ -324,13 +324,13 @@ describe("JSON verbs", () => {
   let links: Map<string, Record<string, unknown>>;
 
   /** Register a pre-existing Connector, as a prior connection would have. */
-  const seedLink = (id: string, neurospaceId: string) =>
+  const seedLink = (id: string, workspaceId: string) =>
     links.set(id, {
       id,
       kind: "agent",
       direction: "inbound",
       status: "active",
-      neurospaceId,
+      workspaceId,
     });
 
   beforeEach(() => {
@@ -344,9 +344,9 @@ describe("JSON verbs", () => {
     rmSync(authHome, { recursive: true, force: true });
   });
 
-  const NEUROSPACES = [
-    { id: "ns-core", name: "Augenta Core" },
-    { id: "ns-scratch", name: "Scratch" },
+  const WORKSPACES = [
+    { id: "ws-default", name: "Augenta Core" },
+    { id: "ws-scratch", name: "Scratch" },
   ];
 
   /** Minimal control plane. Unrouted paths fail loudly rather than silently 200. */
@@ -370,30 +370,30 @@ describe("JSON verbs", () => {
           org: { id: "org_1", name: "Example Org" },
         });
       }
-      if (path === `${GATEWAY}/v1/neurospaces`) {
-        return Response.json({ neurospaces: NEUROSPACES });
+      if (path === `${GATEWAY}/v1/workspaces`) {
+        return Response.json({ workspaces: WORKSPACES });
       }
-      // Creates a link in whichever Neurospace the body asks for, so a fan-out
-      // cannot pass by accident against a mock that always answers "ns-core".
+      // Creates a link in whichever Workspace the body asks for, so a fan-out
+      // cannot pass by accident against a mock that always answers "ws-default".
       if (path === `${GATEWAY}/v1/connectors` && method === "POST") {
         const body = JSON.parse(String((init as RequestInit).body)) as {
-          neurospaceId: string;
+          workspaceId: string;
         };
         const id =
-          body.neurospaceId === "ns-core"
+          body.workspaceId === "ws-default"
             ? "connector_new"
-            : `connector_${body.neurospaceId}`;
-        seedLink(id, body.neurospaceId);
+            : `connector_${body.workspaceId}`;
+        seedLink(id, body.workspaceId);
         return Response.json({ connector: links.get(id) });
       }
       if (path.startsWith(`${GATEWAY}/v1/connectors/`)) {
         const id = decodeURIComponent(path.slice(`${GATEWAY}/v1/connectors/`.length));
         const existing = links.get(id);
         if (!existing) return new Response("no such connector", { status: 404 });
-        // A PATCH must never move a link between Neurospaces.
+        // A PATCH must never move a link between Workspaces.
         if (method === "PATCH") {
           const body = JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>;
-          expect(body).not.toHaveProperty("neurospaceId");
+          expect(body).not.toHaveProperty("workspaceId");
         }
         return Response.json({ connector: existing });
       }
@@ -423,14 +423,14 @@ describe("JSON verbs", () => {
     expect(requests.some((r) => r.includes("device_authorization"))).toBe(false);
   });
 
-  test("probe lists Neurospaces for an existing sign-in", async () => {
+  test("probe lists Workspaces for an existing sign-in", async () => {
     await signIn();
     route();
 
     const payload = await probeConnection({ projectRoot: project }, baseArgs);
 
-    expect(payload.status).toBe("need_neurospace");
-    expect(payload.neurospaces).toEqual(NEUROSPACES);
+    expect(payload.status).toBe("need_workspace");
+    expect(payload.workspaces).toEqual(WORKSPACES);
     expect(payload.signedInAs).toEqual({
       name: "Rin",
       email: "rin@example.com",
@@ -439,25 +439,25 @@ describe("JSON verbs", () => {
     expect(JSON.stringify(payload)).not.toContain("access-live");
   });
 
-  test("an already-connected project still reaches the Neurospace choice", async () => {
+  test("an already-connected project still reaches the Workspace choice", async () => {
     // Reconnecting is how a user verifies or changes the destinations, so a prior
     // config is reported as fields and must never short-circuit the flow.
     await signIn();
     writeOAuthConfig(project, "profile_stale", ["connector_old"]);
     route();
-    seedLink("connector_old", "ns-scratch");
+    seedLink("connector_old", "ws-scratch");
 
     const payload = await probeConnection({ projectRoot: project }, baseArgs);
 
     expect(payload).toMatchObject({
-      status: "need_neurospace",
+      status: "need_workspace",
       alreadyConnected: true,
       // Resolved to a NAME, which is what the caller pre-selects with.
       destinations: [
         {
           connectorId: "connector_old",
-          neurospaceId: "ns-scratch",
-          neurospaceName: "Scratch",
+          workspaceId: "ws-scratch",
+          workspaceName: "Scratch",
         },
       ],
       unresolvedConnectorIds: [],
@@ -475,7 +475,7 @@ describe("JSON verbs", () => {
     const payload = await probeConnection({ projectRoot: project }, baseArgs);
 
     expect(payload).toMatchObject({
-      status: "need_neurospace",
+      status: "need_workspace",
       alreadyConnected: true,
       destinations: [],
       unresolvedConnectorIds: ["connector_gone"],
@@ -490,7 +490,7 @@ describe("JSON verbs", () => {
 
     await expect(
       probeConnection({ projectRoot: project }, baseArgs),
-    ).resolves.toMatchObject({ status: "need_neurospace", alreadyConnected: false });
+    ).resolves.toMatchObject({ status: "need_workspace", alreadyConnected: false });
   });
 
   test("login returns the clickable link and withholds the device code", async () => {
@@ -543,7 +543,7 @@ describe("JSON verbs", () => {
     expect(readPendingLogin()).toBeDefined();
   });
 
-  test("await-login saves the profile and hands back the Neurospace choice", async () => {
+  test("await-login saves the profile and hands back the Workspace choice", async () => {
     savePendingLogin({
       deviceCode: "device_secret",
       userCode: "WDJB-MJHT",
@@ -567,8 +567,8 @@ describe("JSON verbs", () => {
 
     // Login and listing in one call: the user picks a target immediately after
     // clicking, with no extra round trip.
-    expect(payload.status).toBe("need_neurospace");
-    expect(payload.neurospaces).toEqual(NEUROSPACES);
+    expect(payload.status).toBe("need_workspace");
+    expect(payload.workspaces).toEqual(WORKSPACES);
     expect(readPendingLogin()).toBeUndefined();
     expect(JSON.stringify(payload)).not.toContain("refresh-fresh");
   });
@@ -615,13 +615,13 @@ describe("JSON verbs", () => {
     expect(requests.some((r) => r.includes("/oauth2/token"))).toBe(false);
   });
 
-  test("connecting binds the chosen Neurospace and writes the project config", async () => {
+  test("connecting binds the chosen Workspace and writes the project config", async () => {
     await signIn();
     route();
 
-    const payload = await connectToNeurospaces({ projectRoot: project }, {
+    const payload = await connectToWorkspaces({ projectRoot: project }, {
       ...baseArgs,
-      neurospaces: ["ns-core"],
+      workspaces: ["ws-default"],
     });
 
     expect(payload).toMatchObject({
@@ -629,8 +629,8 @@ describe("JSON verbs", () => {
       destinations: [
         {
           connectorId: "connector_new",
-          neurospaceId: "ns-core",
-          neurospaceName: "Augenta Core",
+          workspaceId: "ws-default",
+          workspaceName: "Augenta Core",
           action: "created",
         },
       ],
@@ -638,7 +638,7 @@ describe("JSON verbs", () => {
     // No top-level scalar alias: it would invite the caller to report only the
     // first destination, which is the under-disclosure this release must prevent.
     expect(payload).not.toHaveProperty("connectorId");
-    expect(payload).not.toHaveProperty("neurospaceName");
+    expect(payload).not.toHaveProperty("workspaceName");
     expect(JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")))
       .toEqual({
         authMode: "oauth",
@@ -651,47 +651,47 @@ describe("JSON verbs", () => {
       });
   });
 
-  test("connecting SEVERAL Neurospaces creates one Connector each", async () => {
+  test("connecting SEVERAL Workspaces creates one Connector each", async () => {
     await signIn();
     route();
 
-    const payload = await connectToNeurospaces({ projectRoot: project }, {
+    const payload = await connectToWorkspaces({ projectRoot: project }, {
       ...baseArgs,
-      neurospaces: ["ns-scratch", "ns-core"],
+      workspaces: ["ws-scratch", "ws-default"],
     });
 
     expect(payload).toMatchObject({ status: "connected" });
     // Live-list order, not flag order, so the config is byte-deterministic.
-    expect((payload.destinations as Array<{ neurospaceId: string }>).map((d) => d.neurospaceId))
-      .toEqual(["ns-core", "ns-scratch"]);
+    expect((payload.destinations as Array<{ workspaceId: string }>).map((d) => d.workspaceId))
+      .toEqual(["ws-default", "ws-scratch"]);
     expect(
       JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).connectorIds,
-    ).toEqual(["connector_new", "connector_ns-scratch"]);
+    ).toEqual(["connector_new", "connector_ws-scratch"]);
   });
 
   test("a kept destination's link is ADOPTED, never stolen for a new one", async () => {
     // The pre-fan-out code retargeted the single link by PATCHing a new
-    // neurospaceId onto it. Under fan-out that would steal the link belonging to a
+    // workspaceId onto it. Under fan-out that would steal the link belonging to a
     // destination the user KEPT and relabel history already attached to it.
     await signIn();
     writeOAuthConfig(project, "profile_stale", ["connector_new"]);
     route();
-    seedLink("connector_new", "ns-core"); // prior connection to ns-core
+    seedLink("connector_new", "ws-default"); // prior connection to ws-default
 
-    const payload = await connectToNeurospaces({ projectRoot: project }, {
+    const payload = await connectToWorkspaces({ projectRoot: project }, {
       ...baseArgs,
-      neurospaces: ["ns-core", "ns-scratch"], // keep ns-core, add ns-scratch
+      workspaces: ["ws-default", "ws-scratch"], // keep ws-default, add ws-scratch
     });
 
     expect(payload).toMatchObject({
       status: "connected",
       destinations: [
-        { neurospaceId: "ns-core", connectorId: "connector_new", action: "adopted" },
-        { neurospaceId: "ns-scratch", connectorId: "connector_ns-scratch", action: "created" },
+        { workspaceId: "ws-default", connectorId: "connector_new", action: "adopted" },
+        { workspaceId: "ws-scratch", connectorId: "connector_ws-scratch", action: "created" },
       ],
     });
     // Exactly one POST — for the ADDED destination only. (The route's PATCH
-    // handler separately asserts no neurospaceId is ever sent.)
+    // handler separately asserts no workspaceId is ever sent.)
     expect(requests.filter((r) => r === `POST ${GATEWAY}/v1/connectors`).length).toBe(1);
     expect(requests.some((r) => r === `PATCH ${GATEWAY}/v1/connectors/connector_new`)).toBe(true);
   });
@@ -701,23 +701,23 @@ describe("JSON verbs", () => {
     // deleting the link would be an org-level mutation nobody was asked about, and
     // a network call that can half-fail after the user was told "done".
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["connector_new", "connector_ns-scratch"]);
+    writeOAuthConfig(project, "profile_stale", ["connector_new", "connector_ws-scratch"]);
     route();
-    seedLink("connector_new", "ns-core");
-    seedLink("connector_ns-scratch", "ns-scratch");
+    seedLink("connector_new", "ws-default");
+    seedLink("connector_ws-scratch", "ws-scratch");
 
-    const payload = await connectToNeurospaces({ projectRoot: project }, {
+    const payload = await connectToWorkspaces({ projectRoot: project }, {
       ...baseArgs,
-      neurospaces: ["ns-core"], // ns-scratch deselected
+      workspaces: ["ws-default"], // ws-scratch deselected
     });
 
     expect(payload).toMatchObject({
       status: "connected",
       removed: [
         {
-          connectorId: "connector_ns-scratch",
-          neurospaceId: "ns-scratch",
-          neurospaceName: "Scratch",
+          connectorId: "connector_ws-scratch",
+          workspaceId: "ws-scratch",
+          workspaceName: "Scratch",
           disposition: "left_in_place",
         },
       ],
@@ -727,7 +727,7 @@ describe("JSON verbs", () => {
     ).toEqual(["connector_new"]);
     // Nothing destructive, and no attempt to disable the dropped link.
     expect(requests.some((r) => r.startsWith("DELETE "))).toBe(false);
-    expect(requests.some((r) => r === `PATCH ${GATEWAY}/v1/connectors/connector_ns-scratch`)).toBe(false);
+    expect(requests.some((r) => r === `PATCH ${GATEWAY}/v1/connectors/connector_ws-scratch`)).toBe(false);
   });
 
   test("one bad id fails the WHOLE set closed — nothing created, no config", async () => {
@@ -736,15 +736,15 @@ describe("JSON verbs", () => {
     await signIn();
     route();
 
-    const payload = await connectToNeurospaces({ projectRoot: project }, {
+    const payload = await connectToWorkspaces({ projectRoot: project }, {
       ...baseArgs,
-      neurospaces: ["ns-core", "ns-typo", "ns-scratch"],
+      workspaces: ["ws-default", "ws-typo", "ws-scratch"],
     });
 
     expect(payload).toMatchObject({
       status: "error",
-      code: "unknown_neurospace",
-      unknown: ["ns-typo"],
+      code: "unknown_workspace",
+      unknown: ["ws-typo"],
     });
     expect(requests.some((r) => r === `POST ${GATEWAY}/v1/connectors`)).toBe(false);
     expect(() => statSync(join(project, ".augenta", "config.json"))).toThrow();
@@ -756,42 +756,42 @@ describe("JSON verbs", () => {
     await signIn();
     route({
       [`POST ${GATEWAY}/v1/connectors`]: () => {
-        // First call (ns-core) succeeds, second (ns-scratch) fails.
+        // First call (ws-default) succeeds, second (ws-scratch) fails.
         if (!links.has("connector_new")) {
-          seedLink("connector_new", "ns-core");
+          seedLink("connector_new", "ws-default");
           return Response.json({ connector: links.get("connector_new") });
         }
-        return new Response("neurospace unavailable", { status: 503 });
+        return new Response("workspace unavailable", { status: 503 });
       },
     });
 
-    const payload = await connectToNeurospaces({ projectRoot: project }, {
+    const payload = await connectToWorkspaces({ projectRoot: project }, {
       ...baseArgs,
-      neurospaces: ["ns-core", "ns-scratch"],
+      workspaces: ["ws-default", "ws-scratch"],
     });
 
     expect(payload).toMatchObject({
       status: "partially_connected",
-      destinations: [{ neurospaceId: "ns-core", connectorId: "connector_new" }],
-      failed: [{ neurospaceId: "ns-scratch", neurospaceName: "Scratch" }],
+      destinations: [{ workspaceId: "ws-default", connectorId: "connector_new" }],
+      failed: [{ workspaceId: "ws-scratch", workspaceName: "Scratch" }],
     });
     const written = JSON.parse(
       readFileSync(join(project, ".augenta", "config.json"), "utf8"),
     ).connectorIds as string[];
     expect(written).toEqual(["connector_new"]);
-    expect(written.every((id) => id !== "connector_ns-scratch")).toBe(true);
+    expect(written.every((id) => id !== "connector_ws-scratch")).toBe(true);
   });
 
   test("when NO destination links, nothing is written at all", async () => {
     await signIn();
     route({
       [`POST ${GATEWAY}/v1/connectors`]: () =>
-        new Response("neurospace unavailable", { status: 503 }),
+        new Response("workspace unavailable", { status: 503 }),
     });
 
-    const payload = await connectToNeurospaces({ projectRoot: project }, {
+    const payload = await connectToWorkspaces({ projectRoot: project }, {
       ...baseArgs,
-      neurospaces: ["ns-core", "ns-scratch"],
+      workspaces: ["ws-default", "ws-scratch"],
     });
 
     expect(payload).toMatchObject({ status: "error", code: "no_destination_linked" });
@@ -802,24 +802,24 @@ describe("JSON verbs", () => {
     // "Could not link X" reads as "X was not added". When X was already a
     // destination, the state actually changed: it is no longer being fed.
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["connector_new", "connector_ns-scratch"]);
+    writeOAuthConfig(project, "profile_stale", ["connector_new", "connector_ws-scratch"]);
     route({
       // The link RESOLVES (so it is a known prior destination) but updating it
       // fails — which is what separates "kept but failed" from "unresolvable".
-      [`PATCH ${GATEWAY}/v1/connectors/connector_ns-scratch`]: () =>
+      [`PATCH ${GATEWAY}/v1/connectors/connector_ws-scratch`]: () =>
         new Response("gone sideways", { status: 503 }),
     });
-    seedLink("connector_new", "ns-core");
-    seedLink("connector_ns-scratch", "ns-scratch");
+    seedLink("connector_new", "ws-default");
+    seedLink("connector_ws-scratch", "ws-scratch");
 
-    const payload = await connectToNeurospaces({ projectRoot: project }, {
+    const payload = await connectToWorkspaces({ projectRoot: project }, {
       ...baseArgs,
-      neurospaces: ["ns-core", "ns-scratch"], // both KEPT
+      workspaces: ["ws-default", "ws-scratch"], // both KEPT
     });
 
     expect(payload).toMatchObject({
       status: "partially_connected",
-      failed: [{ neurospaceId: "ns-scratch", wasConnected: true }],
+      failed: [{ workspaceId: "ws-scratch", wasConnected: true }],
     });
     // It is a failure, not a deselection — never reported as "no longer sending".
     expect(payload).not.toHaveProperty("removed");
@@ -829,11 +829,11 @@ describe("JSON verbs", () => {
     await signIn();
     writeOAuthConfig(project, "profile_stale", ["connector_new", "connector_ghost"]);
     route();
-    seedLink("connector_new", "ns-core"); // connector_ghost 404s
+    seedLink("connector_new", "ws-default"); // connector_ghost 404s
 
-    const payload = await connectToNeurospaces({ projectRoot: project }, {
+    const payload = await connectToWorkspaces({ projectRoot: project }, {
       ...baseArgs,
-      neurospaces: ["ns-core"],
+      workspaces: ["ws-default"],
     });
 
     expect(payload).toMatchObject({
@@ -855,9 +855,9 @@ describe("JSON verbs", () => {
         new Response("upstream on fire", { status: 500 }),
     });
 
-    const payload = await connectToNeurospaces({ projectRoot: project }, {
+    const payload = await connectToWorkspaces({ projectRoot: project }, {
       ...baseArgs,
-      neurospaces: ["ns-core"],
+      workspaces: ["ws-default"],
     });
 
     expect(payload).toMatchObject({
@@ -873,33 +873,33 @@ describe("JSON verbs", () => {
     await signIn();
     writeOAuthConfig(project, "profile_stale", ["connector_new"]);
     route();
-    seedLink("connector_new", "ns-core");
+    seedLink("connector_new", "ws-default");
 
     const box = new Outbox(project);
     box.append([
-      { src: "claude-code", sid: "s1", proj: project, ts: "2026-06-15T00:00:00.000Z", seq: 0, kind: "msg", role: "user", text: "before ns-scratch existed" },
+      { src: "claude-code", sid: "s1", proj: project, ts: "2026-06-15T00:00:00.000Z", seq: 0, kind: "msg", role: "user", text: "before ws-scratch existed" },
     ]);
     box.advance(1); // a legacy scalar watermark, mid-spool
 
-    await connectToNeurospaces({ projectRoot: project }, {
+    await connectToWorkspaces({ projectRoot: project }, {
       ...baseArgs,
-      neurospaces: ["ns-core", "ns-scratch"],
+      workspaces: ["ws-default", "ws-scratch"],
     });
 
     const cursor = JSON.parse(readFileSync(box.cursorPath, "utf8")) as {
       links?: Record<string, number>;
     };
     expect(cursor.links!["connector_new"]).toBe(1); // adopted → inherits
-    expect(cursor.links!["connector_ns-scratch"]).toBe(statSync(box.spoolPath).size);
+    expect(cursor.links!["connector_ws-scratch"]).toBe(statSync(box.spoolPath).size);
   });
 
   test("a repeated id is one destination, not two", async () => {
     await signIn();
     route();
 
-    const payload = await connectToNeurospaces({ projectRoot: project }, {
+    const payload = await connectToWorkspaces({ projectRoot: project }, {
       ...baseArgs,
-      neurospaces: ["ns-core", "ns-core"],
+      workspaces: ["ws-default", "ws-default"],
     });
 
     expect((payload.destinations as unknown[]).length).toBe(1);
@@ -909,9 +909,9 @@ describe("JSON verbs", () => {
   test("connecting without a sign-in never writes a config", async () => {
     route();
 
-    const payload = await connectToNeurospaces({ projectRoot: project }, {
+    const payload = await connectToWorkspaces({ projectRoot: project }, {
       ...baseArgs,
-      neurospaces: ["ns-core"],
+      workspaces: ["ws-default"],
     });
 
     expect(payload).toMatchObject({ status: "error", code: "not_signed_in" });

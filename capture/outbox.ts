@@ -17,7 +17,7 @@
  *   spool.jsonl   append-only canonical records, one JSON per line
  *   cursor.json   { shipped: <min offset>, links?: { <connectorId>: <offset> } }
  *
- * ONE spool, N cursors. A project may feed several Neurospaces, and each
+ * ONE spool, N cursors. A project may feed several Workspaces, and each
  * destination is an independent Connector that can be down on its own, so each
  * keeps its OWN byte offset in `links`. `shipped` is the derived MINIMUM across
  * them: it is what bounds reclamation (below), and writing the min rather than
@@ -66,7 +66,7 @@ export const MAX_DEST_LAG_BYTES = 16 * 1024 * 1024;
  * while a peer moves, before {@link Outbox.enforceLag} discards its backlog.
  *
  * The hysteresis is the whole safety margin. A single transient failure — a 10s
- * POST timeout on a big body over a just-recovered link, a 429, a Neurospace-
+ * POST timeout on a big body over a just-recovered link, a 429, a Workspace-
  * scoped 5xx — looks identical to a dead Connector for exactly one drain, and
  * treating them the same would delete a week of offline capture on the first
  * reconnect. Over several consecutive drains they stop looking alike.
@@ -380,7 +380,7 @@ export class Outbox {
    * crash between a destination's first 2xx and its first {@link advance} would
    * otherwise re-seed it at a later spool end and silently skip records.
    *
-   * A new destination seeds at the CURRENT SPOOL END, not at 0: a Neurospace the
+   * A new destination seeds at the CURRENT SPOOL END, not at 0: a Workspace the
    * user just added must not inherit another destination's backlog, which is a
    * data flow nobody consented to.
    *
@@ -388,7 +388,7 @@ export class Outbox {
    * scalar was already reclaimed, so the destination that EARNED that watermark
    * should inherit it — but a destination added in the same reconnect must not,
    * or the pending tail (up to `MAX_SPOOL_BYTES` of transcripts captured before
-   * that Neurospace was ever a destination) is shared with it. The cursor cannot
+   * that Workspace was ever a destination) is shared with it. The cursor cannot
    * tell those two apart, so `opts.freshKeys` carries the answer down from
    * `scripts/connect.ts`, which knows exactly which links it just created versus
    * adopted. Absent that hint the conservative reading applies: with more than

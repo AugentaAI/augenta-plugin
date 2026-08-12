@@ -1,7 +1,7 @@
 {
   "name": "augenta",
-  "version": "0.7.0",
-  "description": "Augenta — opt-in, per-project capture of your coding agent's activity and project memory to the Augenta Neurospaces you select. Ask \"Connect Augenta\" in a project to enable it.",
+  "version": "0.8.0",
+  "description": "Augenta — opt-in, per-project capture of your coding agent's activity and project memory to the Augenta Workspaces you select. Ask \"Connect Augenta\" in a project to enable it.",
   "author": {
     "name": "Augenta"
   },
@@ -14,7 +14,7 @@
   "interface": {
     "displayName": "Augenta",
     "shortDescription": "Per-project activity and memory capture",
-    "longDescription": "Augenta captures your coding agent's activity and matching project memory from projects you explicitly connect, and ships them to your Augenta Neurospace through a Connector. Nothing is captured until you connect a project.",
+    "longDescription": "Augenta captures your coding agent's activity and matching project memory from projects you explicitly connect, and ships them to your Augenta Workspace through a Connector. Nothing is captured until you connect a project.",
     "developerName": "Augenta",
     "category": "Productivity",
     "capabilities": ["Read"],
