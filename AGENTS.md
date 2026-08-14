@@ -69,6 +69,17 @@ contract test scans `dist/**` for `Bun.` and `import.meta.dir`/`main`,
 `__tests__/dist-smoke.test.ts` executes every bundle under real `node`, and CI's
 `install-smoke` fires a hook under Node from an actual marketplace install.
 
+**A committed `dist/` multiplies every CodeQL alert.** This repo uses CodeQL
+default setup, which takes no config file, so `dist/` cannot be excluded from
+scanning and inline `// codeql[...]` markers do not suppress code-scanning alerts
+(see the note at `capture/auth.ts:463`). Each bundle inlines its whole import
+graph, so one flagged source line becomes one alert per bundle that contains it —
+each needing its own dismissal, and **re-minted whenever line numbers shift**,
+because a dismissal is bound to a location. Expect this when a change moves
+flagged code, and dismiss the generated copies as duplicates of the source
+finding rather than chasing them. Converting to CodeQL advanced setup with
+`paths-ignore: dist/**` would end it permanently.
+
 **No entrypoint may import another entrypoint.** Bundling inlines the imported
 file's `isMain` block into the importer's bundle, where — one module remaining
 after bundling — the guard is TRUE and the wrong hook body runs first. This
