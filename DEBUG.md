@@ -133,12 +133,18 @@ do not read a dev transcript as evidence the invariant is broken, and do not
 
 ```bash
 bun install --frozen-lockfile
+bun run build
 bun run typecheck
 bun test
 git diff --check
 claude plugin validate . --strict
 claude --plugin-dir . plugin details augenta
 ```
+
+`bun run build` comes first for a reason: `hooks/hooks.json` runs the bundles in
+`dist/`, not your edited sources, so **`claude --plugin-dir .` below executes
+whatever you last built.** Skip the build after changing a hook and you will watch
+the old behavior and conclude your change did nothing.
 
 `plugin details` must report the manifest version, one `connect` skill, every
 event in `hooks/hooks.json`, and no load errors. It cannot catch an over-declared

@@ -17,5 +17,11 @@
     "declaration": true,
     "noEmit": true
   },
-  "include": ["hooks/**/*.ts", "scripts/**/*.ts", "capture/**/*.ts", "__tests__/**/*.ts"]
+  "include": [
+    "hooks/**/*.ts",
+    "scripts/**/*.ts",
+    "capture/**/*.ts",
+    "runtime/**/*.ts",
+    "__tests__/**/*.ts"
+  ]
 }

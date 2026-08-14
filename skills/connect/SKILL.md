@@ -26,34 +26,35 @@ the skill's alias through its skill-roots table. This file lives at
 `<plugin root>/skills/connect/SKILL.md`, so the script is two levels up:
 
 ```bash
-ls -l "<skill directory>/../../scripts/connect.ts"
+ls -l "<skill directory>/../../dist/scripts/connect.mjs"
 ```
 
 Do **not** build that path from `$CLAUDE_PLUGIN_ROOT`. That variable is exported
 only to processes the plugin system spawns — this plugin's hooks and MCP
 servers — and not to the shell your Bash tool runs in, where it is empty and
-silently expands to a broken `/scripts/connect.ts`. Deriving it from the skill
+silently expands to a broken `/dist/scripts/connect.mjs`. Deriving it from the skill
 directory also guarantees you run the same installed version as these
 instructions, which a versioned-cache glob does not.
 
 Only if your harness did not give you this file's directory, find the install:
 
 ```bash
-ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/augenta/*/scripts/connect.ts \
-      "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/augenta/*/scripts/connect.ts 2>/dev/null
+ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/augenta/*/dist/scripts/connect.mjs \
+      "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/augenta/*/dist/scripts/connect.mjs 2>/dev/null
 ```
 
 Every verb below is then:
 
 ```bash
-bun "$CONNECT" --json <verb>
+node "$CONNECT" --json <verb>
 ```
 
 `$CONNECT` stands for the absolute path you just resolved — substitute it
 literally into each command. Do not assign it as a shell variable: each Bash call
 is a fresh shell, so the assignment would not survive to the next verb.
 
-Bun is required (https://bun.sh) — the same runtime the plugin's hooks use.
+Node is required — the same runtime the plugin's hooks use. It is a prebuilt
+bundle, so there is nothing to install and no dependencies to fetch.
 
 ## If this turn cannot finish a sign-in, print the command and stop
 
@@ -70,7 +71,7 @@ Decide this **before step 1**. If the turn cannot sign in:
    absolute path, no `$CONNECT`, no `~`, no variables:
 
    ```
-   bun /absolute/path/to/scripts/connect.ts
+   node /absolute/path/to/dist/scripts/connect.mjs
    ```
 
 3. Say in one sentence what it does: connects this project to Augenta
@@ -96,7 +97,7 @@ worktree would silently capture nothing.
 ## 1. Probe
 
 ```bash
-bun "$CONNECT" --json --probe
+node "$CONNECT" --json --probe
 ```
 
 Read-only. It starts no sign-in, so nothing has happened yet and you can still
@@ -122,7 +123,7 @@ profile reference and its Connector ids. If the user declines, acknowledge and
 stop.
 
 ```bash
-bun "$CONNECT" --json --login
+node "$CONNECT" --json --login
 ```
 
 Give the user `verificationUri` as a plain URL on its own line so their terminal
@@ -133,7 +134,7 @@ authorizing on a different device.
 Then wait:
 
 ```bash
-bun "$CONNECT" --json --await-login
+node "$CONNECT" --json --await-login
 ```
 
 - `login_pending` — the link is still valid. Tell the user you are still waiting
@@ -184,7 +185,7 @@ answer has no meaning: say so and ask again. Do not connect. If they decline,
 acknowledge and stop.
 
 ```bash
-bun "$CONNECT" --json --workspace <id> --workspace <id>
+node "$CONNECT" --json --workspace <id> --workspace <id>
 ```
 
 Repeat `--workspace` once per selected Workspace. Pass the `id`s, never the
@@ -226,7 +227,7 @@ the config is how the user turns it all off.
 On `status: "error"`, report `message`. `unknown_workspace` means an id did not
 match the organization's live list and **nothing was created** — re-run `--probe`
 and ask again rather than guessing. `no_destination_linked` means no destination
-could be linked and no config was written. Other common causes are a missing Bun
+could be linked and no config was written. Other common causes are a missing Node
 runtime, a declined or expired authorization, no active Workspaces, or an
 organization not yet provisioned in Augenta.
 

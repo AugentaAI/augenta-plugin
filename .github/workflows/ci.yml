@@ -22,15 +22,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      # Pinned via .bun-version so contributors and CI share one authoritative
+      # number. This is load-bearing for the dist/ check below: repeat builds on
+      # one Bun are byte-identical, but codegen differs across Bun versions, so a
+      # version skew would turn that check into a false failure.
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.14"
+          bun-version-file: .bun-version
+
+      # The bundles in dist/ are what users execute, under whatever Node they
+      # have. Pin the FLOOR, not the latest: passing on 24 proves nothing about
+      # the 20 a user is on.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       # --frozen-lockfile makes installs reproducible and fails fast if bun.lock
       # has drifted from package.json.
       - name: Install
         run: bun install --frozen-lockfile
+
+      # Before typecheck and test: the contract test requires every hook command's
+      # target to exist, and dist-smoke + the e2e test SPAWN these bundles.
+      - name: Build
+        run: bun run build
 
       - name: Typecheck
         run: bun run typecheck
@@ -38,12 +55,34 @@ jobs:
       - name: Test
         run: bun test
 
+      # Secondary check, deliberately after the tests. It proves someone ran
+      # `bun run build` and committed the result — it CANNOT tell stale from
+      # broken, and the tests above are what prove the bundles work. `git add -N`
+      # makes a never-committed bundle visible to `git diff`, so a newly added
+      # entrypoint cannot slip through as an untracked file.
+      - name: Committed bundles match source
+        if: always()
+        run: |
+          git add -N dist
+          git diff --exit-code -- dist \
+            || { echo "::error::dist/ is stale — run 'bun run build' and commit the result."; exit 1; }
+
   install-smoke:
     name: Claude + Codex marketplace install smoke test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      # Pinned to the same floor as the `plugin` job, and it matters more here:
+      # this job fires the shipped hooks with `node` from a real install, which is
+      # the closest thing CI has to a user's machine. On the runner default it
+      # would silently test whatever Node ships that month, not the floor README
+      # promises.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       - name: Install plugin CLIs
         run: npm install --global @anthropic-ai/claude-code @openai/codex
@@ -61,6 +100,38 @@ jobs:
           grep -Fq "augenta $version" claude-plugin-details.txt
           grep -Eq 'Skills [(]1[)].*connect' claude-plugin-details.txt
           grep -Fq "Hooks ($hook_count)" claude-plugin-details.txt
+
+          # Everything above inspects manifests. The rest of this step checks the
+          # thing only a real install can: that dist/ is actually COPIED by the
+          # marketplace, and that a hook in it runs on a stock Node.
+          claude_root="$(ls -d "$HOME/.claude/plugins/cache"/*/augenta/*/ | head -1)"
+          test -n "$claude_root"
+
+          # Derived from hooks.json, never hardcoded — same reasoning as the
+          # version above: a hardcoded list cannot notice an entrypoint that was
+          # added and never built.
+          jq -r '.hooks[][].hooks[].command' "$claude_root/hooks/hooks.json" \
+            | grep -o 'dist/[A-Za-z0-9_/.-]*' | sort -u > shipped-bundles.txt
+          test -s shipped-bundles.txt
+          while read -r rel; do
+            test -s "$claude_root/$rel" || { echo "missing shipped bundle: $rel"; exit 1; }
+          done < shipped-bundles.txt
+          test -s "$claude_root/dist/scripts/connect.mjs"   # skill target, not a hook
+
+          # Fire a hook for real, under node, from the INSTALLED tree. Every check
+          # above is `test -s`, which cannot tell a working bundle from a 50KB file
+          # that exits 0 and prints nothing — the exact failure that shipped once.
+          project="$(mktemp -d)"
+          printf '{"transcript_path":"%s/.claude/projects/p/s.jsonl","cwd":"%s"}' "$HOME" "$project" \
+            | node "$claude_root/dist/hooks/session-start.mjs" | tee hook-out.json
+          jq -e '.hookSpecificOutput.initialUserMessage == "/augenta:connect"' hook-out.json
+
+          # And the privacy invariant on the real artifact: a project that never
+          # opted in gets no output and no state on disk.
+          printf '{"session_id":"s","transcript_path":"/nonexistent.jsonl","cwd":"%s","hook_event_name":"Stop"}' "$project" \
+            | node "$claude_root/dist/capture/capture.mjs" > capture-out.txt
+          test ! -s capture-out.txt
+          test ! -d "$project/.augenta"
 
       - name: Install and inspect with Codex
         run: |
@@ -90,3 +161,21 @@ jobs:
             .skills[0].interface.shortDescription != null and
             (.hooks | length == $hooks)
           ' codex-plugin-read.json
+
+          # .codexignore prunes the Codex bundle, so whether dist/ survives that
+          # pruning is a genuinely separate question from the Claude leg above.
+          jq -r '.hooks[][].hooks[].command' "$codex_plugin_root/hooks/hooks.json" \
+            | grep -o 'dist/[A-Za-z0-9_/.-]*' | sort -u > codex-bundles.txt
+          test -s codex-bundles.txt
+          while read -r rel; do
+            test -s "$codex_plugin_root/$rel" || { echo "missing shipped bundle: $rel"; exit 1; }
+          done < codex-bundles.txt
+          test -s "$codex_plugin_root/dist/scripts/connect.mjs"
+
+          # The harness split is chosen from the transcript path shape, so this
+          # exercises a different branch of the same bundle than the Claude fire.
+          codex_project="$(mktemp -d)"
+          printf '{"transcript_path":"%s/.codex/sessions/2026/06/24/rollout-2026-06-24T00-00-00-a.jsonl","cwd":"%s"}' \
+            "$HOME" "$codex_project" \
+            | node "$codex_plugin_root/dist/hooks/session-start.mjs" | tee codex-hook-out.json
+          jq -e '.hookSpecificOutput.initialUserMessage == "Connect Augenta"' codex-hook-out.json

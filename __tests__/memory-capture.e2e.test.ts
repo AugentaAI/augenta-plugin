@@ -6,6 +6,14 @@
  *
  * These tests intentionally keep the real process boundary and network stack.
  * Unit tests cover the individual parsers and outbox operations in more detail.
+ *
+ * Runs the BUILT bundles under `node`, exactly as an installed plugin does —
+ * this is the only test that crosses the detached-shipper hop, so it is the only
+ * one that can catch capture/shipper.ts resolving the wrong `ship` entry. That
+ * miss would be invisible otherwise: the spawn is detached with stdio ignored,
+ * so a stranded outbox simply never drains.
+ *
+ * Requires a current dist/ — run `bun run build` first. CI builds before testing.
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -15,8 +23,8 @@ import type { DocumentExperience, Experience, TrajectoryExperience } from "../ca
 import { Outbox } from "../capture/outbox";
 
 const ROOT = join(import.meta.dir, "..");
-const CAPTURE_HOOK = join(ROOT, "capture", "capture.ts");
-const SESSION_START_HOOK = join(ROOT, "hooks", "session-start.ts");
+const CAPTURE_HOOK = join(ROOT, "dist", "capture", "capture.mjs");
+const SESSION_START_HOOK = join(ROOT, "dist", "hooks", "session-start.mjs");
 const SECRET = "ghp_0123456789abcdefghijklmnopqrstuvwx";
 
 interface ReceivedRequest {
@@ -34,7 +42,9 @@ async function waitFor(predicate: () => boolean, description: string, timeoutMs 
 }
 
 function runHook(script: string, payload: object, env: Record<string, string>): ReturnType<typeof Bun.spawnSync> {
-  return Bun.spawnSync(["bun", "run", script], {
+  // Literal "node", never process.execPath — under `bun test` that is the bun
+  // binary, which would quietly turn this back into a source-level test.
+  return Bun.spawnSync(["node", script], {
     cwd: ROOT,
     stdin: Buffer.from(JSON.stringify(payload)),
     env: { ...(process.env as Record<string, string>), ...env },

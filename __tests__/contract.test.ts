@@ -15,7 +15,7 @@
  */
 import { test, expect, describe } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 // This repo IS the plugin: __tests__/ sits at the repo root, so PLUGIN_ROOT is
 // the repo root (one level up from here).
@@ -40,7 +40,7 @@ const KNOWN_HOOK_EVENTS = new Set([
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.8.0";
+const RELEASE_VERSION = "0.9.0";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -75,6 +75,50 @@ function skillDirs(): string[] {
     const p = join(SKILLS_DIR, d);
     return statSync(p).isDirectory() && existsSync(join(p, "SKILL.md"));
   });
+}
+
+/**
+ * The five entrypoints bundled into dist/ and invoked by a harness or the connect
+ * skill. Mirrors ENTRYPOINTS in scripts/build.ts; the tests below tie the two
+ * together so neither can drift alone.
+ */
+const ENTRYPOINTS = [
+  "hooks/session-start.ts",
+  "hooks/user-prompt.ts",
+  "capture/capture.ts",
+  "capture/ship.ts",
+  "scripts/connect.ts",
+];
+
+/** Absolute paths of the built bundles, derived from ENTRYPOINTS. */
+function distBundles(): string[] {
+  return ENTRYPOINTS.map((e) => join(PLUGIN_ROOT, "dist", e.replace(/\.ts$/, ".mjs")));
+}
+
+/**
+ * Every repo-relative .ts module reachable from a shipped entrypoint by following
+ * relative imports — i.e. the exact set of source that ends up inside a bundle a
+ * user runs. Computed so that invariants asserted over "runtime code" cannot be
+ * quietly narrowed by adding a file, which a hand-maintained list allows.
+ *
+ * Specifiers are extensionless (moduleResolution is "bundler"), so `.ts` is
+ * appended and the result checked against disk; anything that does not resolve to
+ * a real file (a bare `node:` builtin, a type-only path) is skipped.
+ */
+function runtimeModules(): string[] {
+  const seen = new Set<string>();
+  const queue = [...ENTRYPOINTS];
+  while (queue.length > 0) {
+    const rel = queue.pop()!;
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    const source = readFileSync(join(PLUGIN_ROOT, rel), "utf8");
+    for (const m of source.matchAll(/from\s+"(\.[^"]+)"/g)) {
+      const resolved = `${join(dirname(rel), m[1]!)}.ts`;
+      if (existsSync(join(PLUGIN_ROOT, resolved))) queue.push(resolved);
+    }
+  }
+  return [...seen].sort();
 }
 
 /** Resolve every concrete file path a SKILL.md / hook command references. */
@@ -475,15 +519,25 @@ describe("the identity provider stays behind the scenes", () => {
   // user and org identity are Augenta's own `/v1/me` `user.id` and `org.id`; the
   // IdP's separate `org.workosOrgId` is deliberately unused. Comments may explain
   // all of this — that is the only place the name belongs.
-  const RUNTIME = [
-    "capture/auth.ts",
-    "capture/ship.ts",
-    "capture/config.ts",
-    "capture/capture.ts",
-    "scripts/connect.ts",
-    "hooks/session-start.ts",
-    "hooks/user-prompt.ts",
-  ];
+  // "Runtime code" is COMPUTED, not listed: every module reachable by following
+  // relative imports out from the shipped entrypoints — i.e. exactly what ends up
+  // inside a bundle a user executes.
+  //
+  // This used to be a hand-maintained array, which is an under-approximation that
+  // rots silently in two directions: it never listed the modules the entrypoints
+  // pull in transitively (normalize, outbox, scrub, memory, …), and a newly added
+  // runtime file is simply never scanned while the test keeps passing. The
+  // dist/** scan below covers the same ground, but only this one can report a
+  // precise source file:line, which is what makes a failure actionable.
+  const RUNTIME = runtimeModules();
+
+  test("the reachable-module walk actually found the runtime", () => {
+    // A walker that silently resolved nothing would make every scan below vacuous.
+    expect(RUNTIME.length).toBeGreaterThan(ENTRYPOINTS.length);
+    for (const rel of ["capture/auth.ts", "capture/config.ts", "runtime/node.ts"]) {
+      expect(RUNTIME, `${rel} is runtime code and must be scanned`).toContain(rel);
+    }
+  });
 
   test("no runtime code line outside a comment names the provider, in any casing", () => {
     const offenders: string[] = [];
@@ -496,6 +550,16 @@ describe("the identity provider stays behind the scenes", () => {
         });
     }
     expect(offenders).toEqual([]);
+  });
+
+  test("no SHIPPED bundle names the provider either", () => {
+    // The list above is hand-maintained and covers .ts sources only. What users
+    // actually execute is dist/, which inlines the transitive import graph — so
+    // this scan is strictly stronger, and needs no comment exemption because the
+    // bundler strips source comments. If that ever changes, this is the test that
+    // notices before the name ships.
+    const offenders = distBundles().filter((path) => /workos/i.test(readFileSync(path, "utf8")));
+    expect(offenders.map((p) => p.replace(PLUGIN_ROOT, ""))).toEqual([]);
   });
 
   test("the connect skill never names it at all", () => {
@@ -675,6 +739,13 @@ describe("manifests — cross-harness packaging and one version", () => {
         for (const h of group.hooks) {
           expect(h.timeout).toBe(expectedTimeouts[event]);
           expect(h.command).toMatch(/"\$\{CLAUDE_PLUGIN_ROOT\}\//);
+          // Users run Node, not the toolchain this repo is built with. A hook
+          // that named `bun` — or pointed at a .ts source, which Node cannot
+          // execute given the extensionless relative imports these sources use —
+          // would fail on a clean machine, silently, for every fire.
+          expect(h.command).toStartWith("node ");
+          expect(h.command.toLowerCase()).not.toContain("bun");
+          expect(h.command).toMatch(/\/dist\/[A-Za-z0-9_\-/]+\.mjs"/);
           const refs = referencedPaths(h.command);
           expect(refs.length, `hook command references no resolvable file: ${h.command}`)
             .toBeGreaterThan(0);
@@ -683,6 +754,62 @@ describe("manifests — cross-harness packaging and one version", () => {
           }
         }
       }
+    }
+  });
+
+  test("no entrypoint imports another entrypoint", () => {
+    // The permanent fix for a defect that shipped once. Bundling inlines the
+    // imported entrypoint's `isMain` block into the IMPORTER's bundle, where —
+    // one module remaining after bundling — the guard is TRUE, so the wrong hook
+    // body runs first, consumes stdin, and process.exit(0)s. Concretely:
+    // hooks/session-start.ts imported spawnShipper from capture/capture.ts, and
+    // the built SessionStart hook emitted NOTHING, killing the one-time connect
+    // prompt with exit 0 and no error. 449 source-level tests stayed green.
+    // Shared code belongs in a non-entrypoint module — capture/shipper.ts exists
+    // for exactly this.
+    const offenders: string[] = [];
+    for (const entry of ENTRYPOINTS) {
+      const source = readFileSync(join(PLUGIN_ROOT, entry), "utf8");
+      for (const other of ENTRYPOINTS) {
+        if (other === entry) continue;
+        const stem = basename(other, ".ts");
+        // Extensionless relative specifiers — moduleResolution is "bundler".
+        const pattern = new RegExp(`from\\s+"\\.\\.?/(?:[A-Za-z0-9_\\-./]*/)?${stem}"`);
+        if (pattern.test(source)) offenders.push(`${entry} imports the entrypoint ${other}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("every entrypoint is built, and every built bundle runs on node", () => {
+    // Ties scripts/build.ts's ENTRYPOINTS to what actually exists on disk: an
+    // entrypoint added without a rebuild, or a bundle orphaned by a rename, fails
+    // here rather than at a user's first hook fire.
+    for (const path of distBundles()) {
+      expect(existsSync(path), `missing bundle — run 'bun run build': ${path}`).toBe(true);
+      const source = readFileSync(path, "utf8");
+      expect(source.split("\n")[0]).toBe("#!/usr/bin/env node");
+      // A Bun API surviving into a Node bundle is a ReferenceError (or a silent
+      // undefined) at hook time, on stdio the user never sees. The sources are
+      // exercised under Bun in dev, so nothing else would notice.
+      expect(source, `${path} references a Bun global`).not.toMatch(/\bBun\./);
+      expect(source, `${path} uses a Bun-only import.meta field`).not.toMatch(
+        /import\.meta\.(dir|main)\b/,
+      );
+    }
+  });
+
+  test("the build script and hooks.json agree on the shipped surface", () => {
+    // hooks.json is the harness's view of the plugin; build.ts is what produces
+    // what it points at. If one lists a bundle the other does not, a hook fires
+    // against a file nobody built.
+    const buildSource = readFileSync(join(PLUGIN_ROOT, "scripts", "build.ts"), "utf8");
+    for (const entry of ENTRYPOINTS) {
+      expect(buildSource, `scripts/build.ts does not build ${entry}`).toContain(`"${entry}"`);
+    }
+    const hooksRaw = readFileSync(join(PLUGIN_ROOT, "hooks", "hooks.json"), "utf8");
+    for (const rel of ["dist/hooks/session-start.mjs", "dist/hooks/user-prompt.mjs", "dist/capture/capture.mjs"]) {
+      expect(hooksRaw, `hooks.json no longer wires ${rel}`).toContain(rel);
     }
   });
 

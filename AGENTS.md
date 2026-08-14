@@ -6,6 +6,7 @@ Use Bun for all repository work:
 
 ```bash
 bun install --frozen-lockfile
+bun run build
 bun run typecheck
 bun test
 git diff --check
@@ -46,6 +47,47 @@ non-production Augenta with `AUGENTA_CONTROL_URL`, running the working tree
 instead of an installed copy, and resetting local sign-in state. It is contributor
 documentation and stays unlinked from `README.md` — the connect skill itself has
 no environment flag, and the reasoning for that is recorded there.
+
+## The runtime boundary: Bun builds, Node ships
+
+**Users need Node and nothing else.** Bun is a build-time tool here, in the same
+role as a compiler — tests, typecheck, and bundling. Nothing that reaches a user
+may depend on it.
+
+What ships is `dist/`: five Node ESM bundles built from the five entrypoints by
+`scripts/build.ts`. `hooks/hooks.json` and `skills/connect/SKILL.md` invoke those
+bundles, never the `.ts` sources, which are not directly Node-runnable anyway
+(`moduleResolution: "bundler"` means extensionless relative imports). `dist/` is
+committed because both marketplaces install a git checkout and run no build step,
+so **the bundles are the shipped artifact** — run `bun run build` and commit the
+result whenever a shipped source changes. CI fails a PR whose `dist/` has drifted.
+
+The asymmetry to keep in mind: contributors exercise *sources under Bun* while
+users exercise *bundles under Node*, so a Bun-only API can enter runtime code and
+fail only in the field. Three gates close that, and none is optional — the
+contract test scans `dist/**` for `Bun.` and `import.meta.dir`/`main`,
+`__tests__/dist-smoke.test.ts` executes every bundle under real `node`, and CI's
+`install-smoke` fires a hook under Node from an actual marketplace install.
+
+**A committed `dist/` multiplies every CodeQL alert.** This repo uses CodeQL
+default setup, which takes no config file, so `dist/` cannot be excluded from
+scanning and inline `// codeql[...]` markers do not suppress code-scanning alerts
+(see the note at `capture/auth.ts:463`). Each bundle inlines its whole import
+graph, so one flagged source line becomes one alert per bundle that contains it —
+each needing its own dismissal, and **re-minted whenever line numbers shift**,
+because a dismissal is bound to a location. Expect this when a change moves
+flagged code, and dismiss the generated copies as duplicates of the source
+finding rather than chasing them. Converting to CodeQL advanced setup with
+`paths-ignore: dist/**` would end it permanently.
+
+**No entrypoint may import another entrypoint.** Bundling inlines the imported
+file's `isMain` block into the importer's bundle, where — one module remaining
+after bundling — the guard is TRUE and the wrong hook body runs first. This
+shipped once in a prototype: `hooks/session-start.ts` imported `spawnShipper`
+from `capture/capture.ts`, and the built SessionStart hook silently consumed
+stdin and exited before ever emitting the connect prompt, killing onboarding with
+exit 0 and no output. Shared code goes in a non-entrypoint module —
+`capture/shipper.ts` exists for exactly this — and a contract test enforces it.
 
 ## Cross-harness packaging
 

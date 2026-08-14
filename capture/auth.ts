@@ -26,6 +26,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ensureAugentaDir } from "./augenta-dir";
+import { openBrowser } from "../runtime/node";
 
 export interface OAuthConfig {
   issuer: string;
@@ -339,11 +340,7 @@ export async function beginDeviceLogin(
   };
   if (opts.openBrowser !== false) {
     try {
-      Bun.spawnSync({
-        cmd: browserCommand(pending.verificationUri),
-        stdout: "ignore",
-        stderr: "ignore",
-      });
+      openBrowser(browserCommand(pending.verificationUri));
     } catch {
       // The URL and code remain usable on headless systems.
     }

@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 /**
  * Augenta capture hook — wired to PostToolUse + Stop.
  *
@@ -18,11 +17,10 @@
  * `<project>/.augenta/config.json` (see capture/config.ts). No config → silent
  * exit.
  *
- * Self-contained: only Bun/Node builtins + sibling capture modules, so it runs
+ * Self-contained: only Node builtins + sibling capture modules, so it runs
  * from the installed plugin location with no node_modules.
  */
 import { existsSync, openSync, fstatSync, readSync, closeSync } from "node:fs";
-import { spawn } from "node:child_process";
 import { basename, dirname, join } from "node:path";
 import { normalizeClaudeTranscript, normalizeCodexRollout, type Scrubber } from "./normalize";
 import type { CaptureEvent, RawRecord } from "./event";
@@ -32,7 +30,9 @@ import { CaptureState } from "./capture-cursor";
 import { TurnState } from "./turn-cursor";
 import { captureEnabled, projectConfig, resolveProjectRoot } from "./config";
 import { captureAgentMemory } from "./memory";
+import { spawnShipper } from "./shipper";
 import { isCodexHarness, sniffHarness } from "../hooks/harness";
+import { isMain, readStdin } from "../runtime/node";
 
 export interface CapturePayload {
   session_id?: string;
@@ -500,32 +500,11 @@ export function runCapture(
   return finish(events.length);
 }
 
-/**
- * Detached fire-and-forget shipper — never blocks the hook, ignores all I/O.
- * The project root rides as argv (explicit and visible in `ps`) so the child
- * drains the SAME project the hook captured into, regardless of its own cwd.
- * Exported so other hooks (SessionStart — see hooks/session-start.ts) can
- * spawn the same drain for a spool stranded by a Stop that never fired or
- * failed before it could ship.
- */
-export function spawnShipper(projectRoot: string): void {
-  try {
-    const child = spawn("bun", ["run", join(import.meta.dir, "ship.ts"), projectRoot], {
-      detached: true,
-      stdio: "ignore",
-      env: process.env,
-    });
-    child.unref();
-  } catch {
-    /* spawning the shipper is best-effort; the next Stop will retry the drain */
-  }
-}
-
-if (import.meta.main) {
+if (isMain(import.meta.url)) {
   // Hook entrypoint: parse the payload, gate on the project's opt-in, run
   // capture, always exit 0.
   try {
-    const payload = JSON.parse(await Bun.stdin.text()) as CapturePayload;
+    const payload = JSON.parse(await readStdin()) as CapturePayload;
     if (captureEnabled(projectConfig(payload.cwd))) {
       runCapture(payload);
     }
