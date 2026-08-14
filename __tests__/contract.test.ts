@@ -15,7 +15,7 @@
  */
 import { test, expect, describe } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 // This repo IS the plugin: __tests__/ sits at the repo root, so PLUGIN_ROOT is
 // the repo root (one level up from here).
@@ -93,6 +93,32 @@ const ENTRYPOINTS = [
 /** Absolute paths of the built bundles, derived from ENTRYPOINTS. */
 function distBundles(): string[] {
   return ENTRYPOINTS.map((e) => join(PLUGIN_ROOT, "dist", e.replace(/\.ts$/, ".mjs")));
+}
+
+/**
+ * Every repo-relative .ts module reachable from a shipped entrypoint by following
+ * relative imports — i.e. the exact set of source that ends up inside a bundle a
+ * user runs. Computed so that invariants asserted over "runtime code" cannot be
+ * quietly narrowed by adding a file, which a hand-maintained list allows.
+ *
+ * Specifiers are extensionless (moduleResolution is "bundler"), so `.ts` is
+ * appended and the result checked against disk; anything that does not resolve to
+ * a real file (a bare `node:` builtin, a type-only path) is skipped.
+ */
+function runtimeModules(): string[] {
+  const seen = new Set<string>();
+  const queue = [...ENTRYPOINTS];
+  while (queue.length > 0) {
+    const rel = queue.pop()!;
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    const source = readFileSync(join(PLUGIN_ROOT, rel), "utf8");
+    for (const m of source.matchAll(/from\s+"(\.[^"]+)"/g)) {
+      const resolved = `${join(dirname(rel), m[1]!)}.ts`;
+      if (existsSync(join(PLUGIN_ROOT, resolved))) queue.push(resolved);
+    }
+  }
+  return [...seen].sort();
 }
 
 /** Resolve every concrete file path a SKILL.md / hook command references. */
@@ -493,15 +519,25 @@ describe("the identity provider stays behind the scenes", () => {
   // user and org identity are Augenta's own `/v1/me` `user.id` and `org.id`; the
   // IdP's separate `org.workosOrgId` is deliberately unused. Comments may explain
   // all of this — that is the only place the name belongs.
-  const RUNTIME = [
-    "capture/auth.ts",
-    "capture/ship.ts",
-    "capture/config.ts",
-    "capture/capture.ts",
-    "scripts/connect.ts",
-    "hooks/session-start.ts",
-    "hooks/user-prompt.ts",
-  ];
+  // "Runtime code" is COMPUTED, not listed: every module reachable by following
+  // relative imports out from the shipped entrypoints — i.e. exactly what ends up
+  // inside a bundle a user executes.
+  //
+  // This used to be a hand-maintained array, which is an under-approximation that
+  // rots silently in two directions: it never listed the modules the entrypoints
+  // pull in transitively (normalize, outbox, scrub, memory, …), and a newly added
+  // runtime file is simply never scanned while the test keeps passing. The
+  // dist/** scan below covers the same ground, but only this one can report a
+  // precise source file:line, which is what makes a failure actionable.
+  const RUNTIME = runtimeModules();
+
+  test("the reachable-module walk actually found the runtime", () => {
+    // A walker that silently resolved nothing would make every scan below vacuous.
+    expect(RUNTIME.length).toBeGreaterThan(ENTRYPOINTS.length);
+    for (const rel of ["capture/auth.ts", "capture/config.ts", "runtime/node.ts"]) {
+      expect(RUNTIME, `${rel} is runtime code and must be scanned`).toContain(rel);
+    }
+  });
 
   test("no runtime code line outside a comment names the provider, in any casing", () => {
     const offenders: string[] = [];

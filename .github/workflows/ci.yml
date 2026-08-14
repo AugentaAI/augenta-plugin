@@ -74,6 +74,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      # Pinned to the same floor as the `plugin` job, and it matters more here:
+      # this job fires the shipped hooks with `node` from a real install, which is
+      # the closest thing CI has to a user's machine. On the runner default it
+      # would silently test whatever Node ships that month, not the floor README
+      # promises.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Install plugin CLIs
         run: npm install --global @anthropic-ai/claude-code @openai/codex
 
