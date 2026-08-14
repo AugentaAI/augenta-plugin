@@ -1,6 +1,6 @@
 ---
 name: connect
-description: Connect the current project to Augenta Neurospaces through Connectors. Use when the user runs /augenta:connect, invokes $augenta:connect, or asks to connect or enable Augenta. The user signs in to Augenta once, explicitly selects every Neurospace this project should feed, and the project stores only a global profile reference and its Connector ids.
+description: Connect the current project to Augenta Workspaces through Connectors. Use when the user runs /augenta:connect, invokes $augenta:connect, or asks to connect or enable Augenta. The user signs in to Augenta once, explicitly selects every Workspace this project should feed, and the project stores only a global profile reference and its Connector ids.
 allowed-tools: AskUserQuestion, Bash, Read
 ---
 
@@ -9,7 +9,7 @@ allowed-tools: AskUserQuestion, Bash, Read
 Connect the current project to Augenta activity and project-memory capture.
 Connected projects send normalized activity steps, structurally sanitized raw
 transcript lines, and matching scrubbed memory documents through one inbound
-Connector per explicitly selected Neurospace. **Every selected Neurospace
+Connector per explicitly selected Workspace. **Every selected Workspace
 receives the full record — the same activity and memory, complete, in each.**
 Connection is per project and is the user's consent boundary.
 
@@ -57,7 +57,7 @@ Bun is required (https://bun.sh) — the same runtime the plugin's hooks use.
 
 Every payload includes `environment` and `projectRoot`. **When `environment` is
 not `prod`, say so** in both the question and the confirmation: connecting a
-project to a dev or staging Neurospace by accident is silent otherwise.
+project to a dev or staging Workspace by accident is silent otherwise.
 
 When a payload includes `worktreeRedirect`, tell the user that cwd is a linked
 worktree and that the main checkout at `projectRoot` is being connected instead —
@@ -72,15 +72,15 @@ bun "$CONNECT" --json --probe
 
 Read-only. It starts no sign-in, so nothing has happened yet and you can still
 explain and ask. `alreadyConnected: true` means reconnecting will verify or change
-which Neurospaces this project feeds — continue, do not stop.
+which Workspaces this project feeds — continue, do not stop.
 
-`destinations` lists the Neurospaces the project feeds right now; use it to
+`destinations` lists the Workspaces the project feeds right now; use it to
 pre-select in step 3. Two cases there need saying out loud rather than quietly
 dropping, because the project is still shipping to them and the answer in step 3
 replaces the whole set:
 
 - `unresolvedConnectorIds` — destinations whose Connector you cannot read at all.
-- a `destinations` entry with no `neurospaceName` — its Neurospace is no longer in
+- a `destinations` entry with no `workspaceName` — its Workspace is no longer in
   the organization's list, so it cannot be offered as an option in step 3 and will
   be dropped by whatever the user answers.
 
@@ -110,16 +110,16 @@ bun "$CONNECT" --json --await-login
 - `login_pending` — the link is still valid. Tell the user you are still waiting
   and call it again. Use a longer Bash timeout with `--wait <seconds>` if you want
   fewer, longer waits.
-- `need_neurospace` — signed in. Go to step 3.
+- `need_workspace` — signed in. Go to step 3.
 - `status: "error"` — report `message`. `login_denied` means the user declined, so
   do not silently retry; `login_expired` means start again from `--login`.
 
-## 3. Choose the Neurospaces
+## 3. Choose the Workspaces
 
 This single question is both the consent gate and the target choice, so it is the
 one step that always happens. **The answer is the complete set of destinations** —
 the project will feed exactly what the user selects here and nothing else. Ask it
-every time, including when the organization has only one Neurospace and including
+every time, including when the organization has only one Workspace and including
 when the project is already connected. Never offer to keep the current selection
 without showing it; never treat one answer as authorization for more than one
 destination; never proceed on silence.
@@ -127,14 +127,14 @@ destination; never proceed on silence.
 Before the user answers, say — in one or two sentences, naming the organization
 from `signedInAs`:
 
-- every Neurospace they select receives the **full record**: this project's agent
+- every Workspace they select receives the **full record**: this project's agent
   activity, its raw transcript lines, and its project memory, complete, in each;
-- so **anyone with access to any selected Neurospace can read this project's
+- so **anyone with access to any selected Workspace can read this project's
   captured activity** — the audience is the union of all of them;
 - and, if `environment` is not `prod`, which environment this is.
 
 **If your harness's user-input mechanism can offer several options at once**, ask
-one question listing every entry from `neurospaces`, with the Neurospaces in
+one question listing every entry from `workspaces`, with the Workspaces in
 `destinations` already selected, plus a final option `Don't connect this project`.
 
 **If it cannot**, ask in plain text: number the entries, mark the current
@@ -143,15 +143,15 @@ Then **restate the set by name and get a yes before running the verb** — a typ
 answer is your interpretation of what they meant, not something they saw
 rendered.
 
-If `Don't connect this project` comes back **together with** any Neurospace, that
+If `Don't connect this project` comes back **together with** any Workspace, that
 answer has no meaning: say so and ask again. Do not connect. If they decline,
 acknowledge and stop.
 
 ```bash
-bun "$CONNECT" --json --neurospace <id> --neurospace <id>
+bun "$CONNECT" --json --workspace <id> --workspace <id>
 ```
 
-Repeat `--neurospace` once per selected Neurospace. Pass the `id`s, never the
+Repeat `--workspace` once per selected Workspace. Pass the `id`s, never the
 names. If `--probe` returned `need_profile`, ask which organization first and add
 `--profile <profileId>`.
 
@@ -164,7 +164,7 @@ environment if it is not `prod`. Restate that raw transcript records are
 structurally sanitized but **not** secret-scrubbed, and that this now applies to
 every destination you just named.
 
-If `removed` is non-empty, name each removed Neurospace: this project **no longer
+If `removed` is non-empty, name each removed Workspace: this project **no longer
 sends** to it. Its Connector is **left in place and idle** — nothing was disabled
 or deleted; the user can remove it in Augenta if they want it gone.
 
@@ -187,11 +187,11 @@ Mention that deleting `.augenta/config.json` or setting
 "select nothing" answer that disconnects an already-connected project — deleting
 the config is how the user turns it all off.
 
-On `status: "error"`, report `message`. `unknown_neurospace` means an id did not
+On `status: "error"`, report `message`. `unknown_workspace` means an id did not
 match the organization's live list and **nothing was created** — re-run `--probe`
 and ask again rather than guessing. `no_destination_linked` means no destination
 could be linked and no config was written. Other common causes are a missing Bun
-runtime, a declined or expired authorization, no active Neurospaces, or an
+runtime, a declined or expired authorization, no active Workspaces, or an
 organization not yet provisioned in Augenta.
 
 ## Agent constraints

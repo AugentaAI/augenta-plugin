@@ -79,7 +79,7 @@ comes from is usually the first thing a fixer needs to know.
 - capture pipeline (`capture/`) — shipper, spool/outbox, normalizers, sanitize/scrub
 - hooks (`hooks/`) — the eight event handlers and `hooks/hooks.json`
 - connect skill (`skills/connect/`) — the shipped, user-facing skill
-- connect script (`scripts/connect.ts`) — sign-in, Neurospace selection, config write
+- connect script (`scripts/connect.ts`) — sign-in, Workspace selection, config write
 - packaging (`.claude-plugin/`, `.codex-plugin/`, marketplace metadata, versions)
 - CI (`.github/`)
 - docs (`README.md`, `AGENTS.md`, `DEBUG.md`)

@@ -37,7 +37,7 @@ cannot be applied to only some of the verbs.
 Disclosure is unaffected. `environmentLabel` (`scripts/connect.ts:826`) reads the
 same variable, so every payload's `environment` field becomes the literal URL
 instead of `prod`, and `SKILL.md` requires the agent to state a non-prod
-environment in both the Neurospace question and the confirmation. If a skill run
+environment in both the Workspace question and the confirmation. If a skill run
 reports `prod` or says nothing, the variable did not reach the harness process.
 
 ## Run the working tree instead of an installed copy
@@ -77,11 +77,11 @@ bun scripts/dev-e2e.ts \
   --control-url https://dev.augenta.ai
 ```
 
-The connect step needs an interactive terminal: the Neurospace choice goes through
+The connect step needs an interactive terminal: the Workspace choice goes through
 `chooseMany`, which refuses a non-TTY rather than print a menu nobody can answer.
-It is a comma-separated multi-select (`1,3`) over every Neurospace, with the
+It is a comma-separated multi-select (`1,3`) over every Workspace, with the
 project's current destinations marked `[x]`, and it always asks — there is no
-auto-select even for a single Neurospace. **An empty answer connects nothing**, so
+auto-select even for a single Workspace. **An empty answer connects nothing**, so
 the dev loop must type at least one number. This is the positive human OAuth gate described in `AGENTS.md`; GitHub
 Actions verifies the platform-key path instead and must never receive a human
 access or refresh token.

@@ -786,7 +786,7 @@ describe("drain against a real loopback endpoint", () => {
 describe("fanOutNotice — the most GLOBAL problem wins", () => {
   test("a credential problem outranks a per-Connector problem", () => {
     // 401 is the shared credential; 403 is one link. Telling a signed-out user to
-    // go check a Neurospace would send them to fix the wrong thing.
+    // go check a Workspace would send them to fix the wrong thing.
     expect(fanOutNotice("oauth", [403, 401])).toBe("relogin");
     expect(fanOutNotice("oauth", [401, 403])).toBe("relogin");
   });
@@ -804,7 +804,7 @@ describe("fanOutNotice — the most GLOBAL problem wins", () => {
 });
 
 /**
- * One spool, several Neurospaces. The point of every test here is ISOLATION: a
+ * One spool, several Workspaces. The point of every test here is ISOLATION: a
  * destination that is broken must cost the others nothing.
  */
 describe("fan-out across destinations", () => {

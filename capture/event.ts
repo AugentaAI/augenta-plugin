@@ -19,11 +19,11 @@
  * normalized, but opaque reasoning signatures/encrypted content and empty
  * thought fields are removed before storage and again before egress. The
  * project's `.augenta/config.json` opt-in covers BOTH channels. The
- * tenant/Neurospace is intentionally absent from this payload: the client never
+ * tenant/Workspace is intentionally absent from this payload: the client never
  * asserts identity, so the destination is carried by the REQUEST — a platform
  * key's own assignment, or the Connector header a signed-in shipper sends per
  * destination (see capture/ship.ts). One record's bytes are therefore identical
- * whichever Neurospace they land in, and content-derived identity (below) makes
+ * whichever Workspace they land in, and content-derived identity (below) makes
  * landing in several of them idempotent per destination.
  */
 

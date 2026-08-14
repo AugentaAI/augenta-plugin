@@ -40,7 +40,7 @@ const KNOWN_HOOK_EVENTS = new Set([
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.7.0";
+const RELEASE_VERSION = "0.8.0";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -216,15 +216,15 @@ describe("the connect skill drives connect itself", () => {
   const flat = skill.replace(/\s+/g, " ");
 
   test("drives every JSON verb the CLI exposes", () => {
-    // Word-boundary, not substring: a renamed `--neurospaces` would satisfy
-    // `toContain("--neurospace")` VACUOUSLY while the CLI verb no longer exists.
-    for (const verb of ["--json", "--probe", "--login", "--await-login", "--neurospace", "--profile"]) {
+    // Word-boundary, not substring: a renamed `--workspaces` would satisfy
+    // `toContain("--workspace")` VACUOUSLY while the CLI verb no longer exists.
+    for (const verb of ["--json", "--probe", "--login", "--await-login", "--workspace", "--profile"]) {
       expect(skill).toMatch(new RegExp(`${verb}(?![\\w-])`));
     }
   });
 
   test("tells the agent the destination flag is repeatable", () => {
-    expect(flat).toMatch(/Repeat `--neurospace` once per selected Neurospace/);
+    expect(flat).toMatch(/Repeat `--workspace` once per selected Workspace/);
   });
 
   test("resolves the script from the skill's own directory, never from $CLAUDE_PLUGIN_ROOT", () => {
@@ -314,12 +314,12 @@ describe("the consent gate is plural, explicit, and fully disclosed", () => {
   });
 
   test("discloses the FULL RECORD and the UNION audience before the user answers", () => {
-    // The highest-value assertion in this release. A list of Neurospace names does
+    // The highest-value assertion in this release. A list of Workspace names does
     // not tell a user how many humans can read their transcripts; these sentences
     // do, and without them a multi-select reasonably reads as "split between" or
     // "primary plus backup".
     expect(flat).toMatch(/full record/);
-    expect(flat).toMatch(/anyone with access to any selected Neurospace/i);
+    expect(flat).toMatch(/anyone with access to any selected Workspace/i);
     expect(flat).toMatch(/union/);
     // And the raw-transcript caveat, whose weight scales with the audience.
     expect(flat).toMatch(/not\*\* secret-scrubbed/);
@@ -397,7 +397,7 @@ describe("the consent gate is plural, explicit, and fully disclosed", () => {
   });
 
   test("README states the plural consent step and the union audience", () => {
-    expect(readme).toMatch(/every\*\* Neurospace this project should feed/i);
+    expect(readme).toMatch(/every\*\* Workspace this project should feed/i);
     expect(readme).toMatch(/union/);
     // The old singular framing must not survive alongside the new one.
     expect(readme).not.toMatch(/That single choice is the consent boundary/);

@@ -394,7 +394,7 @@ interface RejectedEntry {
   status: number;
   error?: string;
   /** Which destination rejected these bytes. A project may feed several, and the
-   *  same body can be accepted by one Neurospace and rejected by another, so a
+   *  same body can be accepted by one Workspace and rejected by another, so a
    *  quarantine entry is only actionable when it names the destination. Absent in
    *  api-key mode, which has a single unnamed route. */
   destination?: string;
@@ -584,7 +584,7 @@ export interface FanOutResult {
  *
  * "relogin" outranks "connect" because the two have different scopes: a 401 is a
  * problem with the CREDENTIAL, which every destination shares, while a 403/404 is
- * a problem with ONE Connector. Telling a signed-out user to check a Neurospace
+ * a problem with ONE Connector. Telling a signed-out user to check a Workspace
  * would send them to fix the wrong thing. Pure.
  */
 export function fanOutNotice(
@@ -612,7 +612,7 @@ export function fanOutNotice(
  * A advanced past them independently on its own 2xx.
  *
  * Destinations sit at different offsets and therefore see different slice
- * boundaries, so the same turn may land as one record in one Neurospace and two
+ * boundaries, so the same turn may land as one record in one Workspace and two
  * in another. That is legal (record identity is content-derived and disjoint seq
  * ranges merge on read) and idempotent per destination.
  *

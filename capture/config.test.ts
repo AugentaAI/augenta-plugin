@@ -76,7 +76,7 @@ describe("loadProjectConfig", () => {
     });
   });
 
-  test("parses oauth mode without organization or Neurospace coordinates", () => {
+  test("parses oauth mode without organization or Workspace coordinates", () => {
     writeConfig(project, {
       authMode: "oauth",
       profileId: "profile_1",

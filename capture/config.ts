@@ -2,9 +2,9 @@
  * Project-scoped capture consent and routing.
  *
  * Human projects keep only a global sign-in profile reference and the
- * authoritative Connector ids — one per Neurospace the user selected. Machine
+ * authoritative Connector ids — one per Workspace the user selected. Machine
  * projects may instead hold a platform-managed API key. No organization or
- * Neurospace coordinate is accepted from project config.
+ * Workspace coordinate is accepted from project config.
  *
  * `authMode` names the CREDENTIAL KIND, which decides both what else the file
  * must contain and which authorization header the shipper sends.
@@ -35,7 +35,7 @@ export interface ProjectConfig {
   profileId?: string;
   /**
    * Every destination this project feeds, in the order connect wrote them. One
-   * entry per selected Neurospace; never empty in a parsed oauth config. Absent
+   * entry per selected Workspace; never empty in a parsed oauth config. Absent
    * in api-key mode, where the key's own assignment is the route.
    */
   connectorIds?: string[];
@@ -53,7 +53,7 @@ export interface ProjectConfig {
  * skipped: a partial destination set would ship to fewer places than the user
  * consented to while looking like a success. Duplicates are dropped — a repeated
  * id would otherwise become two cursor keys double-POSTing the same bytes to the
- * same Neurospace on every drain.
+ * same Workspace on every drain.
  */
 function parseConnectorIds(value: { connectorIds?: unknown }): string[] {
   const raw = Array.isArray(value.connectorIds) ? value.connectorIds : [];

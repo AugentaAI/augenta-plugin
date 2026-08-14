@@ -77,16 +77,16 @@ For each path the diff touches, run the matching checks. A finding here is almos
 ### `scripts/connect.ts` — credentials and consent
 
 - **No credential passes through the agent.** The agent is the normal caller of
-  `--json` (`--probe`, `--login`, `--await-login`, `--neurospace`). Does the diff add a
+  `--json` (`--probe`, `--login`, `--await-login`, `--workspace`). Does the diff add a
   `--json` verb or payload field that could emit an access token, refresh token, or
   device code? Does `--api-key` still refuse `--json` mode?
 - **Consent is asked every time, and the answer is the complete destination set.** Is
   `chooseMany` still a separate function from `choose`, with no auto-select knob? Is the
-  question still asked when the org has exactly one Neurospace, and when the project is
+  question still asked when the org has exactly one Workspace, and when the project is
   already connected? Has anything introduced a default, an inference, a carry-forward, or
   a "keep current" shortcut?
 - **Disclosure scales with the destination count.** Before the user answers and again at
-  confirmation, are they told each selected Neurospace receives the *full record*, so the
+  confirmation, are they told each selected Workspace receives the *full record*, so the
   audience is the union of everyone with access to any of them? With more than one
   selected, does the confirmation still restate that raw transcript records are
   structurally sanitized but not secret-scrubbed?
@@ -96,7 +96,7 @@ For each path the diff touches, run the matching checks. A finding here is almos
   unless a config was actually written.
 - **Dropped destinations are named**, their Connectors are left in place and idle (never
   disabled or deleted), and reconnecting never moves an existing Connector to a different
-  Neurospace.
+  Workspace.
 - **The platform-key path stays single-destination.** `verifyApiKeyConnection` must still
   refuse a key assigned to more than one Connector.
 - A non-production `environment` must be stated to the user before they answer.
