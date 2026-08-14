@@ -520,6 +520,69 @@ describe("JSON verbs", () => {
     expect(readPendingLogin()?.deviceCode).toBe("device_secret");
   });
 
+  test("login is idempotent while a grant is live — same link, no second mint", async () => {
+    // Issue #8: an agent that re-ran --login instead of waiting minted a fresh
+    // grant each time and overwrote the last, invalidating the very link the
+    // user was mid-way through opening. Unattended that is an unbounded loop of
+    // dead links. Re-calling must hand back the LIVE one.
+    let minted = 0;
+    route({
+      [`POST ${ISSUER}/oauth2/device_authorization`]: () => {
+        minted += 1;
+        return Response.json({
+          device_code: `device_secret_${minted}`,
+          user_code: `CODE-${minted}`,
+          verification_uri_complete: `${ISSUER}/device?user_code=CODE-${minted}`,
+          verification_uri: `${ISSUER}/device`,
+          interval: 5,
+          expires_in: 600,
+        });
+      },
+    });
+
+    const first = await startLogin(baseArgs);
+    const second = await startLogin(baseArgs);
+
+    expect(minted).toBe(1);
+    expect(second.verificationUri).toBe(first.verificationUri);
+    expect(second.userCode).toBe(first.userCode);
+    // The stored grant is still the one the user is holding, not a replacement.
+    expect(readPendingLogin()?.deviceCode).toBe("device_secret_1");
+    // Still a real countdown rather than a frozen echo of the first call.
+    expect(second.expiresInSeconds).toBeGreaterThan(0);
+  });
+
+  test("login mints fresh once the live grant has expired", async () => {
+    // The other side of the guard: `readPendingLogin` treats an expired grant as
+    // absent, so a dead link must never wedge a later connect onto itself.
+    savePendingLogin({
+      deviceCode: "stale_secret",
+      userCode: "STALE-CODE",
+      verificationUri: `${ISSUER}/device?user_code=STALE-CODE`,
+      issuer: ISSUER,
+      clientId: "client_test",
+      gateway: GATEWAY,
+      intervalMs: 5000,
+      expiresAt: Date.now() - 1000,
+    });
+    route({
+      [`POST ${ISSUER}/oauth2/device_authorization`]: () =>
+        Response.json({
+          device_code: "device_secret_fresh",
+          user_code: "FRESH-CODE",
+          verification_uri_complete: `${ISSUER}/device?user_code=FRESH-CODE`,
+          verification_uri: `${ISSUER}/device`,
+          interval: 5,
+          expires_in: 600,
+        }),
+    });
+
+    const payload = await startLogin(baseArgs);
+
+    expect(payload.userCode).toBe("FRESH-CODE");
+    expect(readPendingLogin()?.deviceCode).toBe("device_secret_fresh");
+  });
+
   test("await-login reports pending while the link is still good", async () => {
     savePendingLogin({
       deviceCode: "device_secret",

@@ -1045,10 +1045,31 @@ export async function probeConnection(
   };
 }
 
-/** Start the grant and return the link immediately. */
+/**
+ * Start the grant and return the link immediately — or hand back the live one.
+ *
+ * Calling this twice while a grant is still valid used to mint a second link and
+ * overwrite the first, silently invalidating the link the user was in the middle
+ * of opening. An agent that re-ran `--login` instead of waiting could do that
+ * indefinitely, which is how a non-interactive turn once looped on dead links
+ * until it was killed (issue #8).
+ *
+ * So the verb is idempotent while a grant is live: same link, same code, real
+ * remaining time. `readPendingLogin` already treats an EXPIRED grant as absent,
+ * so this cannot wedge a later connect onto a dead one — an expired link falls
+ * through and mints fresh, which is the one case where a replacement is right.
+ *
+ * Reuse requires the stored grant to belong to the issuer we just resolved:
+ * pointing at a different environment must not hand back a link minted for the
+ * previous one.
+ */
 export async function startLogin(args: Args): Promise<JsonPayload> {
   const { oauth } = await resolveOAuth(args);
-  const pending = await beginDeviceLogin(oauth);
+  const live = readPendingLogin();
+  const pending =
+    live && live.issuer === oauth.issuer && live.clientId === oauth.clientId
+      ? live
+      : await beginDeviceLogin(oauth);
   savePendingLogin(pending);
   return {
     status: "login_started",
