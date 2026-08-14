@@ -41,8 +41,8 @@ in the background.
 
 ## Install
 
-**Prerequisite:** [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`) —
-the hooks and scripts run on it.
+**Prerequisite:** [Node.js](https://nodejs.org) 20 or newer — the hooks and the
+connect script run on it, as prebuilt bundles with no dependencies to install.
 
 ### Claude Code
 
@@ -98,7 +98,7 @@ script's `--json` verbs directly; none of them accepts or emits a credential.
 You can also run the script yourself for the interactive terminal flow:
 
 ```bash
-bun "<plugin-root>/scripts/connect.ts"
+node "<plugin-root>/dist/scripts/connect.mjs"
 ```
 
 Either way it reuses your owner-only global sign-in when possible, otherwise
@@ -244,8 +244,13 @@ provider, and the stored `authMode` is the provider-neutral `oauth`.
 
 ## Development
 
+Repo work runs on [Bun](https://bun.sh); it is a build-time tool only. What ships
+to users is `dist/`, which runs on Node — rebuild and commit it whenever a shipped
+source changes, or CI fails the PR.
+
 ```bash
 bun install --frozen-lockfile
+bun run build
 bun run typecheck
 bun run test:e2e
 bun test

@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 /**
  * Connect one project to its Connectors, by Augenta sign-in or a platform key.
  *
@@ -21,6 +20,7 @@ import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { isMain } from "../runtime/node";
 import { ensureAugentaDir } from "../capture/augenta-dir";
 import {
   configPath,
@@ -91,7 +91,7 @@ interface Connector {
  * (AGENTS.md → Releases) alongside both plugin manifests, both marketplace files,
  * and package.json; the contract test pins all of them to one value.
  */
-export const PLUGIN_VERSION = "0.8.0";
+export const PLUGIN_VERSION = "0.9.0";
 
 class AugentaRequestError extends Error {
   constructor(
@@ -1331,7 +1331,37 @@ export async function connectWithApiKey(
   };
 }
 
-if (import.meta.main) {
+/**
+ * One readable sentence for any thrown failure.
+ *
+ * Node's fetch reports every connection-level failure as the bare string
+ * "fetch failed", putting the actual cause (DNS, refused, TLS, timeout) one level
+ * down in `error.cause`. Since the shipped CLI runs on Node, that string would be
+ * the ENTIRE diagnosis a user or agent gets for being offline, behind a proxy, or
+ * pointed at a dead `--control-url`. Unwrap the cause so the message names
+ * something actionable.
+ */
+function describeError(error: unknown): string {
+  const message = (error as Error)?.message ?? String(error);
+  if (message !== "fetch failed") return message;
+  const cause = (error as { cause?: { code?: string; message?: string } }).cause;
+  const code = cause?.code;
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+    return "cannot reach Augenta: the host name did not resolve. Check your network or DNS.";
+  }
+  if (code === "ECONNREFUSED") {
+    return "cannot reach Augenta: the connection was refused. Check the URL, and any proxy or firewall.";
+  }
+  if (code === "CERT_HAS_EXPIRED" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {
+    return "cannot reach Augenta: the TLS certificate could not be verified. Check for a TLS-intercepting proxy.";
+  }
+  const detail = cause?.message ?? code;
+  return detail
+    ? `cannot reach Augenta: ${detail}`
+    : "cannot reach Augenta: the network request failed. Check your connection.";
+}
+
+if (isMain(import.meta.url)) {
   const argv = process.argv.slice(2);
   // Read straight off argv: parseArgs itself can throw, and a caller that asked
   // for JSON must get JSON back even for a bad flag.
@@ -1381,7 +1411,7 @@ if (import.meta.main) {
       await connectProject(projectRoot, args);
     }
   } catch (error) {
-    const message = (error as Error).message;
+    const message = describeError(error);
     if (wantsJson) {
       console.log(
         JSON.stringify({ status: "error", code: "failed", message }, null, 2),
