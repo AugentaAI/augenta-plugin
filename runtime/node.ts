@@ -48,7 +48,35 @@ function canonical(path: string): string {
   }
 }
 
-/** Best-effort browser launch for the interactive connect command. */
+/**
+ * Best-effort browser launch for the interactive connect command.
+ *
+ * Every argument is passed as an argv array with no shell, so nothing here is
+ * interpreted by a shell. The remaining exposure is the URL itself: it arrives
+ * from login discovery, and handing an arbitrary string to `open`/`xdg-open`
+ * would let a non-https scheme (`file:`, or a registered app handler) reach the
+ * platform opener. Discovery is only as trustworthy as AUGENTA_CONTROL_URL, so
+ * the scheme is checked here rather than assumed.
+ *
+ * Refusing costs nothing: the caller always prints the URL and user code, so a
+ * skipped or failed open just means the user clicks the link themselves.
+ *
+ * (The previous Bun.spawnSync form passed the same URL to the same openers —
+ * CodeQL simply could not model Bun's API. Moving to node's spawnSync made an
+ * existing path analyzable rather than introducing a new one.)
+ */
 export function openBrowser(command: string[]): void {
-  spawnSync(command[0]!, command.slice(1), { stdio: "ignore" });
+  const opener = command[0];
+  if (!opener) return;
+  const url = command[command.length - 1];
+  if (!url || !isHttpsUrl(url)) return;
+  spawnSync(opener, command.slice(1), { stdio: "ignore" });
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
 }

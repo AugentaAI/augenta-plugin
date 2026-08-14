@@ -940,7 +940,20 @@ function canonical(path) {
   }
 }
 function openBrowser(command) {
-  spawnSync(command[0], command.slice(1), { stdio: "ignore" });
+  const opener = command[0];
+  if (!opener)
+    return;
+  const url = command[command.length - 1];
+  if (!url || !isHttpsUrl(url))
+    return;
+  spawnSync(opener, command.slice(1), { stdio: "ignore" });
+}
+function isHttpsUrl(value) {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 // capture/auth.ts
