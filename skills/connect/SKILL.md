@@ -55,6 +55,35 @@ is a fresh shell, so the assignment would not survive to the next verb.
 
 Bun is required (https://bun.sh) — the same runtime the plugin's hooks use.
 
+## If this turn cannot finish a sign-in, print the command and stop
+
+Signing in needs a person to open a link during **this** turn. Some turns cannot
+get one: `--permission-mode plan`, a `-p` / print-mode run, or any turn with no
+interactive user on the other end. There the deliverable is **the resolved
+command, printed** — never a started sign-in. A grant nobody can complete only
+expires, and waiting on it hangs the turn until something kills it.
+
+Decide this **before step 1**. If the turn cannot sign in:
+
+1. Resolve the script as above and confirm it exists (`ls -l`).
+2. Print the command as one literal line, with the path fully resolved — an
+   absolute path, no `$CONNECT`, no `~`, no variables:
+
+   ```
+   bun /absolute/path/to/scripts/connect.ts
+   ```
+
+3. Say in one sentence what it does: connects this project to Augenta
+   Workspaces and asks which ones it should feed.
+
+Then stop. Do not run `--login`. Do not narrate the sign-in flow — describing a
+link this turn cannot produce reads as though one is already waiting.
+
+That printed form is the human entry point and needs no `--json`: run bare, the
+script requires a real terminal and drives the questions itself. It is the only
+situation in which the user runs the command instead of you — everywhere else
+you run it, and the rules below apply.
+
 Every payload includes `environment` and `projectRoot`. **When `environment` is
 not `prod`, say so** in both the question and the confirmation: connecting a
 project to a dev or staging Workspace by accident is silent otherwise.
@@ -112,7 +141,14 @@ bun "$CONNECT" --json --await-login
   fewer, longer waits.
 - `need_workspace` — signed in. Go to step 3.
 - `status: "error"` — report `message`. `login_denied` means the user declined, so
-  do not silently retry; `login_expired` means start again from `--login`.
+  do not silently retry.
+
+`login_expired` means the link was never opened. **Say so and stop there.** Do not
+mint a replacement on your own: only run `--login` again after the user asks for a
+fresh link. A link nobody opened is usually a user who stepped away or changed
+their mind, and re-minting unprompted turns that into an unbounded loop of dead
+links — which is exactly how this skill once hung a non-interactive turn until it
+was killed.
 
 ## 3. Choose the Workspaces
 

@@ -247,8 +247,37 @@ describe("the connect skill drives connect itself", () => {
 
   test("never tells the user to run the connect command themselves", () => {
     // The whole point: no context switch and no "tell me when it finished".
+    // Note the ONE sanctioned exception below — a turn that cannot sign in at
+    // all — is deliberately narrow and does not read like either of these.
     expect(flat).not.toMatch(/run (this|it) in (your|their) own terminal/i);
     expect(flat).not.toMatch(/wait for the user to say the command completed/i);
+  });
+
+  // Issue #8: in a turn that cannot complete a sign-in (plan mode, `-p`, no
+  // interactive user) the skill started a real device grant and waited for a
+  // human to click it. Nothing could, so the turn hung until something killed
+  // it — ~12 minutes of CI per run, and a blocking cross-repo gate red for
+  // weeks. The fix is a contract in the skill body, so pin the contract: the
+  // regression was invisible precisely because nothing here asserted it.
+  test("prints the command instead of signing in when the turn cannot finish one", () => {
+    // The trigger has to be named, or the model has to infer when it applies.
+    expect(flat).toMatch(/permission-mode\W+plan/i);
+    expect(flat).toMatch(/print-mode|`-p`/);
+    // The deliverable, and the prohibition that makes it unambiguous.
+    expect(flat).toMatch(/deliverable is \*\*the resolved command, printed\*\*/i);
+    expect(flat).toMatch(/Do not run `--login`/);
+    // Decided BEFORE the probe, or the skill has already walked into step 2.
+    expect(flat).toMatch(/Decide this \*\*before step 1\*\*/i);
+    // An absolute path: the platform-side gate asserts the printed path exists
+    // on disk, and `~` or `$CONNECT` cannot be checked or pasted.
+    expect(flat).toMatch(/absolute path, no `\$CONNECT`, no `~`/);
+  });
+
+  test("never mints a replacement sign-in link unprompted", () => {
+    // The other half of the loop: on `login_expired` the skill used to say
+    // "start again from --login", so an unattended turn re-minted forever.
+    expect(flat).toMatch(/login_expired.{0,120}?Say so and stop there/is);
+    expect(flat).toMatch(/only run `--login` again after the user asks/i);
   });
 
   test("surfaces the sign-in link and keeps credentials out of chat", () => {
