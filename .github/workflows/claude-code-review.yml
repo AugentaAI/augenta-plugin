@@ -55,7 +55,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          allowed_bots: '*'
+          # NO `allowed_bots` — the default (empty) allows no bots, and that is
+          # deliberate on a PUBLIC repo. The action's only access gate is that the
+          # triggering actor must have write access; per the action's own
+          # docs/security.md, allowlisted bots are NOT permission-checked and need
+          # neither write access nor an installation here. `allowed_bots: '*'`
+          # therefore let any GitHub App — including one created by a stranger —
+          # open a PR and invoke this job with a prompt it controls. Adding a bot
+          # back means naming it explicitly, never `'*'`.
           prompt: >-
             Review pull request #${{ github.event.pull_request.number }} using the
             review-github-pr skill (.claude/skills/review-github-pr/SKILL.md): read the diff

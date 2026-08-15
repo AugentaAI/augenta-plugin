@@ -7,7 +7,7 @@ merge) stays human-owned.
 | Workflow | Trigger | What it does | Can it change code? |
 |----------|---------|--------------|---------------------|
 | `ci.yml` | every PR + push to `main` | the deterministic gate: typecheck · test · a real marketplace install into both the `claude` and `codex` CLIs | no (`contents: read`) |
-| `claude-auto-triage.yml` | issue/PR **opened** | classifies and labels for documentation, then stops — the only step with no human in the loop | no (`contents: read`) |
+| `claude-auto-triage.yml` | issue **opened** | classifies and labels for documentation, then stops — the only step with no human in the loop | no (`contents: read`) |
 | `claude-code-review.yml` | PR opened / ready / reopened | autonomous review via `.claude/skills/review-github-pr/SKILL.md`, posting one resolved verdict | no (`contents: read`) |
 | `claude.yml` | `@claude …` on an issue/PR/review | the on-demand bot: runs dev/test commands, can edit code and open/update PRs | **yes** (`contents: write`) |
 
@@ -38,12 +38,17 @@ This is the single source of truth for "this branch is green."
 
 ## The autonomous edges
 
-`claude-auto-triage.yml` labels a freshly opened issue or PR and stops. This repo has no
+`claude-auto-triage.yml` labels a freshly opened **issue** and stops. This repo has no
 `type:`/`area:`/`complexity:` label schema — only GitHub's defaults plus `codex` — so the
 agent reads `gh label list` first and applies **only** labels that already exist. Area and
 complexity are recorded in the triage comment as prose instead of being dropped, and there
 is no `topic:security` label, so a security-sensitive report is flagged at the top of the
 comment body.
+
+It used to carry a second `triage-pr` job that labelled newly opened PRs. That was dropped:
+it labelled PRs the maintainers opened themselves, against a label schema this repo does
+not have, and `claude-code-review.yml` already reports the PR's intent and the surface its
+diff touches. It cost a run per PR to restate the review's opening paragraph.
 
 `claude-code-review.yml` runs the repo's own review skill on a non-draft PR and posts a
 resolved Approve / Request-changes / Needs-discussion verdict. It **comments only** — it
@@ -89,11 +94,38 @@ trying — the green check and human approval become hard gates.
 - **`issues` and `issue_comment` events read the workflow from the DEFAULT branch.** So
   issue triage and `@claude` go live only after the workflow is merged to `main` — they
   cannot be tested from a PR.
-- **`pull_request` events read it from the PR head.** So PR triage and code review
-  self-test on the PR that adds or changes them.
+- **`pull_request` events read it from the PR head.** So `claude-code-review.yml`
+  self-tests on the PR that adds or changes it. It is now the only Claude workflow with a
+  pre-merge test path.
 
 Fork PRs get a read-only token and no secrets, so none of these jobs run for them — the
 safe default.
+
+## Why this is safe on a public repo
+
+Three layers, none of which depend on the secret being kept out of a log:
+
+1. **Actions secrets are write-only and fork-invisible.** GitHub never renders a secret's
+   value back to anyone, including admins — `gh secret list` shows names and timestamps
+   only. A `pull_request` from a fork gets a read-only `GITHUB_TOKEN` and **no secrets at
+   all**; that is GitHub-enforced and not configurable per workflow. Values are masked as
+   `***` in logs. There is no `pull_request_target` anywhere in this directory, which is
+   the usual way a public repo leaks secrets to fork-controlled code.
+2. **The action refuses non-write actors.** Per `anthropics/claude-code-action`'s
+   `docs/security.md`, it only runs for a triggering user with **write access to this
+   repo**, checked on issue, PR, comment, and review events. A stranger commenting
+   `@claude …` on a public issue does not start the bot.
+3. **No bot bypass.** Allowlisted bots are explicitly *not* permission-checked and do not
+   need write access or an installation. `allowed_bots: '*'` was therefore the one hole in
+   layer 2 and has been removed; the default allows no bots. If a bot ever needs to trigger
+   a job, name it — never `'*'`.
+
+Two repo settings finish the job, both under **Settings → Actions → General**: set *Fork
+pull request workflows from outside collaborators* to **Require approval for all outside
+collaborators**, and leave *Workflow permissions* at **read repository contents**. Neither
+is a substitute for the `permissions:` block each workflow already declares.
+
+`ci.yml` needs no secret and is unaffected by all of this.
 
 ## The `--allowed-tools` footgun
 

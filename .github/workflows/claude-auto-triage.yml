@@ -1,8 +1,8 @@
 name: Claude Auto-Triage
 
-# Fires the moment an issue OR a pull request is opened, and labels it for
-# documentation — no `@claude` mention required. This is the *only* step that
-# runs without a human in the loop; it classifies and labels, then stops.
+# Fires the moment an issue is opened, and labels it for documentation — no
+# `@claude` mention required. This is the *only* step that runs without a human
+# in the loop; it classifies and labels, then stops.
 #
 # Every forward gate stays human-owned: triage never edits code, never starts
 # implementation, and merge is gated by branch protection (required CI check +
@@ -15,25 +15,34 @@ name: Claude Auto-Triage
 # dropped. Adding a label the repo doesn't have would fail the `gh issue edit`
 # call outright.
 #
-# Activation note: `issues` events read this file from the DEFAULT branch, so the
-# issue path goes live only after this is merged to `main`. `pull_request` events
-# read it from the PR head, so the PR path self-tests on the PR that adds it.
+# PR triage used to live here as a second job. It was dropped: it labelled PRs
+# opened by the maintainers themselves against a label schema this repo does not
+# have, and `claude-code-review.yml` already reports the PR's intent and surface.
+# It cost a run per PR and duplicated the review's opening paragraph.
 #
-# Fork note: PRs from forks get a read-only token and no secrets, so this job
-# simply won't run for them — which is the safe default.
+# Activation note: `issues` events read this file from the DEFAULT branch, so
+# triage goes live only after a change here is merged to `main` — it cannot be
+# tested from a pull request. (That was what the removed PR job self-tested; there
+# is no longer any path that exercises this file pre-merge.)
+#
+# Trigger safety: the action itself refuses to run for an actor without write
+# access to the repo, so a drive-by issue from a stranger opens the issue but does
+# not start Claude. No bots are allowlisted here, so that check has no bypass.
 
 on:
   issues:
     types: [opened]
-  pull_request:
-    types: [opened]
 
 concurrency:
-  group: auto-triage-${{ github.event.issue.number || github.event.pull_request.number }}
+  group: auto-triage-${{ github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
   triage-issue:
+    # `issues` is the only trigger, so the event_name test is redundant today. It
+    # stays as a guard: adding a `pull_request` trigger without noticing would run
+    # this issue-shaped prompt against `github.event.issue.number`, which is empty
+    # on a PR event — a silently malformed triage rather than a clean skip.
     if: github.event_name == 'issues' && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
@@ -75,49 +84,5 @@ jobs:
           claude_args: >-
             --allowed-tools
             "Read,Grep,Glob,Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue list:*),Bash(gh issue comment:*),Bash(gh label list:*),Bash(git log:*),Bash(ls:*),Bash(cat:*),Bash(grep:*),Bash(find:*),Bash(jq:*)"
-            --model
-            claude-haiku-4-5-20251001
-
-  triage-pr:
-    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read       # read the diff + skill files (no write — triage never edits code)
-      pull-requests: write # apply labels + post the summary comment
-      id-token: write
-      actions: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Auto-label the new PR
-        uses: anthropics/claude-code-action@v1
-        env:
-          # Guarantee `gh` in the agent's shell is authenticated (same scoped token
-          # as this job's permissions) so label/comment calls can't silently no-op.
-          GH_TOKEN: ${{ github.token }}
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: >-
-            PR #${{ github.event.pull_request.number }} was just opened.
-            Label it for documentation: run `gh label list` FIRST, then read the diff
-            (gh pr diff) and the PR title/body, and apply only best-fit labels that already
-            exist in this repo. Apply `codex` when the change is specific to the Codex
-            harness. Post one concise comment with the "📋 triage-agent" marker listing the
-            labels applied, the plugin surface the diff touches (capture pipeline, hooks,
-            connect skill, connect script, packaging/manifests, CI, docs), and a one-line
-            summary of the PR's intent.
-            NEVER invent a label. If the diff touches security-sensitive code, say so in the
-            comment — there is no `topic:security` label here.
-            Note if the diff touches hooks/hooks.json: any edit there re-prompts every Codex
-            user for hook trust, so flag it for the reviewer.
-            HARD RULES: do NOT approve, merge, request changes, push commits, or edit code.
-            Labels + one summary comment only. The review itself is a separate workflow.
-          # See the note in the triage-issue job: one quoted, comma-separated arg; `:*` wildcard.
-          claude_args: >-
-            --allowed-tools
-            "Read,Grep,Glob,Bash(gh pr view:*),Bash(gh pr edit:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*),Bash(gh label list:*),Bash(git diff:*),Bash(git log:*),Bash(ls:*),Bash(cat:*),Bash(grep:*),Bash(find:*),Bash(jq:*)"
             --model
             claude-haiku-4-5-20251001
