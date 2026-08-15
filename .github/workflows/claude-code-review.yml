@@ -22,18 +22,41 @@ name: Claude Code Review
 # won't run for them — which is the safe default.
 #
 # Drafts are skipped until marked "ready for review" to avoid reviewing work-in-progress.
+#
+# Manual path: `workflow_dispatch` with a PR number reviews any open PR on demand.
+# This is not a convenience — it is the only way to exercise this workflow at all.
+# The action refuses to run when the workflow file differs from the copy on the
+# DEFAULT branch ("Skipping action due to workflow validation"), and it reports
+# that skip as a PASSING check. So every PR that edits this file gets a green
+# `claude-review` that reviewed nothing, and the automatic path can never test a
+# change to itself. A dispatch runs from the default branch, so the file always
+# matches and the action actually runs.
 
 on:
   pull_request:
     types: [opened, ready_for_review, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Number of an open PR to review"
+        required: true
+        type: string
 
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number }}
+  # `inputs` is null on a pull_request event and `github.event.pull_request` is
+  # null on a dispatch, so this resolves to whichever fired.
+  group: claude-review-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
   claude-review:
-    if: github.event.pull_request.draft == false && github.actor != 'dependabot[bot]'
+    # The draft test applies only to the automatic path: on a dispatch there is no
+    # `github.event.pull_request`, so `.draft` is null and a bare `== false` would
+    # be false — skipping every manual run. Dispatch is explicit and human-invoked,
+    # so reviewing a draft on request is the correct behaviour.
+    if: >-
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     permissions:
       contents: read        # read the diff + skill files (no write — review never edits code)
@@ -72,7 +95,7 @@ jobs:
           # open a PR and invoke this job with a prompt it controls. Adding a bot
           # back means naming it explicitly, never `'*'`.
           prompt: >-
-            Review pull request #${{ github.event.pull_request.number }} using the
+            Review pull request #${{ github.event.pull_request.number || inputs.pr_number }} using the
             review-github-pr skill (.claude/skills/review-github-pr/SKILL.md): read the diff
             and the linked issue, then assess it against AGENTS.md's invariants — privacy and
             consent, cross-harness packaging, atomic version changes — plus correctness,
