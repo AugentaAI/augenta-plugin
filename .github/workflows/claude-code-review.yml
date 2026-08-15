@@ -55,6 +55,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Surface the SDK's error text. Without this the action prints only
+          # "full output hidden for security" and a result block, so an auth or
+          # entitlement rejection is indistinguishable from any other failure —
+          # `gh run rerun --debug` does NOT lift it, because the gate is this
+          # input rather than ACTIONS_STEP_DEBUG. Safe here: this repo is public
+          # and the review it prints is posted publicly anyway. Reconsider if the
+          # repo ever goes private.
+          show_full_output: true
           # NO `allowed_bots` — the default (empty) allows no bots, and that is
           # deliberate on a PUBLIC repo. The action's only access gate is that the
           # triggering actor must have write access; per the action's own
