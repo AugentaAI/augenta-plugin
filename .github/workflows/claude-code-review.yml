@@ -86,6 +86,17 @@ jobs:
           # and the review it prints is posted publicly anyway. Reconsider if the
           # repo ever goes private.
           show_full_output: true
+
+          # This review posts ONE top-level comment via `gh pr comment` — that is
+          # the only comment tool in its allowlist, so it never produces inline
+          # comments to buffer. Left at the default `true`, the action still runs
+          # its post-session "Post buffered inline comments" step, which reports
+          # "No buffered inline comments" on every run and needs a PR number to
+          # attach to. On the workflow_dispatch path there is no PR event, so that
+          # number is empty — a step with nothing to do, aimed at nothing. Turning
+          # the buffering off makes the no-op deliberate instead of incidental and
+          # removes the only behavioural difference between the two triggers.
+          classify_inline_comments: false
           # NO `allowed_bots` — the default (empty) allows no bots, and that is
           # deliberate on a PUBLIC repo. The action's only access gate is that the
           # triggering actor must have write access; per the action's own
