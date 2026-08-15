@@ -94,9 +94,26 @@ trying — the green check and human approval become hard gates.
 - **`issues` and `issue_comment` events read the workflow from the DEFAULT branch.** So
   issue triage and `@claude` go live only after the workflow is merged to `main` — they
   cannot be tested from a PR.
-- **`pull_request` events read it from the PR head.** So `claude-code-review.yml`
-  self-tests on the PR that adds or changes it. It is now the only Claude workflow with a
-  pre-merge test path.
+- **`pull_request` events read it from the PR head.** So `claude-code-review.yml` is the
+  only Claude workflow that runs at all before a merge.
+- **A PR that edits a Claude workflow gets a green check that reviewed nothing.** The
+  action refuses to run when the file differs from the default branch — `Skipping action
+  due to workflow validation` — and reports that skip as **passing**, in about 11 seconds.
+  So the automatic path can never test a change to itself, and a fast green here means
+  "skipped", not "approved". Use the manual trigger below to get a real review.
+
+## Running a review on demand
+
+`claude-code-review.yml` takes a `workflow_dispatch` with a PR number:
+
+```bash
+gh workflow run claude-code-review.yml -f pr_number=42
+```
+
+A dispatch runs from the default branch, so the file always matches its own copy and the
+validation skip cannot fire. This is the only reliable way to exercise the review — after
+changing the workflow, after setting the token, or against a draft. The draft filter is
+deliberately bypassed on this path: a dispatch is explicitly human-invoked.
 
 Fork PRs get a read-only token and no secrets, so none of these jobs run for them — the
 safe default.
