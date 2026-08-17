@@ -40,7 +40,7 @@ const KNOWN_HOOK_EVENTS = new Set([
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.9.0";
+const RELEASE_VERSION = "0.9.1";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {

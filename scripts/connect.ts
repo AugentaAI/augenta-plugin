@@ -91,7 +91,7 @@ interface Connector {
  * (AGENTS.md → Releases) alongside both plugin manifests, both marketplace files,
  * and package.json; the contract test pins all of them to one value.
  */
-export const PLUGIN_VERSION = "0.9.0";
+export const PLUGIN_VERSION = "0.9.1";
 
 class AugentaRequestError extends Error {
   constructor(

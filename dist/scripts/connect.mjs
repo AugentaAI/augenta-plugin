@@ -809,7 +809,7 @@ function takeAuthNotice(projectRoot) {
 
 // scripts/connect.ts
 var DEFAULT_WAIT_SECONDS = 90;
-var PLUGIN_VERSION = "0.9.0";
+var PLUGIN_VERSION = "0.9.1";
 
 class AugentaRequestError extends Error {
   status;
