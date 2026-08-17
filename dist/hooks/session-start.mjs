@@ -1382,7 +1382,7 @@ process.stdout.write(JSON.stringify({
   hookSpecificOutput: {
     hookEventName: "SessionStart",
     additionalContext,
-    initialUserMessage: codex ? "Connect Augenta" : "/augenta:connect"
+    ...codex ? {} : { initialUserMessage: "/augenta:connect" }
   }
 }));
 process.exit(0);

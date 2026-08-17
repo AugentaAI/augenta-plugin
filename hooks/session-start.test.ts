@@ -3,9 +3,9 @@
  * stranded-outbox drain.
  *
  * Contract under test: an unconnected project fires the connect prompt exactly
- * once per project (`initialUserMessage` = /augenta:connect on Claude Code, a
- * natural-language ask on Codex — which shows additionalContext to the user,
- * so it must carry no agent-only scaffolding there); a connected project is
+ * once per project (`initialUserMessage` = /augenta:connect on Claude Code;
+ * Codex omits that unsupported field and shows a user-facing reminder through
+ * additionalContext, with no agent-only scaffolding); a connected project is
  * silent; a previously-prompted project is silent — including one prompted
  * under the pre-0.3.0 `init-prompted.json` map. A config file the current
  * parser REJECTS counts as unconnected and gets its own one-shot reconnect
@@ -64,10 +64,15 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
     expect(out).toContain("never be pasted");
   });
 
-  test("Codex: natural-language ask, no slash command, no agent-only scaffolding", () => {
+  test("Codex: schema-valid reminder, no Claude-only field or agent scaffolding", () => {
     const out = fire({ transcript_path: CODEX_TP, cwd: project });
     const parsed = JSON.parse(out);
-    expect(parsed.hookSpecificOutput?.initialUserMessage).toBe("Connect Augenta");
+    expect(parsed.hookSpecificOutput?.initialUserMessage).toBeUndefined();
+    expect(Object.keys(parsed.hookSpecificOutput).sort()).toEqual([
+      "additionalContext",
+      "hookEventName",
+    ]);
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("starting connection");
     expect(out).not.toContain("/augenta:connect");
     expect(out).not.toContain("[Augenta]");
   });
@@ -161,7 +166,8 @@ describe("a config file the parser rejects is UNCONNECTED, not connected", () =>
   test("Codex gets user-facing wording with no agent scaffolding", () => {
     writeConfig(LEGACY);
     const out = fire({ transcript_path: CODEX_TP, cwd: project });
-    expect(JSON.parse(out).hookSpecificOutput?.initialUserMessage).toBe("Connect Augenta");
+    expect(JSON.parse(out).hookSpecificOutput?.initialUserMessage).toBeUndefined();
+    expect(JSON.parse(out).hookSpecificOutput?.additionalContext).toContain("reconnecting");
     expect(out).not.toContain("[Augenta]");
     expect(out).not.toContain("/augenta:connect");
   });

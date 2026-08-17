@@ -99,12 +99,17 @@ describe("session-start, run as the user's harness runs it", () => {
     expect(parsed.hookSpecificOutput?.initialUserMessage).toBe("/augenta:connect");
   });
 
-  test("Codex: the same bundle takes the natural-language branch", () => {
+  test("Codex: the same bundle emits only fields accepted by Codex SessionStart", () => {
     const r = run("hooks/session-start.mjs", [], {
       stdin: JSON.stringify({ transcript_path: CODEX_TP, cwd: project }),
     });
     expect(r.exitCode).toBe(0);
-    expect(JSON.parse(r.stdout).hookSpecificOutput?.initialUserMessage).toBe("Connect Augenta");
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.hookSpecificOutput?.initialUserMessage).toBeUndefined();
+    expect(Object.keys(parsed.hookSpecificOutput).sort()).toEqual([
+      "additionalContext",
+      "hookEventName",
+    ]);
   });
 });
 

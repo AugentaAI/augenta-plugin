@@ -2,10 +2,11 @@
  * Augenta SessionStart hook — two jobs, via `hookSpecificOutput`:
  *
  *  Unconnected project → auto-fire the connect skill exactly once per project.
- *  SessionStart is the earliest point a plugin can act, and its output can carry
- *  `initialUserMessage`, which creates the first user turn on its own — so connect
- *  starts without the user typing anything (`/augenta:connect` on Claude Code; a
- *  natural-language ask on Codex, which has no slash commands).
+ *  SessionStart is the earliest point a plugin can act. Claude Code accepts an
+ *  `initialUserMessage`, which creates the first connect turn on its own. Codex's
+ *  SessionStart schema accepts only `hookEventName` and `additionalContext`, so
+ *  it receives the user-facing reminder and the user invokes `$augenta:connect`
+ *  (or asks to connect) explicitly.
  *
  *  Run-once-per-project guarantee: fire only when the project has NO USABLE
  *  `.augenta/config.json` AND has not been auto-prompted before. The prompted
@@ -191,10 +192,9 @@ process.stdout.write(
     hookSpecificOutput: {
       hookEventName: "SessionStart",
       additionalContext,
-      // Auto-create the first turn so connect begins without user input. Codex has
-      // no slash commands, so ask in natural language there — the same phrase as
-      // the Codex manifest's defaultPrompt.
-      initialUserMessage: codex ? "Connect Augenta" : "/augenta:connect",
+      // Codex rejects unknown SessionStart fields, including Claude Code's
+      // initialUserMessage. Keep the shared hook schema-valid for both harnesses.
+      ...(codex ? {} : { initialUserMessage: "/augenta:connect" }),
     },
   }),
 );
