@@ -118,20 +118,34 @@ jobs:
           done < shipped-bundles.txt
           test -s "$claude_root/dist/scripts/connect.mjs"   # skill target, not a hook
 
-          # Fire a hook for real, under node, from the INSTALLED tree. Every check
-          # above is `test -s`, which cannot tell a working bundle from a 50KB file
-          # that exits 0 and prints nothing — the exact failure that shipped once.
+          # The hook commands are not `node <bundle>` — they go through a shell
+          # runner that lives OUTSIDE dist/, so the marketplace has to copy it too.
+          test -s "$claude_root/scripts/run-node-hook.sh"
+
+          # Fire a hook for real, from the INSTALLED tree, through the command the
+          # manifest actually DECLARES. Every check above is `test -s`, which
+          # cannot tell a working bundle from a 50KB file that exits 0 and prints
+          # nothing — the exact failure that shipped once. Invoking `node` directly
+          # would not exercise the runner, which is where that failure now moved.
           project="$(mktemp -d)"
+          export CLAUDE_PLUGIN_ROOT="${claude_root%/}"
+          session_start_command="$(
+            jq -r '.hooks.SessionStart[0].hooks[0].command' "$claude_root/hooks/hooks.json"
+          )"
           printf '{"transcript_path":"%s/.claude/projects/p/s.jsonl","cwd":"%s"}' "$HOME" "$project" \
-            | node "$claude_root/dist/hooks/session-start.mjs" | tee hook-out.json
+            | sh -c "$session_start_command" | tee hook-out.json
           jq -e '.hookSpecificOutput.initialUserMessage == "/augenta:connect"' hook-out.json
 
           # And the privacy invariant on the real artifact: a project that never
           # opted in gets no output and no state on disk.
+          stop_command="$(jq -r '.hooks.Stop[0].hooks[0].command' "$claude_root/hooks/hooks.json")"
           printf '{"session_id":"s","transcript_path":"/nonexistent.jsonl","cwd":"%s","hook_event_name":"Stop"}' "$project" \
-            | node "$claude_root/dist/capture/capture.mjs" > capture-out.txt
+            | sh -c "$stop_command" > capture-out.txt 2> capture-err.txt
           test ! -s capture-out.txt
           test ! -d "$project/.augenta"
+          # The runner resolved a runtime rather than falling through to its
+          # diagnostic, which a passing exit code alone would not prove.
+          ! grep -q "Augenta hook:" capture-err.txt
 
       - name: Install and inspect with Codex
         run: |

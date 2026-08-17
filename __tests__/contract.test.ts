@@ -673,6 +673,21 @@ describe("manifests — cross-harness packaging and one version", () => {
     expect(ci, `CI hardcodes the plugin version ${RELEASE_VERSION}`).not.toContain(RELEASE_VERSION);
   });
 
+  test("install-smoke fires the DECLARED hook command, not a bare node call", () => {
+    // AGENTS.md names install-smoke as one of the three gates that close the
+    // sources-under-Bun / bundles-under-Node gap. Calling `node <bundle>` from
+    // the installed tree skips `scripts/run-node-hook.sh` — the first runtime
+    // artifact shipped outside dist/, and now the first thing every hook runs.
+    // A runner the marketplace failed to copy would leave every check green.
+    const ci = readFileSync(join(PLUGIN_ROOT, ".github", "workflows", "ci.yml"), "utf8");
+    expect(ci).toContain("run-node-hook.sh");
+    expect(ci).toContain(".hooks.SessionStart[0].hooks[0].command");
+    expect(ci).toContain("CLAUDE_PLUGIN_ROOT=");
+    expect(ci, "install-smoke bypasses the declared hook command").not.toMatch(
+      /\|\s*node "\$claude_root/,
+    );
+  });
+
   test("the versioned marketplace descriptions track the release", () => {
     // AGENTS.md → Releases: descriptions carry the version in prose, so they go
     // stale silently unless something pins them to the same bump.
