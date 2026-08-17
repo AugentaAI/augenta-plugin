@@ -125,6 +125,16 @@ present but unloadable. The runner accepts an explicit `AUGENTA_NODE`, checks
 common version-manager installs, and only then scans PATH; every candidate must
 actually start and report Node 20+. Keep the hook bundles themselves Node-only.
 
+Two things about that runner are invariants, not implementation. Every probe
+takes `</dev/null`: stdin is the hook PAYLOAD, and something on PATH named `node`
+that is not Node would consume it and leave the bundle an empty stream — the
+silent-then-exit-0 failure recorded above. And when no runtime is found it reads
+the payload's `cwd`, staying **silent for a project with no `.augenta/config.json`**
+and complaining only for a connected one: a missing Node is not evidence anyone
+opted in, and hooks are a silent no-op without project config. That tail uses
+shell builtins only, because the PATH it would otherwise depend on is the thing
+under suspicion.
+
 ## Releases
 
 Version changes are atomic. Keep the same version in `package.json`, both
@@ -165,13 +175,24 @@ and silence never authorizes any. A user can cancel the flow without connecting;
 `chooseMany` in `scripts/connect.ts` is deliberately a separate function from
 `choose` with no auto-select knob to flip.
 
+**A valid selection is the consent; a second yes/no is not asked.** This holds
+for the destination set as well as for creation — a user who just answered the
+question with numbers has consented, and re-confirming the same answer trains
+people to click through it. What the removed echo-back guarded still has to
+hold: the skill passes exactly the entries the user picked, one `--workspace`
+per selection, ids and never names, and adds nothing the user did not select.
+The rendered menu the answer refers to is what makes that checkable, so the
+menu is always shown before the question — never a set the model summarized.
+
 **Workspace creation is an explicit, separate mutation.** Offer `Create a new
 Workspace` alongside the live destination list. It must be chosen by itself, its
 non-empty name is asked for in the named organization, and the refreshed
 non-empty destination question is asked afterward. Choosing creation and giving
 the name is the request: do not add a redundant yes/no confirmation before
 `POST /v1/workspaces`. Creating a Workspace never connects the project or treats
-the new Workspace as selected.
+the new Workspace as selected — it is not pre-marked in the refreshed terminal
+menu, where `[x]` means only "this project already feeds it". `--create-workspace`
+and `--workspace` are separate calls and are refused together.
 
 **More than one destination is a stronger disclosure, not the same one repeated.**
 Before the user answers, and again when confirming, they are told that every

@@ -211,8 +211,13 @@ node "$CONNECT" --json --workspace <id> --workspace <id>
 ```
 
 Repeat `--workspace` once per selected Workspace. Pass the `id`s, never the
-names. If `--probe` returned `need_profile`, ask which organization first and add
-`--profile <profileId>`.
+names. The arguments are exactly the entries the user selected from the list you
+rendered — never a destination the user did not select, and never one they
+dropped. If `--probe` returned `need_profile`, ask which organization first and
+add `--profile <profileId>`.
+
+Creation and connection are separate calls: never pass `--create-workspace` and
+`--workspace` together, which is refused as `conflicting_verbs`.
 
 ## 4. Confirm
 

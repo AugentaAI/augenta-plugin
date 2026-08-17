@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -50,5 +50,61 @@ printf '%s\\n' "$@"
     expect(result.stderr.toString()).toContain(
       "AUGENTA_NODE is not a working Node.js 20+ executable",
     );
+  });
+
+  test("hands the hook payload to the bundle, not to a probe", () => {
+    // The version probe reads nothing, but stdin is the hook PAYLOAD. A `node`
+    // on PATH that is not Node would consume it and the bundle would see an
+    // empty stream — the silent stdin-then-exit-0 failure this runner prevents.
+    const greedyNode = executable(`#!/bin/sh
+if [ "$1" = "-e" ]; then cat >/dev/null; exit 0; fi
+cat
+`);
+    const payload = '{"cwd":"/tmp/p","hook_event_name":"Stop"}';
+    const result = Bun.spawnSync(["sh", RUNNER, "/tmp/hook.mjs"], {
+      env: { ...process.env, AUGENTA_NODE: greedyNode },
+      stdin: Buffer.from(payload),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe(payload);
+  });
+
+  describe("when no working Node exists", () => {
+    /** No AUGENTA_NODE, no PATH, and a HOME with no version-manager installs. */
+    function runWithout(payload: string): { exitCode: number; stderr: string } {
+      const home = mkdtempSync(join(tmpdir(), "augenta-node-runner-home-"));
+      temporaryDirectories.push(home);
+      const result = Bun.spawnSync(["sh", RUNNER, "/tmp/hook.mjs"], {
+        env: { PATH: "", HOME: home },
+        stdin: Buffer.from(payload),
+      });
+      return { exitCode: result.exitCode, stderr: result.stderr.toString() };
+    }
+
+    test("stays a silent no-op for a project that never opted in", () => {
+      // A missing runtime is not evidence of consent, and a hook that has no
+      // work to do must print nothing (AGENTS.md → Privacy invariants).
+      const project = mkdtempSync(join(tmpdir(), "augenta-node-runner-project-"));
+      temporaryDirectories.push(project);
+
+      const result = runWithout(`{"cwd":"${project}","hook_event_name":"Stop"}`);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+    });
+
+    test("tells a CONNECTED project that its capture has stopped", () => {
+      const project = mkdtempSync(join(tmpdir(), "augenta-node-runner-project-"));
+      temporaryDirectories.push(project);
+      mkdirSync(join(project, ".augenta"));
+      writeFileSync(join(project, ".augenta", "config.json"), "{}");
+
+      const result = runWithout(`{"cwd":"${project}","hook_event_name":"Stop"}`);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("Node.js 20 or newer was not found");
+      expect(result.stderr).toContain("AUGENTA_NODE");
+    });
   });
 });

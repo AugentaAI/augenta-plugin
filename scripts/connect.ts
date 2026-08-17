@@ -93,7 +93,11 @@ interface Connector {
  * (AGENTS.md → Releases) alongside both plugin manifests, both marketplace files,
  * and package.json; the contract test pins all of them to one value.
  */
-export const PLUGIN_VERSION = "0.9.1";
+export const PLUGIN_VERSION = "0.9.2";
+
+/** The Workspace every organization is provisioned with. Only an ordering hint —
+ *  it is never auto-selected, and its absence is not an error. */
+const DEFAULT_WORKSPACE_NAME = "Default Workspace";
 
 class AugentaRequestError extends Error {
   constructor(
@@ -511,9 +515,14 @@ async function listWorkspaces(
   }
   // The platform seeds this Workspace for every organization. Keep it first in
   // both terminal and agent menus even if a backend changes list ordering.
-  return [...workspaces].sort(
-    (a, b) => Number(b.id === "ws-default") - Number(a.id === "ws-default"),
-  );
+  //
+  // Keyed on the NAME, not on an id literal: the provisioned name is the part
+  // README/SKILL.md promise to a user, while ids are opaque platform strings
+  // this plugin has no contract over — sorting on a guessed id would be a silent
+  // no-op in the field and the docs would be untrue.
+  const isDefault = (workspace: Workspace) =>
+    workspace.name.trim().toLowerCase() === DEFAULT_WORKSPACE_NAME.toLowerCase();
+  return [...workspaces].sort((a, b) => Number(isDefault(b)) - Number(isDefault(a)));
 }
 
 /** Create an organization Workspace without exposing the stored OAuth token. */
@@ -557,12 +566,21 @@ async function askWorkspaceName(): Promise<string> {
   }
 }
 
-async function selectedWorkspaces(
+/** The two terminal questions this loop asks, injectable so the loop's own rules
+ *  — create must be chosen alone, the refreshed set is asked again, a created
+ *  Workspace is not pre-selected — are testable without a TTY. */
+export interface WorkspacePrompts {
+  chooseMany: typeof chooseMany;
+  askWorkspaceName: typeof askWorkspaceName;
+}
+
+export async function selectedWorkspaces(
   profileId: string,
   gateway: string,
   organizationName: string,
   preselectedIds: readonly string[] = [],
   available?: readonly Workspace[],
+  prompts: WorkspacePrompts = { chooseMany, askWorkspaceName },
 ): Promise<Workspace[]> {
   let choices = [...(available ?? (await listWorkspaces(profileId, gateway)))];
   const preselected = new Set(preselectedIds);
@@ -574,7 +592,7 @@ async function selectedWorkspaces(
       ...choices.map((workspace) => ({ kind: "workspace" as const, workspace })),
       { kind: "create" },
     ];
-    const selected = await chooseMany(
+    const selected = await prompts.chooseMany(
       "Choose every Workspace this project should feed (each one receives the full record):",
       menu,
       (choice) =>
@@ -595,13 +613,16 @@ async function selectedWorkspaces(
       );
       continue;
     }
-    const name = await askWorkspaceName();
+    const name = await prompts.askWorkspaceName();
     const created = await createWorkspace(profileId, gateway, name);
     console.log(
       `Created ${created.name} (${created.id}) in ${organizationName}. Choose the complete destination set.`,
     );
+    // The refreshed menu shows the new Workspace UNMARKED. `[x]` means "this
+    // project already feeds it", and creating a Workspace connects nothing —
+    // pre-marking one the project has never fed would be exactly the inferred
+    // destination the consent invariant bans (AGENTS.md → Privacy invariants).
     choices = await listWorkspaces(profileId, gateway);
-    preselected.add(created.id);
   }
 }
 
@@ -1030,7 +1051,9 @@ async function workspaceStep(
       email: me.user.email,
       organization: me.org.name,
     },
-    canCreateWorkspace: true,
+    // No `canCreateWorkspace` flag: creation is always available to a signed-in
+    // organization, so a constant `true` would be a payload field the skill has
+    // to read to learn something SKILL.md already states.
     workspaces: workspaces.map(({ id, name }) => ({ id, name })),
   };
 }
@@ -1400,6 +1423,19 @@ export async function runJsonVerb(
         "--api-key is a human/CI path and is not available in --json mode; run it directly in a terminal",
     };
   }
+  // Creation and connection are separate mutations, and the destination question
+  // is asked AGAIN over the refreshed list. A caller that sent both either wants
+  // a destination set chosen before the new Workspace existed, or expects one
+  // call to do both — so refuse rather than silently honour whichever verb this
+  // dispatch happens to reach first.
+  if (args.createWorkspace !== undefined && args.workspaces?.length) {
+    return {
+      status: "error",
+      code: "conflicting_verbs",
+      message:
+        "--create-workspace and --workspace are separate steps; create first, then ask for the complete destination set again and pass it with --workspace",
+    };
+  }
   if (args.createWorkspace !== undefined) {
     return createWorkspaceForSelection(resolved, args);
   }
@@ -1522,6 +1558,13 @@ if (isMain(import.meta.url)) {
   // stack trace.
   try {
     const args = parseArgs(argv);
+    // The terminal flow offers creation inside its own menu, so this flag has no
+    // meaning here. Silently ignoring it would look like a Workspace was created.
+    if (args.createWorkspace !== undefined && !args.json) {
+      throw new Error(
+        "--create-workspace is a --json verb; the interactive flow offers Create a new Workspace in its menu",
+      );
+    }
     const resolved = resolveProject(args, process.cwd());
     const projectRoot = resolved.projectRoot;
     if (args.json) {

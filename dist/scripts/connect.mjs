@@ -809,7 +809,8 @@ function takeAuthNotice(projectRoot) {
 
 // scripts/connect.ts
 var DEFAULT_WAIT_SECONDS = 90;
-var PLUGIN_VERSION = "0.9.1";
+var PLUGIN_VERSION = "0.9.2";
+var DEFAULT_WORKSPACE_NAME = "Default Workspace";
 
 class AugentaRequestError extends Error {
   status;
@@ -1051,7 +1052,8 @@ async function listWorkspaces(profileId, gateway) {
   if (workspaces.length === 0) {
     throw new Error("the authenticated organization has no active Workspaces");
   }
-  return [...workspaces].sort((a, b) => Number(b.id === "ws-default") - Number(a.id === "ws-default"));
+  const isDefault = (workspace) => workspace.name.trim().toLowerCase() === DEFAULT_WORKSPACE_NAME.toLowerCase();
+  return [...workspaces].sort((a, b) => Number(isDefault(b)) - Number(isDefault(a)));
 }
 async function createWorkspace(profileId, gateway, requestedName) {
   const name = requestedName.trim();
@@ -1085,7 +1087,7 @@ async function askWorkspaceName() {
     rl.close();
   }
 }
-async function selectedWorkspaces(profileId, gateway, organizationName, preselectedIds = [], available) {
+async function selectedWorkspaces(profileId, gateway, organizationName, preselectedIds = [], available, prompts = { chooseMany, askWorkspaceName }) {
   let choices = [...available ?? await listWorkspaces(profileId, gateway)];
   const preselected = new Set(preselectedIds);
   while (true) {
@@ -1093,7 +1095,7 @@ async function selectedWorkspaces(profileId, gateway, organizationName, preselec
       ...choices.map((workspace) => ({ kind: "workspace", workspace })),
       { kind: "create" }
     ];
-    const selected = await chooseMany("Choose every Workspace this project should feed (each one receives the full record):", menu, (choice) => choice.kind === "create" ? "Create a new Workspace" : `${choice.workspace.name} (${choice.workspace.id})`, {
+    const selected = await prompts.chooseMany("Choose every Workspace this project should feed (each one receives the full record):", menu, (choice) => choice.kind === "create" ? "Create a new Workspace" : `${choice.workspace.name} (${choice.workspace.id})`, {
       preselected: (choice) => choice.kind === "workspace" && preselected.has(choice.workspace.id)
     });
     if (!selected.some((choice) => choice.kind === "create")) {
@@ -1103,11 +1105,10 @@ async function selectedWorkspaces(profileId, gateway, organizationName, preselec
       console.log("Choose Create a new Workspace by itself; the complete destination list appears again after creation.");
       continue;
     }
-    const name = await askWorkspaceName();
+    const name = await prompts.askWorkspaceName();
     const created = await createWorkspace(profileId, gateway, name);
     console.log(`Created ${created.name} (${created.id}) in ${organizationName}. Choose the complete destination set.`);
     choices = await listWorkspaces(profileId, gateway);
-    preselected.add(created.id);
   }
 }
 async function currentConnector(profileId, gateway, id) {
@@ -1281,7 +1282,6 @@ async function workspaceStep(profileId, gateway, me) {
       email: me.user.email,
       organization: me.org.name
     },
-    canCreateWorkspace: true,
     workspaces: workspaces.map(({ id, name }) => ({ id, name }))
   };
 }
@@ -1517,6 +1517,13 @@ async function runJsonVerb(resolved, args) {
       message: "--api-key is a human/CI path and is not available in --json mode; run it directly in a terminal"
     };
   }
+  if (args.createWorkspace !== undefined && args.workspaces?.length) {
+    return {
+      status: "error",
+      code: "conflicting_verbs",
+      message: "--create-workspace and --workspace are separate steps; create first, then ask for the complete destination set again and pass it with --workspace"
+    };
+  }
   if (args.createWorkspace !== undefined) {
     return createWorkspaceForSelection(resolved, args);
   }
@@ -1587,6 +1594,9 @@ if (isMain(import.meta.url)) {
   const wantsJson = argv.includes("--json");
   try {
     const args = parseArgs(argv);
+    if (args.createWorkspace !== undefined && !args.json) {
+      throw new Error("--create-workspace is a --json verb; the interactive flow offers Create a new Workspace in its menu");
+    }
     const resolved = resolveProject(args, process.cwd());
     const projectRoot = resolved.projectRoot;
     if (args.json) {
@@ -1624,6 +1634,7 @@ export {
   writeApiKeyConfig,
   verifyApiKeyConnection,
   startLogin,
+  selectedWorkspaces,
   runJsonVerb,
   resolveTargetProject,
   resolveProject,

@@ -32,9 +32,11 @@ import {
   resolveProject,
   resolveTargetProject,
   runJsonVerb,
+  selectedWorkspaces,
   startLogin,
   writeApiKeyConfig,
   writeOAuthConfig,
+  type WorkspacePrompts,
 } from "./connect";
 import { Outbox } from "../capture/outbox";
 import {
@@ -462,7 +464,6 @@ describe("JSON verbs", () => {
 
     expect(payload.status).toBe("need_workspace");
     expect(payload.workspaces).toEqual(WORKSPACES);
-    expect(payload.canCreateWorkspace).toBe(true);
     expect(payload.signedInAs).toEqual({
       name: "Rin",
       email: "rin@example.com",
@@ -471,16 +472,38 @@ describe("JSON verbs", () => {
     expect(JSON.stringify(payload)).not.toContain("access-live");
   });
 
-  test("always lists Default Workspace first", async () => {
+  test("always lists Default Workspace first, keyed on its NAME", async () => {
+    // Deliberately opaque ids: the provisioned NAME is what README and SKILL.md
+    // promise a user, and it is the only part of a Workspace this plugin has a
+    // contract over. Sorting on a guessed id literal would pass a fixture that
+    // seeds that literal and do nothing at all in the field.
+    const remote = [
+      { id: "ws_01HZY", name: "Scratch" },
+      { id: "ws_01ABC", name: "Default Workspace" },
+    ];
     await signIn();
     route({
-      [`GET ${GATEWAY}/v1/workspaces`]: () =>
-        Response.json({ workspaces: [...WORKSPACES].reverse() }),
+      [`GET ${GATEWAY}/v1/workspaces`]: () => Response.json({ workspaces: remote }),
     });
 
     const payload = await probeConnection({ projectRoot: project }, baseArgs);
 
-    expect(payload.workspaces).toEqual(WORKSPACES);
+    expect(payload.workspaces).toEqual([remote[1], remote[0]]);
+  });
+
+  test("an organization without a Default Workspace still lists every choice", async () => {
+    await signIn();
+    const remote = [
+      { id: "ws_01HZY", name: "Scratch" },
+      { id: "ws_01ABC", name: "Research" },
+    ];
+    route({
+      [`GET ${GATEWAY}/v1/workspaces`]: () => Response.json({ workspaces: remote }),
+    });
+
+    const payload = await probeConnection({ projectRoot: project }, baseArgs);
+
+    expect(payload.workspaces).toEqual(remote);
   });
 
   test("the create verb refreshes choices and does not connect", async () => {
@@ -495,12 +518,28 @@ describe("JSON verbs", () => {
     expect(payload).toMatchObject({
       status: "need_workspace",
       createdWorkspace: { id: "ws-research", name: "Research" },
-      canCreateWorkspace: true,
       workspaces: [...WORKSPACES, { id: "ws-research", name: "Research" }],
     });
     expect(requests).toContain(`POST ${GATEWAY}/v1/workspaces`);
     expect(requests.some((request) => request.includes("/v1/connectors"))).toBe(false);
     expect(JSON.stringify(payload)).not.toContain("createdByUserId");
+    expect(() => statSync(join(project, ".augenta", "config.json"))).toThrow();
+  });
+
+  test("refuses to create and connect in one call", async () => {
+    // Two mutations with the consent question BETWEEN them. Honouring whichever
+    // one this dispatch reaches first would either connect a set chosen before
+    // the new Workspace existed, or drop the connect request on the floor.
+    await signIn();
+    route();
+
+    const payload = await runJsonVerb(
+      { projectRoot: project },
+      { ...baseArgs, createWorkspace: "Research", workspaces: ["ws-default"] },
+    );
+
+    expect(payload).toMatchObject({ status: "error", code: "conflicting_verbs" });
+    expect(requests).toEqual([]);
     expect(() => statSync(join(project, ".augenta", "config.json"))).toThrow();
   });
 
@@ -523,6 +562,130 @@ describe("JSON verbs", () => {
     expect(String(payload.message)).toContain("do not create it again");
     expect(requests).toContain(`POST ${GATEWAY}/v1/workspaces`);
     expect(() => statSync(join(project, ".augenta", "config.json"))).toThrow();
+  });
+
+  /**
+   * The terminal menu loop, driven through its injected prompts. Everything above
+   * exercises the `--json` verbs an agent calls; a human running `connect` in a
+   * terminal takes this path instead, and its rules — create is chosen alone, the
+   * refreshed set is asked again, a created Workspace is NOT pre-marked — live
+   * only here.
+   */
+  describe("the interactive Workspace menu", () => {
+    /** Answers indices into each rendered menu, recording what the user saw. */
+    function scriptedPrompts(
+      answers: number[][],
+      name = "Research",
+    ): {
+      prompts: WorkspacePrompts;
+      menus: Array<Array<{ label: string; marked: boolean }>>;
+      names: number;
+    } {
+      const menus: Array<Array<{ label: string; marked: boolean }>> = [];
+      const state = { names: 0 };
+      const prompts: WorkspacePrompts = {
+        chooseMany: async (_prompt, values, label, opts = {}) => {
+          menus.push(
+            values.map((value) => ({
+              label: label(value),
+              marked: opts.preselected?.(value) ?? false,
+            })),
+          );
+          const answer = answers[menus.length - 1];
+          if (!answer) throw new Error(`no scripted answer for menu ${menus.length}`);
+          return answer.map((index) => values[index]!);
+        },
+        askWorkspaceName: async () => {
+          state.names++;
+          return name;
+        },
+      };
+      return {
+        prompts,
+        menus,
+        get names() {
+          return state.names;
+        },
+      };
+    }
+
+    const profileId = () =>
+      profileIdFor({ issuer: ISSUER, clientId: "client_public", gateway: GATEWAY }, "org_1");
+
+    test("re-asks when create is picked alongside a Workspace, and creates nothing", async () => {
+      await signIn();
+      route();
+      const scripted = scriptedPrompts([[0, 2], [1]]);
+
+      const chosen = await selectedWorkspaces(
+        profileId(),
+        GATEWAY,
+        "Example Org",
+        [],
+        WORKSPACES,
+        scripted.prompts,
+      );
+
+      expect(chosen).toEqual([WORKSPACES[1]!]);
+      expect(scripted.menus).toHaveLength(2);
+      expect(scripted.names).toBe(0);
+      expect(requests.some((request) => request.includes("/v1/workspaces"))).toBe(false);
+    });
+
+    test("a created Workspace is offered UNMARKED and must be selected", async () => {
+      // `[x]` means "this project already feeds it". Creating a Workspace
+      // connects nothing, so pre-marking it would put a destination the user has
+      // never affirmed into the answer they are about to give.
+      await signIn();
+      route();
+      const scripted = scriptedPrompts([[2], [2]]);
+
+      const chosen = await selectedWorkspaces(
+        profileId(),
+        GATEWAY,
+        "Example Org",
+        [],
+        WORKSPACES,
+        scripted.prompts,
+      );
+
+      expect(scripted.names).toBe(1);
+      expect(requests).toContain(`POST ${GATEWAY}/v1/workspaces`);
+      expect(scripted.menus[1]).toEqual([
+        { label: "Default Workspace (ws-default)", marked: false },
+        { label: "Scratch (ws-scratch)", marked: false },
+        { label: "Research (ws-research)", marked: false },
+        { label: "Create a new Workspace", marked: false },
+      ]);
+      expect(chosen).toEqual([{ id: "ws-research", name: "Research" }]);
+    });
+
+    test("current destinations stay marked across a creation", async () => {
+      await signIn();
+      route();
+      const scripted = scriptedPrompts([[2], [0, 2]]);
+
+      const chosen = await selectedWorkspaces(
+        profileId(),
+        GATEWAY,
+        "Example Org",
+        ["ws-default"],
+        WORKSPACES,
+        scripted.prompts,
+      );
+
+      expect(scripted.menus[0]![0]).toEqual({
+        label: "Default Workspace (ws-default)",
+        marked: true,
+      });
+      expect(scripted.menus[1]!.map((entry) => entry.marked)).toEqual([
+        true,
+        false,
+        false,
+        false,
+      ]);
+      expect(chosen).toEqual([WORKSPACES[0]!, { id: "ws-research", name: "Research" }]);
+    });
   });
 
   test("refuses an empty Workspace name without making a request", async () => {

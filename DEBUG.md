@@ -79,6 +79,18 @@ The override is authoritative: an invalid or unloadable executable fails with a
 specific hook error instead of falling through to another installation. It does
 not affect `scripts/connect.ts`, which the agent invokes from its own shell.
 
+Without the override, a host where no Node 20+ can be found is quiet on purpose:
+the runner reads `cwd` out of the hook payload and reports the missing runtime
+only when that project has `.augenta/config.json`, so an unconnected project
+never sees an error about a runtime it does not use. To see the message, run a
+hook by hand from a connected project with a PATH that has no working Node:
+
+```bash
+printf '{"cwd":"%s","hook_event_name":"Stop"}' "$PWD" \
+  | env -i HOME="$HOME" PATH= sh "<plugin-root>/scripts/run-node-hook.sh" \
+      "<plugin-root>/dist/capture/capture.mjs"
+```
+
 ## The hosted dev loop
 
 ```bash

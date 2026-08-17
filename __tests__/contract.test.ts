@@ -40,7 +40,7 @@ const KNOWN_HOOK_EVENTS = new Set([
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.9.1";
+const RELEASE_VERSION = "0.9.2";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -403,10 +403,15 @@ describe("the consent gate is plural, explicit, and fully disclosed", () => {
     expect(flat).toMatch(/can offer several options at once/i);
     expect(flat).toMatch(/If it cannot\*\*, ask in plain text/i);
     expect(skill).not.toMatch(/multiSelect/);
-    // The echo-back is asymmetric on purpose: a typed answer is an inference the
-    // user never saw rendered, and inference is what the invariant bans.
+    // A valid numbered answer to the menu the user was just shown IS the consent.
+    // Re-confirming it teaches people to click through the one gate that matters,
+    // so the skill is pinned to running the verb straight off that selection —
+    // what the removed echo-back guarded is pinned separately, below, as the rule
+    // that the passed ids are exactly the entries picked.
     expect(flat).toMatch(/valid numbered selection is the user's consent/i);
     expect(flat).toMatch(/without asking for a second yes\/no confirmation/i);
+    expect(flat).toMatch(/Pass the `id`s, never the names/i);
+    expect(flat).toMatch(/never a destination the user did not select/i);
   });
 
   test("offers explicit Workspace creation and re-asks before connecting", () => {
