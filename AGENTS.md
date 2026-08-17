@@ -119,6 +119,12 @@ path from the absolute skill directory the harness gives the model (Claude Code
 prepends `Base directory for this skill:`; Codex resolves the skill-root alias),
 which also pins the script to the version of the skill being followed.
 
+Hook commands go through `scripts/run-node-hook.sh`. Desktop harnesses can expose
+a smaller PATH than an interactive terminal, and a package-manager `node` can be
+present but unloadable. The runner accepts an explicit `AUGENTA_NODE`, checks
+common version-manager installs, and only then scans PATH; every candidate must
+actually start and report Node 20+. Keep the hook bundles themselves Node-only.
+
 ## Releases
 
 Version changes are atomic. Keep the same version in `package.json`, both
@@ -136,25 +142,36 @@ global kill switch.
 
 **No credential passes through the agent.** The line is what a process *handles*,
 not who starts it. The agent is the normal caller of `scripts/connect.ts --json`
-(`--probe`, `--login`, `--await-login`, `--workspace`): those verbs never accept
-a credential as an argument and never emit an access token, refresh token, or
-device code in their payload, so tokens travel browser → `~/.augenta/auth.json`
-without touching a transcript. Do not add a `--json` verb or field that breaks
-that. Platform keys are different — `--api-key` takes a secret on the command
-line, so it stays a human/CI path, is rejected in `--json` mode, and is never run
-by the agent. Never ask a user to paste any credential into chat.
+(`--probe`, `--login`, `--await-login`, `--create-workspace`, `--workspace`):
+those verbs never accept a credential as an argument
+and never emit an access token, refresh token, or device code in their payload,
+so tokens travel browser → `~/.augenta/auth.json` without touching a transcript.
+Do not add a `--json` verb or field that breaks that. Platform keys are different
+— `--api-key` takes a secret on the command line, so it stays a human/CI path, is
+rejected in `--json` mode, and is never run by the agent. Never ask a user to
+paste any credential into chat.
 
 **Consent stays explicit and in the user's hands.** Which Workspaces a project
-feeds is the user's decision, asked every time, and the answer is always the
-**complete set of destinations** — never defaulted, never inferred, never carried
-forward from a previous run. It is asked when the organization has exactly one
-Workspace (the user still affirms it) and when the project is already connected
+feeds is the user's decision, asked every time, and the answer is always a
+**non-empty, complete set of destinations** — never defaulted, never inferred,
+never carried forward from a previous run. Every organization is provisioned
+with `Default Workspace`, but availability is not consent: the question is still
+asked when that is the only Workspace and when the project is already connected
 (the current set is shown pre-selected and must be re-affirmed). Moving that
 question from a terminal menu into the harness's user-input mechanism is fine;
-removing it, defaulting it, or offering a "keep current" shortcut is not. One
-answer never authorizes more than one destination, and silence never authorizes
-any. `chooseMany` in `scripts/connect.ts` is deliberately a separate function from
+removing it, auto-selecting a destination, offering a "keep current" shortcut, or
+accepting `none` is not. One answer never authorizes more than one destination,
+and silence never authorizes any. A user can cancel the flow without connecting;
+`chooseMany` in `scripts/connect.ts` is deliberately a separate function from
 `choose` with no auto-select knob to flip.
+
+**Workspace creation is an explicit, separate mutation.** Offer `Create a new
+Workspace` alongside the live destination list. It must be chosen by itself, its
+non-empty name is asked for in the named organization, and the refreshed
+non-empty destination question is asked afterward. Choosing creation and giving
+the name is the request: do not add a redundant yes/no confirmation before
+`POST /v1/workspaces`. Creating a Workspace never connects the project or treats
+the new Workspace as selected.
 
 **More than one destination is a stronger disclosure, not the same one repeated.**
 Before the user answers, and again when confirming, they are told that every
@@ -172,14 +189,14 @@ way a network mutation can.
 **The written destination set is always a subset of the set the user just
 confirmed.** A destination that fails to link is reported and omitted; nothing is
 ever written that the user did not just affirm, so a partial failure is a safe
-outcome rather than an ambiguous one. The corollary is that writing NOTHING leaves
-the previous set on disk and still shipping, so no confirmation may claim a
-destination was dropped unless a config was actually written — and selecting
-nothing for an already-connected project changes nothing rather than disconnecting
-it. Deleting `.augenta/config.json` remains the only off switch. Reconnecting never moves an existing
-Connector to a different Workspace — a destination gets its own link, created
-once and adopted thereafter, so history already attached to a link keeps its
-route. A non-production `environment` must be stated to the user before they
+outcome rather than an ambiguous one. Writing NOTHING leaves the previous set on
+disk and still shipping, so no confirmation may claim a destination was dropped
+unless a config was actually written. Empty destination sets are rejected;
+canceling an already-connected flow changes nothing. Deleting
+`.augenta/config.json` remains the only off switch. Reconnecting never moves an
+existing Connector to a different Workspace — a destination gets its own link,
+created once and adopted thereafter, so history already attached to a link keeps
+its route. A non-production `environment` must be stated to the user before they
 answer.
 
 **The platform-key path stays single-destination.** `--api-key` has no consent

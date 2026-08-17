@@ -86,9 +86,10 @@ in Claude's Code tab or ChatGPT's Codex mode.
 Connection is a deliberate per-project opt-in. Run `/augenta:connect` (Codex:
 `$augenta:connect` or "Connect Augenta") and answer in the chat:
 
-1. Pick **every** Workspace this project should feed — one, several, or none.
-   That choice is the consent boundary, and **each one you pick receives the full
-   record**.
+1. Pick **every** Workspace this project should feed — one or several, with at
+   least one required. Every organization starts with `Default Workspace`; the
+   plugin also lets you create another Workspace before choosing. That choice is
+   the consent boundary, and **each one you pick receives the full record**.
 2. The first time only, click the `auth.augenta.ai` link your agent shows you.
    Later projects reuse that sign-in and skip this step.
 
@@ -103,9 +104,10 @@ node "<plugin-root>/dist/scripts/connect.mjs"
 
 Either way it reuses your owner-only global sign-in when possible, otherwise
 starts device login. It displays the authenticated organization, always requires
-you to select the Workspaces, creates or reuses **one inbound agent Connector per
-selected Workspace** through the normal `/v1` API, verifies each, and writes this
-private, self-ignored project directory:
+you to select at least one Workspace, can create a new Workspace when requested,
+creates or reuses **one inbound agent Connector per selected Workspace** through
+the normal `/v1` API, verifies each, and writes this private, self-ignored project
+directory:
 
 ```text
 <project>/.augenta/

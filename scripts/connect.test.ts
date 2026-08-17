@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   awaitLogin,
+  createWorkspaceForSelection,
   connectToWorkspaces,
   connectWithApiKey,
   parseArgs,
@@ -101,6 +102,10 @@ describe("parseArgs", () => {
     expect(parseArgs(["--json", "--workspace", "ws-default"])).toEqual({
       json: true,
       workspaces: ["ws-default"],
+    });
+    expect(parseArgs(["--json", "--create-workspace", "Research"])).toEqual({
+      json: true,
+      createWorkspace: "Research",
     });
     expect(parseArgs(["--json", "--await-login", "--wait", "240"])).toEqual({
       json: true,
@@ -233,6 +238,13 @@ describe("project config writers", () => {
       endpoint: "https://dev.example.com",
     });
   });
+
+  test("refuses to write an OAuth config without a destination", () => {
+    expect(() => writeOAuthConfig(project, "profile_123", [])).toThrow(
+      "requires at least one Connector",
+    );
+    expect(() => statSync(join(project, ".augenta", "config.json"))).toThrow();
+  });
 });
 
 describe("CLI subprocess", () => {
@@ -320,6 +332,7 @@ describe("JSON verbs", () => {
 
   let authHome: string;
   let requests: string[];
+  let liveWorkspaces: Array<{ id: string; name: string }>;
   /** Links the fake control plane knows about, keyed by id. */
   let links: Map<string, Record<string, unknown>>;
 
@@ -338,6 +351,7 @@ describe("JSON verbs", () => {
     process.env.AUGENTA_AUTH_HOME = authHome;
     requests = [];
     links = new Map();
+    liveWorkspaces = WORKSPACES.map((workspace) => ({ ...workspace }));
   });
   afterEach(() => {
     delete process.env.AUGENTA_AUTH_HOME;
@@ -345,7 +359,7 @@ describe("JSON verbs", () => {
   });
 
   const WORKSPACES = [
-    { id: "ws-default", name: "Augenta Core" },
+    { id: "ws-default", name: "Default Workspace" },
     { id: "ws-scratch", name: "Scratch" },
   ];
 
@@ -370,8 +384,25 @@ describe("JSON verbs", () => {
           org: { id: "org_1", name: "Example Org" },
         });
       }
-      if (path === `${GATEWAY}/v1/workspaces`) {
-        return Response.json({ workspaces: WORKSPACES });
+      if (path === `${GATEWAY}/v1/workspaces` && method === "POST") {
+        const body = JSON.parse(String((init as RequestInit).body)) as {
+          name: string;
+        };
+        expect(new Headers((init as RequestInit).headers).get("content-type")).toBe(
+          "application/json",
+        );
+        const workspace = { id: `ws-${body.name.toLowerCase()}`, name: body.name };
+        liveWorkspaces.push(workspace);
+        return Response.json({
+          workspace: {
+            ...workspace,
+            orgId: "org_1",
+            createdByUserId: "user_1",
+          },
+        });
+      }
+      if (path === `${GATEWAY}/v1/workspaces` && method === "GET") {
+        return Response.json({ workspaces: liveWorkspaces });
       }
       // Creates a link in whichever Workspace the body asks for, so a fan-out
       // cannot pass by accident against a mock that always answers "ws-default".
@@ -431,12 +462,80 @@ describe("JSON verbs", () => {
 
     expect(payload.status).toBe("need_workspace");
     expect(payload.workspaces).toEqual(WORKSPACES);
+    expect(payload.canCreateWorkspace).toBe(true);
     expect(payload.signedInAs).toEqual({
       name: "Rin",
       email: "rin@example.com",
       organization: "Example Org",
     });
     expect(JSON.stringify(payload)).not.toContain("access-live");
+  });
+
+  test("always lists Default Workspace first", async () => {
+    await signIn();
+    route({
+      [`GET ${GATEWAY}/v1/workspaces`]: () =>
+        Response.json({ workspaces: [...WORKSPACES].reverse() }),
+    });
+
+    const payload = await probeConnection({ projectRoot: project }, baseArgs);
+
+    expect(payload.workspaces).toEqual(WORKSPACES);
+  });
+
+  test("the create verb refreshes choices and does not connect", async () => {
+    await signIn();
+    route();
+
+    const payload = await runJsonVerb(
+      { projectRoot: project },
+      { ...baseArgs, createWorkspace: "Research" },
+    );
+
+    expect(payload).toMatchObject({
+      status: "need_workspace",
+      createdWorkspace: { id: "ws-research", name: "Research" },
+      canCreateWorkspace: true,
+      workspaces: [...WORKSPACES, { id: "ws-research", name: "Research" }],
+    });
+    expect(requests).toContain(`POST ${GATEWAY}/v1/workspaces`);
+    expect(requests.some((request) => request.includes("/v1/connectors"))).toBe(false);
+    expect(JSON.stringify(payload)).not.toContain("createdByUserId");
+    expect(() => statSync(join(project, ".augenta", "config.json"))).toThrow();
+  });
+
+  test("reports that creation succeeded when refreshing the list fails", async () => {
+    await signIn();
+    route({
+      [`GET ${GATEWAY}/v1/workspaces`]: () =>
+        new Response("temporarily unavailable", { status: 503 }),
+    });
+
+    const payload = await createWorkspaceForSelection(
+      { projectRoot: project },
+      { ...baseArgs, createWorkspace: "Research" },
+    );
+
+    expect(payload).toMatchObject({
+      status: "workspace_created",
+      createdWorkspace: { id: "ws-research", name: "Research" },
+    });
+    expect(String(payload.message)).toContain("do not create it again");
+    expect(requests).toContain(`POST ${GATEWAY}/v1/workspaces`);
+    expect(() => statSync(join(project, ".augenta", "config.json"))).toThrow();
+  });
+
+  test("refuses an empty Workspace name without making a request", async () => {
+    const payload = await createWorkspaceForSelection(
+      { projectRoot: project },
+      { ...baseArgs, createWorkspace: "   " },
+    );
+
+    expect(payload).toMatchObject({
+      status: "error",
+      code: "workspace_name_required",
+    });
+    expect(requests).toEqual([]);
   });
 
   test("an already-connected project still reaches the Workspace choice", async () => {
@@ -693,7 +792,7 @@ describe("JSON verbs", () => {
         {
           connectorId: "connector_new",
           workspaceId: "ws-default",
-          workspaceName: "Augenta Core",
+          workspaceName: "Default Workspace",
           action: "created",
         },
       ],
@@ -730,6 +829,23 @@ describe("JSON verbs", () => {
     expect(
       JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).connectorIds,
     ).toEqual(["connector_new", "connector_ws-scratch"]);
+  });
+
+  test("refuses to connect without at least one Workspace", async () => {
+    await signIn();
+    route();
+
+    const payload = await connectToWorkspaces(
+      { projectRoot: project },
+      { ...baseArgs, workspaces: [] },
+    );
+
+    expect(payload).toMatchObject({
+      status: "error",
+      code: "workspace_required",
+    });
+    expect(requests.some((request) => request.includes("/v1/connectors"))).toBe(false);
+    expect(() => statSync(join(project, ".augenta", "config.json"))).toThrow();
   });
 
   test("a kept destination's link is ADOPTED, never stolen for a new one", async () => {

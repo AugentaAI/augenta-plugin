@@ -3,10 +3,11 @@
  *
  * Two front ends over the same core. A human running this in a terminal gets the
  * interactive prompts. An agent runs the `--json` verbs — `--probe`, `--login`,
- * `--await-login`, `--workspace` — each of which returns one JSON object and
- * exits, so the sign-in link reaches the user in a bounded call instead of after
- * a poll loop nobody can see. No verb accepts or emits a credential: tokens go
- * browser → `~/.augenta/auth.json`, and `--api-key` stays human/CI-only.
+ * `--await-login`, `--create-workspace`, `--workspace` — each of which returns
+ * one JSON object and exits, so the sign-in link reaches the user in a bounded
+ * call instead of after a poll loop nobody can see. No verb accepts or emits a
+ * credential: tokens go browser → `~/.augenta/auth.json`, and `--api-key` stays
+ * human/CI-only.
  *
  * A signed-in project may feed SEVERAL Workspaces — one inbound Connector each,
  * `--workspace` repeated once per destination. The answer is always the complete
@@ -23,7 +24,6 @@ import { stdin as input, stdout as output } from "node:process";
 import { isMain } from "../runtime/node";
 import { ensureAugentaDir } from "../capture/augenta-dir";
 import {
-  configPath,
   DEFAULT_GATEWAY,
   loadProjectConfig,
 } from "../capture/config";
@@ -59,6 +59,8 @@ interface Args {
   /** Every Workspace the project should feed. `--workspace` is repeatable and
    *  the list is the COMPLETE destination set, not an addition. */
   workspaces?: string[];
+  /** Create one Workspace, then return the refreshed choice without connecting. */
+  createWorkspace?: string;
   profile?: string;
 }
 
@@ -91,7 +93,7 @@ interface Connector {
  * (AGENTS.md → Releases) alongside both plugin manifests, both marketplace files,
  * and package.json; the contract test pins all of them to one value.
  */
-export const PLUGIN_VERSION = "0.9.0";
+export const PLUGIN_VERSION = "0.9.1";
 
 class AugentaRequestError extends Error {
   constructor(
@@ -139,6 +141,8 @@ export function parseArgs(argv: string[]): Args {
       // string would move that check inside the value, where an empty segment or
       // a stray comma becomes a silent mis-selection instead of an error.
       (args.workspaces ??= []).push(valueFor(flag, i++));
+    } else if (flag === "--create-workspace") {
+      args.createWorkspace = valueFor(flag, i++);
     } else if (flag === "--profile") {
       args.profile = valueFor(flag, i++);
     } else if (flag === "--wait") {
@@ -255,6 +259,9 @@ export function writeOAuthConfig(
   connectorIds: readonly string[],
   endpoint?: string,
 ): string {
+  if (connectorIds.length === 0) {
+    throw new Error("an OAuth connection requires at least one Connector");
+  }
   const dir = ensureAugentaDir(projectRoot);
   const path = join(dir, "config.json");
   writeFileSync(
@@ -327,10 +334,9 @@ async function choose<T>(
  * is shown pre-selected and must be re-affirmed rather than kept by default (see
  * skills/connect/SKILL.md, AGENTS.md → Privacy invariants).
  *
- * An EMPTY answer means "select nothing" and is returned as `[]`: a user who
- * changes their mind at the gate needs an exit that is not Ctrl-C. (For an
- * already-connected project that leaves the existing destinations alone — the
- * caller says so; the off switch is deleting the config.)
+ * An EMPTY answer is invalid and RE-ASKS. A completed connection must feed at
+ * least one Workspace; a user who changes their mind can cancel the command,
+ * while deleting the project config remains the explicit off switch.
  *
  * A malformed answer RE-ASKS rather than throwing. A comma list is easy to
  * fat-finger (`1-3`, `1;3`), and this is the one gate every user has to pass, so
@@ -355,9 +361,12 @@ async function chooseMany<T>(
   try {
     for (let attempt = 0; attempt < 5; attempt++) {
       const answer = await rl.question(
-        `Selection (comma-separated, e.g. 1,3 — empty to select nothing) [1-${values.length}]: `,
+        `Selection (comma-separated, e.g. 1,3; at least one required) [1-${values.length}]: `,
       );
-      if (!answer.trim()) return [];
+      if (!answer.trim()) {
+        console.log("Choose at least one Workspace, or cancel the command.");
+        continue;
+      }
       const selected: T[] = [];
       let bad: string | undefined;
       for (const part of answer.split(",")) {
@@ -500,21 +509,100 @@ async function listWorkspaces(
   if (workspaces.length === 0) {
     throw new Error("the authenticated organization has no active Workspaces");
   }
-  return workspaces;
+  // The platform seeds this Workspace for every organization. Keep it first in
+  // both terminal and agent menus even if a backend changes list ordering.
+  return [...workspaces].sort(
+    (a, b) => Number(b.id === "ws-default") - Number(a.id === "ws-default"),
+  );
+}
+
+/** Create an organization Workspace without exposing the stored OAuth token. */
+async function createWorkspace(
+  profileId: string,
+  gateway: string,
+  requestedName: string,
+): Promise<Workspace> {
+  const name = requestedName.trim();
+  if (!name) throw new Error("a Workspace name is required");
+  const result = await bearerJson<
+    { workspace?: Workspace; id?: string; name?: string }
+  >(profileId, `${gateway}/v1/workspaces`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const workspace = result.workspace ?? result;
+  if (typeof workspace.id !== "string" || typeof workspace.name !== "string") {
+    throw new Error("Augenta created the Workspace but returned an invalid response");
+  }
+  // The platform response also carries tenancy/audit fields. The agent needs
+  // only the same public choice coordinates returned by listWorkspaces.
+  return { id: workspace.id, name: workspace.name };
+}
+
+async function askWorkspaceName(): Promise<string> {
+  if (!input.isTTY) {
+    throw new Error("run augenta:connect in an interactive terminal");
+  }
+  const rl = createInterface({ input, output });
+  try {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const name = (await rl.question("New Workspace name: ")).trim();
+      if (name) return name;
+      console.log("Enter a name for the new Workspace, or cancel the command.");
+    }
+    throw new Error("no valid Workspace name was given");
+  } finally {
+    rl.close();
+  }
 }
 
 async function selectedWorkspaces(
   profileId: string,
   gateway: string,
+  organizationName: string,
   preselectedIds: readonly string[] = [],
   available?: readonly Workspace[],
 ): Promise<Workspace[]> {
-  return chooseMany(
-    "Choose every Workspace this project should feed (each one receives the full record):",
-    [...(available ?? (await listWorkspaces(profileId, gateway)))],
-    (workspace) => `${workspace.name} (${workspace.id})`,
-    { preselected: (workspace) => preselectedIds.includes(workspace.id) },
-  );
+  let choices = [...(available ?? (await listWorkspaces(profileId, gateway)))];
+  const preselected = new Set(preselectedIds);
+  type WorkspaceChoice =
+    | { kind: "workspace"; workspace: Workspace }
+    | { kind: "create" };
+  while (true) {
+    const menu: WorkspaceChoice[] = [
+      ...choices.map((workspace) => ({ kind: "workspace" as const, workspace })),
+      { kind: "create" },
+    ];
+    const selected = await chooseMany(
+      "Choose every Workspace this project should feed (each one receives the full record):",
+      menu,
+      (choice) =>
+        choice.kind === "create"
+          ? "Create a new Workspace"
+          : `${choice.workspace.name} (${choice.workspace.id})`,
+      {
+        preselected: (choice) =>
+          choice.kind === "workspace" && preselected.has(choice.workspace.id),
+      },
+    );
+    if (!selected.some((choice) => choice.kind === "create")) {
+      return selected.map((choice) => (choice as { workspace: Workspace }).workspace);
+    }
+    if (selected.length > 1) {
+      console.log(
+        "Choose Create a new Workspace by itself; the complete destination list appears again after creation.",
+      );
+      continue;
+    }
+    const name = await askWorkspaceName();
+    const created = await createWorkspace(profileId, gateway, name);
+    console.log(
+      `Created ${created.name} (${created.id}) in ${organizationName}. Choose the complete destination set.`,
+    );
+    choices = await listWorkspaces(profileId, gateway);
+    preselected.add(created.id);
+  }
 }
 
 async function currentConnector(
@@ -839,27 +927,12 @@ export async function connectProject(
   const workspaces = await selectedWorkspaces(
     selected.profileId,
     gateway,
+    selected.me.org.name,
     resolvedPrior.map((link) => link.workspaceId),
     available,
   );
   if (workspaces.length === 0) {
-    // "Nothing connected" would be false for a project that is already connected:
-    // leaving the config untouched means it keeps shipping to every prior
-    // destination. Selecting nothing is not the off switch; deleting the file is.
-    if (priorIds.length > 0) {
-      const current = resolvedPrior
-        .map((link) => {
-          const name = available.find((n) => n.id === link.workspaceId)?.name;
-          return name ?? link.workspaceId;
-        })
-        .join(", ");
-      console.log(
-        `Nothing changed. This project still feeds ${current || "its existing destinations"}. To stop capture entirely, delete ${configPath(projectRoot)}.`,
-      );
-    } else {
-      console.log("Nothing connected. No config was written.");
-    }
-    return;
+    throw new Error("choose at least one Workspace");
   }
 
   const { results, removed, unresolvedConnectorIds, configPath: written } =
@@ -957,6 +1030,7 @@ async function workspaceStep(
       email: me.user.email,
       organization: me.org.name,
     },
+    canCreateWorkspace: true,
     workspaces: workspaces.map(({ id, name }) => ({ id, name })),
   };
 }
@@ -1135,6 +1209,73 @@ export async function awaitLogin(args: Args): Promise<JsonPayload> {
 }
 
 /**
+ * Create a Workspace as an explicit user-selected action, then return the live
+ * list so the consent question can be asked again. Creation alone never connects
+ * the project and never writes project config.
+ */
+export async function createWorkspaceForSelection(
+  resolved: ResolvedProject,
+  args: Args,
+): Promise<JsonPayload> {
+  const name = args.createWorkspace?.trim();
+  if (!name) {
+    return {
+      status: "error",
+      code: "workspace_name_required",
+      message: "a non-empty Workspace name is required",
+    };
+  }
+  const { oauth, gateway } = await resolveOAuth(args);
+  const prior = priorConnection(resolved.projectRoot);
+  const usable = await usableProfiles(oauth, args.profile ?? prior?.profileId);
+  if (usable.length === 0) {
+    return {
+      status: "error",
+      code: "not_signed_in",
+      message: "no usable Augenta sign-in; start one with --login",
+    };
+  }
+  if (usable.length > 1 && !args.profile) {
+    return {
+      status: "error",
+      code: "need_profile",
+      message:
+        "several organizations are signed in; pass --profile <profileId> to choose one",
+    };
+  }
+  const picked = args.profile
+    ? usable.find((item) => item.profileId === args.profile)
+    : usable[0];
+  if (!picked) {
+    return {
+      status: "error",
+      code: "unknown_profile",
+      message: `no usable sign-in matches profile ${args.profile}`,
+    };
+  }
+  const createdWorkspace = await createWorkspace(
+    picked.profileId,
+    gateway,
+    name,
+  );
+  try {
+    return {
+      ...(await workspaceStep(picked.profileId, gateway, picked.me)),
+      createdWorkspace,
+    };
+  } catch (error) {
+    // The POST already succeeded. Reporting a generic error would invite a retry
+    // that collides with the Workspace just created, so preserve that fact even
+    // when the follow-up list request fails.
+    return {
+      status: "workspace_created",
+      createdWorkspace,
+      message: `Created ${createdWorkspace.name}, but could not refresh the Workspace list: ${describeError(error)}. Re-run --probe; do not create it again.`,
+    };
+  }
+}
+
+/**
  * Finish: bind the project to the chosen Workspaces. The answer is the COMPLETE
  * destination set — what the project feeds after this call, and nothing else.
  *
@@ -1176,8 +1317,15 @@ export async function connectToWorkspaces(
       message: `no usable sign-in matches profile ${args.profile}`,
     };
   }
-  const available = await listWorkspaces(picked.profileId, gateway);
   const requested = [...new Set(args.workspaces ?? [])];
+  if (requested.length === 0) {
+    return {
+      status: "error",
+      code: "workspace_required",
+      message: "select at least one Workspace; nothing was created or changed",
+    };
+  }
+  const available = await listWorkspaces(picked.profileId, gateway);
   const unknown = requested.filter((id) => !available.some((item) => item.id === id));
   if (unknown.length > 0) {
     return {
@@ -1252,6 +1400,9 @@ export async function runJsonVerb(
         "--api-key is a human/CI path and is not available in --json mode; run it directly in a terminal",
     };
   }
+  if (args.createWorkspace !== undefined) {
+    return createWorkspaceForSelection(resolved, args);
+  }
   if (args.workspaces?.length) return connectToWorkspaces(resolved, args);
   if (args.awaitLogin) return awaitLogin(args);
   if (args.login) return startLogin(args);
@@ -1260,7 +1411,7 @@ export async function runJsonVerb(
     status: "error",
     code: "no_verb",
     message:
-      "--json requires one of --probe, --login, --await-login, or --workspace <id> (repeatable)",
+      "--json requires one of --probe, --login, --await-login, --create-workspace <name>, or --workspace <id> (repeatable)",
   };
 }
 
@@ -1405,7 +1556,7 @@ if (isMain(import.meta.url)) {
       );
     } else if (!input.isTTY) {
       throw new Error(
-        "signing in needs an interactive terminal; agents should use --json with --probe/--login/--await-login/--workspace, and --api-key is for autonomous or CI clients.",
+        "signing in needs an interactive terminal; agents should use --json with --probe/--login/--await-login/--create-workspace/--workspace, and --api-key is for autonomous or CI clients.",
       );
     } else {
       await connectProject(projectRoot, args);
