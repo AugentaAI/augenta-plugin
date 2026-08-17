@@ -40,7 +40,7 @@ const KNOWN_HOOK_EVENTS = new Set([
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.9.1";
+const RELEASE_VERSION = "0.9.2";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -251,18 +251,17 @@ describe("no inert CodeQL suppression markers", () => {
 });
 
 describe("the connect skill drives connect itself", () => {
-  // The agent runs the script; the user answers one question and, at most, clicks
-  // one link. The old design printed a versioned cache path for the user to paste
-  // into a second terminal — long, easy to truncate, and impossible to guess if
-  // the model got it wrong. Pin the replacement so it cannot regress into a
-  // hand-off.
+  // The agent runs the script; the user answers in chat and, at most, clicks one
+  // link. The old design printed a versioned cache path for the user to paste into
+  // a second terminal — long, easy to truncate, and impossible to guess if the
+  // model got it wrong. Pin the replacement so it cannot regress into a hand-off.
   const skill = readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8");
   const flat = skill.replace(/\s+/g, " ");
 
   test("drives every JSON verb the CLI exposes", () => {
     // Word-boundary, not substring: a renamed `--workspaces` would satisfy
     // `toContain("--workspace")` VACUOUSLY while the CLI verb no longer exists.
-    for (const verb of ["--json", "--probe", "--login", "--await-login", "--workspace", "--profile"]) {
+    for (const verb of ["--json", "--probe", "--login", "--await-login", "--create-workspace", "--workspace", "--profile"]) {
       expect(skill).toMatch(new RegExp(`${verb}(?![\\w-])`));
     }
   });
@@ -404,15 +403,27 @@ describe("the consent gate is plural, explicit, and fully disclosed", () => {
     expect(flat).toMatch(/can offer several options at once/i);
     expect(flat).toMatch(/If it cannot\*\*, ask in plain text/i);
     expect(skill).not.toMatch(/multiSelect/);
-    // The echo-back is asymmetric on purpose: a typed answer is an inference the
-    // user never saw rendered, and inference is what the invariant bans.
-    expect(flat).toMatch(/restate the set by name and get a yes/i);
+    // A valid numbered answer to the menu the user was just shown IS the consent.
+    // Re-confirming it teaches people to click through the one gate that matters,
+    // so the skill is pinned to running the verb straight off that selection —
+    // what the removed echo-back guarded is pinned separately, below, as the rule
+    // that the passed ids are exactly the entries picked.
+    expect(flat).toMatch(/valid numbered selection is the user's consent/i);
+    expect(flat).toMatch(/without asking for a second yes\/no confirmation/i);
+    expect(flat).toMatch(/Pass the `id`s, never the names/i);
+    expect(flat).toMatch(/never a destination the user did not select/i);
   });
 
-  test("a contradictory decline fails CLOSED instead of being guessed", () => {
-    expect(skill).toContain("Don't connect this project");
-    expect(flat).toMatch(/has no meaning: say so and ask again/i);
-    expect(flat).toMatch(/Do not connect\./);
+  test("offers explicit Workspace creation and re-asks before connecting", () => {
+    const source = readFileSync(join(PLUGIN_ROOT, "scripts", "connect.ts"), "utf8");
+    expect(skill).toContain("Create a new Workspace");
+    expect(skill).toContain("--create-workspace");
+    expect(flat).toMatch(/must be the only selection/i);
+    expect(source).not.toContain("confirmWorkspaceCreation");
+    expect(flat).toMatch(/do not add a second yes\/no confirmation/i);
+    expect(flat).toMatch(/Creating a Workspace does not connect the project/i);
+    expect(flat).toMatch(/ask the required non-empty destination question again/i);
+    expect(skill).toContain("workspace_created");
   });
 
   test("removals are named, and are non-destructive", () => {
@@ -430,12 +441,12 @@ describe("the consent gate is plural, explicit, and fully disclosed", () => {
     expect(flat).toMatch(/was\*\* feeding and no longer is/i);
   });
 
-  test("selecting nothing is never described as disconnecting", () => {
-    // Writing no config leaves the previous destinations on disk and still
-    // shipping, so the one thing that must not be claimed is that capture stopped.
+  test("requires at least one Workspace and treats cancellation as no change", () => {
     expect(agents).toMatch(/writing NOTHING leaves the previous set on disk and still shipping/i);
-    expect(agents).toMatch(/selecting nothing for an already-connected project changes nothing/i);
-    expect(flat).toMatch(/no "select nothing" answer that disconnects/i);
+    expect(agents).toMatch(/Empty destination sets are rejected/i);
+    expect(flat).toMatch(/successful connection must feed at least one Workspace/i);
+    expect(flat).toMatch(/empty answer or `none` is not a valid destination set/i);
+    expect(flat).toMatch(/cancellation leaves its current destinations unchanged/i);
   });
 
   test("the discard path is documented as its own notice, with hysteresis", () => {
@@ -662,6 +673,21 @@ describe("manifests — cross-harness packaging and one version", () => {
     expect(ci, `CI hardcodes the plugin version ${RELEASE_VERSION}`).not.toContain(RELEASE_VERSION);
   });
 
+  test("install-smoke fires the DECLARED hook command, not a bare node call", () => {
+    // AGENTS.md names install-smoke as one of the three gates that close the
+    // sources-under-Bun / bundles-under-Node gap. Calling `node <bundle>` from
+    // the installed tree skips `scripts/run-node-hook.sh` — the first runtime
+    // artifact shipped outside dist/, and now the first thing every hook runs.
+    // A runner the marketplace failed to copy would leave every check green.
+    const ci = readFileSync(join(PLUGIN_ROOT, ".github", "workflows", "ci.yml"), "utf8");
+    expect(ci).toContain("run-node-hook.sh");
+    expect(ci).toContain(".hooks.SessionStart[0].hooks[0].command");
+    expect(ci).toContain("CLAUDE_PLUGIN_ROOT=");
+    expect(ci, "install-smoke bypasses the declared hook command").not.toMatch(
+      /\|\s*node "\$claude_root/,
+    );
+  });
+
   test("the versioned marketplace descriptions track the release", () => {
     // AGENTS.md → Releases: descriptions carry the version in prose, so they go
     // stale silently unless something pins them to the same bump.
@@ -739,11 +765,11 @@ describe("manifests — cross-harness packaging and one version", () => {
         for (const h of group.hooks) {
           expect(h.timeout).toBe(expectedTimeouts[event]);
           expect(h.command).toMatch(/"\$\{CLAUDE_PLUGIN_ROOT\}\//);
-          // Users run Node, not the toolchain this repo is built with. A hook
-          // that named `bun` — or pointed at a .ts source, which Node cannot
-          // execute given the extensionless relative imports these sources use —
-          // would fail on a clean machine, silently, for every fire.
-          expect(h.command).toStartWith("node ");
+          // The shell runner resolves a Node 20+ executable even when a desktop
+          // harness has a smaller PATH than the user's terminal. Bundles remain
+          // Node-only: Bun is the build tool and is never a runtime dependency.
+          expect(h.command).toStartWith("sh ");
+          expect(h.command).toContain("/scripts/run-node-hook.sh");
           expect(h.command.toLowerCase()).not.toContain("bun");
           expect(h.command).toMatch(/\/dist\/[A-Za-z0-9_\-/]+\.mjs"/);
           const refs = referencedPaths(h.command);

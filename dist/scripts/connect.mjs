@@ -809,7 +809,8 @@ function takeAuthNotice(projectRoot) {
 
 // scripts/connect.ts
 var DEFAULT_WAIT_SECONDS = 90;
-var PLUGIN_VERSION = "0.9.1";
+var PLUGIN_VERSION = "0.9.2";
+var DEFAULT_WORKSPACE_NAME = "Default Workspace";
 
 class AugentaRequestError extends Error {
   status;
@@ -846,6 +847,8 @@ function parseArgs(argv) {
       args.harness = value;
     } else if (flag === "--workspace") {
       (args.workspaces ??= []).push(valueFor(flag, i++));
+    } else if (flag === "--create-workspace") {
+      args.createWorkspace = valueFor(flag, i++);
     } else if (flag === "--profile") {
       args.profile = valueFor(flag, i++);
     } else if (flag === "--wait") {
@@ -908,6 +911,9 @@ function writeApiKeyConfig(projectRoot, apiKey, endpoint2) {
   return path;
 }
 function writeOAuthConfig(projectRoot, profileId, connectorIds, endpoint2) {
+  if (connectorIds.length === 0) {
+    throw new Error("an OAuth connection requires at least one Connector");
+  }
   const dir = ensureAugentaDir(projectRoot);
   const path = join5(dir, "config.json");
   writeFileSync4(path, `${JSON.stringify({
@@ -959,9 +965,11 @@ async function chooseMany(prompt, values, label, opts = {}) {
   const rl = createInterface({ input, output });
   try {
     for (let attempt = 0;attempt < 5; attempt++) {
-      const answer = await rl.question(`Selection (comma-separated, e.g. 1,3 — empty to select nothing) [1-${values.length}]: `);
-      if (!answer.trim())
-        return [];
+      const answer = await rl.question(`Selection (comma-separated, e.g. 1,3; at least one required) [1-${values.length}]: `);
+      if (!answer.trim()) {
+        console.log("Choose at least one Workspace, or cancel the command.");
+        continue;
+      }
       const selected = [];
       let bad;
       for (const part of answer.split(",")) {
@@ -1044,10 +1052,64 @@ async function listWorkspaces(profileId, gateway) {
   if (workspaces.length === 0) {
     throw new Error("the authenticated organization has no active Workspaces");
   }
-  return workspaces;
+  const isDefault = (workspace) => workspace.name.trim().toLowerCase() === DEFAULT_WORKSPACE_NAME.toLowerCase();
+  return [...workspaces].sort((a, b) => Number(isDefault(b)) - Number(isDefault(a)));
 }
-async function selectedWorkspaces(profileId, gateway, preselectedIds = [], available) {
-  return chooseMany("Choose every Workspace this project should feed (each one receives the full record):", [...available ?? await listWorkspaces(profileId, gateway)], (workspace) => `${workspace.name} (${workspace.id})`, { preselected: (workspace) => preselectedIds.includes(workspace.id) });
+async function createWorkspace(profileId, gateway, requestedName) {
+  const name = requestedName.trim();
+  if (!name)
+    throw new Error("a Workspace name is required");
+  const result = await bearerJson(profileId, `${gateway}/v1/workspaces`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name })
+  });
+  const workspace = result.workspace ?? result;
+  if (typeof workspace.id !== "string" || typeof workspace.name !== "string") {
+    throw new Error("Augenta created the Workspace but returned an invalid response");
+  }
+  return { id: workspace.id, name: workspace.name };
+}
+async function askWorkspaceName() {
+  if (!input.isTTY) {
+    throw new Error("run augenta:connect in an interactive terminal");
+  }
+  const rl = createInterface({ input, output });
+  try {
+    for (let attempt = 0;attempt < 5; attempt++) {
+      const name = (await rl.question("New Workspace name: ")).trim();
+      if (name)
+        return name;
+      console.log("Enter a name for the new Workspace, or cancel the command.");
+    }
+    throw new Error("no valid Workspace name was given");
+  } finally {
+    rl.close();
+  }
+}
+async function selectedWorkspaces(profileId, gateway, organizationName, preselectedIds = [], available, prompts = { chooseMany, askWorkspaceName }) {
+  let choices = [...available ?? await listWorkspaces(profileId, gateway)];
+  const preselected = new Set(preselectedIds);
+  while (true) {
+    const menu = [
+      ...choices.map((workspace) => ({ kind: "workspace", workspace })),
+      { kind: "create" }
+    ];
+    const selected = await prompts.chooseMany("Choose every Workspace this project should feed (each one receives the full record):", menu, (choice) => choice.kind === "create" ? "Create a new Workspace" : `${choice.workspace.name} (${choice.workspace.id})`, {
+      preselected: (choice) => choice.kind === "workspace" && preselected.has(choice.workspace.id)
+    });
+    if (!selected.some((choice) => choice.kind === "create")) {
+      return selected.map((choice) => choice.workspace);
+    }
+    if (selected.length > 1) {
+      console.log("Choose Create a new Workspace by itself; the complete destination list appears again after creation.");
+      continue;
+    }
+    const name = await prompts.askWorkspaceName();
+    const created = await createWorkspace(profileId, gateway, name);
+    console.log(`Created ${created.name} (${created.id}) in ${organizationName}. Choose the complete destination set.`);
+    choices = await listWorkspaces(profileId, gateway);
+  }
 }
 async function currentConnector(profileId, gateway, id) {
   if (!id)
@@ -1176,18 +1238,9 @@ async function connectProject(projectRoot, args) {
   if (environment !== "prod") {
     console.log(`This is the ${environment} environment, not production.`);
   }
-  const workspaces = await selectedWorkspaces(selected.profileId, gateway, resolvedPrior.map((link) => link.workspaceId), available);
+  const workspaces = await selectedWorkspaces(selected.profileId, gateway, selected.me.org.name, resolvedPrior.map((link) => link.workspaceId), available);
   if (workspaces.length === 0) {
-    if (priorIds.length > 0) {
-      const current = resolvedPrior.map((link) => {
-        const name = available.find((n) => n.id === link.workspaceId)?.name;
-        return name ?? link.workspaceId;
-      }).join(", ");
-      console.log(`Nothing changed. This project still feeds ${current || "its existing destinations"}. To stop capture entirely, delete ${configPath(projectRoot)}.`);
-    } else {
-      console.log("Nothing connected. No config was written.");
-    }
-    return;
+    throw new Error("choose at least one Workspace");
   }
   const { results, removed, unresolvedConnectorIds, configPath: written } = await establishConnectors(projectRoot, args, selected.profileId, gateway, workspaces, priorIds, available, resolvedPrior);
   const live = results.filter((result) => result.connectorId);
@@ -1336,6 +1389,54 @@ async function awaitLogin(args) {
     throw error;
   }
 }
+async function createWorkspaceForSelection(resolved, args) {
+  const name = args.createWorkspace?.trim();
+  if (!name) {
+    return {
+      status: "error",
+      code: "workspace_name_required",
+      message: "a non-empty Workspace name is required"
+    };
+  }
+  const { oauth, gateway } = await resolveOAuth(args);
+  const prior = priorConnection(resolved.projectRoot);
+  const usable = await usableProfiles(oauth, args.profile ?? prior?.profileId);
+  if (usable.length === 0) {
+    return {
+      status: "error",
+      code: "not_signed_in",
+      message: "no usable Augenta sign-in; start one with --login"
+    };
+  }
+  if (usable.length > 1 && !args.profile) {
+    return {
+      status: "error",
+      code: "need_profile",
+      message: "several organizations are signed in; pass --profile <profileId> to choose one"
+    };
+  }
+  const picked = args.profile ? usable.find((item) => item.profileId === args.profile) : usable[0];
+  if (!picked) {
+    return {
+      status: "error",
+      code: "unknown_profile",
+      message: `no usable sign-in matches profile ${args.profile}`
+    };
+  }
+  const createdWorkspace = await createWorkspace(picked.profileId, gateway, name);
+  try {
+    return {
+      ...await workspaceStep(picked.profileId, gateway, picked.me),
+      createdWorkspace
+    };
+  } catch (error) {
+    return {
+      status: "workspace_created",
+      createdWorkspace,
+      message: `Created ${createdWorkspace.name}, but could not refresh the Workspace list: ${describeError(error)}. Re-run --probe; do not create it again.`
+    };
+  }
+}
 async function connectToWorkspaces(resolved, args) {
   const { oauth, gateway } = await resolveOAuth(args);
   const prior = priorConnection(resolved.projectRoot);
@@ -1362,8 +1463,15 @@ async function connectToWorkspaces(resolved, args) {
       message: `no usable sign-in matches profile ${args.profile}`
     };
   }
-  const available = await listWorkspaces(picked.profileId, gateway);
   const requested = [...new Set(args.workspaces ?? [])];
+  if (requested.length === 0) {
+    return {
+      status: "error",
+      code: "workspace_required",
+      message: "select at least one Workspace; nothing was created or changed"
+    };
+  }
+  const available = await listWorkspaces(picked.profileId, gateway);
   const unknown = requested.filter((id) => !available.some((item) => item.id === id));
   if (unknown.length > 0) {
     return {
@@ -1409,6 +1517,16 @@ async function runJsonVerb(resolved, args) {
       message: "--api-key is a human/CI path and is not available in --json mode; run it directly in a terminal"
     };
   }
+  if (args.createWorkspace !== undefined && args.workspaces?.length) {
+    return {
+      status: "error",
+      code: "conflicting_verbs",
+      message: "--create-workspace and --workspace are separate steps; create first, then ask for the complete destination set again and pass it with --workspace"
+    };
+  }
+  if (args.createWorkspace !== undefined) {
+    return createWorkspaceForSelection(resolved, args);
+  }
   if (args.workspaces?.length)
     return connectToWorkspaces(resolved, args);
   if (args.awaitLogin)
@@ -1420,7 +1538,7 @@ async function runJsonVerb(resolved, args) {
   return {
     status: "error",
     code: "no_verb",
-    message: "--json requires one of --probe, --login, --await-login, or --workspace <id> (repeatable)"
+    message: "--json requires one of --probe, --login, --await-login, --create-workspace <name>, or --workspace <id> (repeatable)"
   };
 }
 async function verifyApiKeyConnection(apiKey, gateway) {
@@ -1476,6 +1594,9 @@ if (isMain(import.meta.url)) {
   const wantsJson = argv.includes("--json");
   try {
     const args = parseArgs(argv);
+    if (args.createWorkspace !== undefined && !args.json) {
+      throw new Error("--create-workspace is a --json verb; the interactive flow offers Create a new Workspace in its menu");
+    }
     const resolved = resolveProject(args, process.cwd());
     const projectRoot = resolved.projectRoot;
     if (args.json) {
@@ -1494,7 +1615,7 @@ if (isMain(import.meta.url)) {
       console.log(`${existed ? "Updated" : "Wrote"} ${path} (0600). Platform-key capture is enabled through Connector ${connector.id}.`);
       console.log("Off switch: delete .augenta/config.json, or set AUGENTA_CAPTURE_ENABLED=0.");
     } else if (!input.isTTY) {
-      throw new Error("signing in needs an interactive terminal; agents should use --json with --probe/--login/--await-login/--workspace, and --api-key is for autonomous or CI clients.");
+      throw new Error("signing in needs an interactive terminal; agents should use --json with --probe/--login/--await-login/--create-workspace/--workspace, and --api-key is for autonomous or CI clients.");
     } else {
       await connectProject(projectRoot, args);
     }
@@ -1513,11 +1634,13 @@ export {
   writeApiKeyConfig,
   verifyApiKeyConnection,
   startLogin,
+  selectedWorkspaces,
   runJsonVerb,
   resolveTargetProject,
   resolveProject,
   probeConnection,
   parseArgs,
+  createWorkspaceForSelection,
   connectWithApiKey,
   connectToWorkspaces,
   connectProject,

@@ -65,6 +65,32 @@ A directory there does not prove the plugin is installed — an uninstalled
 marketplace leaves its cache behind. `claude plugin list` and `codex plugin list`
 are the authority.
 
+## Override the Node runtime used by hooks
+
+Desktop hook processes can see a different PATH than the interactive terminal.
+The shipped hook runner probes common Node version-manager locations and requires
+Node 20 or newer. To pin one executable while diagnosing a host, set:
+
+```bash
+export AUGENTA_NODE=/absolute/path/to/node
+```
+
+The override is authoritative: an invalid or unloadable executable fails with a
+specific hook error instead of falling through to another installation. It does
+not affect `scripts/connect.ts`, which the agent invokes from its own shell.
+
+Without the override, a host where no Node 20+ can be found is quiet on purpose:
+the runner reads `cwd` out of the hook payload and reports the missing runtime
+only when that project has `.augenta/config.json`, so an unconnected project
+never sees an error about a runtime it does not use. To see the message, run a
+hook by hand from a connected project with a PATH that has no working Node:
+
+```bash
+printf '{"cwd":"%s","hook_event_name":"Stop"}' "$PWD" \
+  | env -i HOME="$HOME" PATH= sh "<plugin-root>/scripts/run-node-hook.sh" \
+      "<plugin-root>/dist/capture/capture.mjs"
+```
+
 ## The hosted dev loop
 
 ```bash
@@ -81,10 +107,12 @@ The connect step needs an interactive terminal: the Workspace choice goes throug
 `chooseMany`, which refuses a non-TTY rather than print a menu nobody can answer.
 It is a comma-separated multi-select (`1,3`) over every Workspace, with the
 project's current destinations marked `[x]`, and it always asks — there is no
-auto-select even for a single Workspace. **An empty answer connects nothing**, so
-the dev loop must type at least one number. This is the positive human OAuth gate described in `AGENTS.md`; GitHub
-Actions verifies the platform-key path instead and must never receive a human
-access or refresh token.
+auto-select even for a single Workspace. The menu also offers `Create a new
+Workspace`; after creation it refreshes and asks for the complete destination set
+again. **An empty answer is rejected**, so the dev loop must type at least one
+Workspace number. This is the positive human OAuth gate described in `AGENTS.md`;
+GitHub Actions verifies the platform-key path instead and must never receive a
+human access or refresh token.
 
 Once connected, the project's `.augenta/config.json` carries the dev gateway as
 `endpoint`, so hooks ship to dev with no variable set at runtime. The environment

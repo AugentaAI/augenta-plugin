@@ -14,8 +14,9 @@ receives the full record — the same activity and memory, complete, in each.**
 Connection is per project and is the user's consent boundary.
 
 You run the connect script yourself and drive it with `--json`. Each verb returns
-one JSON object and exits. The user's only jobs are answering one question and,
-if they are not signed in yet, clicking one link.
+one JSON object and exits. The user's only jobs are answering the Workspace
+question, naming a new Workspace if they choose to create one, and, if they are
+not signed in yet, clicking one link.
 
 ## The script
 
@@ -154,12 +155,14 @@ was killed.
 ## 3. Choose the Workspaces
 
 This single question is both the consent gate and the target choice, so it is the
-one step that always happens. **The answer is the complete set of destinations** —
-the project will feed exactly what the user selects here and nothing else. Ask it
-every time, including when the organization has only one Workspace and including
-when the project is already connected. Never offer to keep the current selection
-without showing it; never treat one answer as authorization for more than one
-destination; never proceed on silence.
+one step that always happens. **The answer is the complete set of destinations
+and must be non-empty** — the project will feed exactly what the user selects
+here and nothing else, and a successful connection must feed at least one Workspace.
+Every organization starts with `Default Workspace`. Ask it every time,
+including when that is the only Workspace and including when the project is
+already connected. Never offer to keep the current selection without showing it;
+never treat one answer as authorization for more than one destination; never
+proceed on silence.
 
 Before the user answers, say — in one or two sentences, naming the organization
 from `signedInAs`:
@@ -172,25 +175,49 @@ from `signedInAs`:
 
 **If your harness's user-input mechanism can offer several options at once**, ask
 one question listing every entry from `workspaces`, with the Workspaces in
-`destinations` already selected, plus a final option `Don't connect this project`.
+`destinations` already selected, plus a final option `Create a new Workspace`.
 
 **If it cannot**, ask in plain text: number the entries, mark the current
-destinations, and ask the user to reply with every number they want, or `none`.
-Then **restate the set by name and get a yes before running the verb** — a typed
-answer is your interpretation of what they meant, not something they saw
-rendered.
+destinations, add `Create a new Workspace` as the final numbered option, and say
+`Reply with every number you want. Choose at least one Workspace.` A valid
+numbered selection is the user's consent: run the verb from that selection
+without asking for a second yes/no confirmation.
 
-If `Don't connect this project` comes back **together with** any Workspace, that
-answer has no meaning: say so and ask again. Do not connect. If they decline,
-acknowledge and stop.
+An empty answer or `none` is not a valid destination set: ask again and do not
+run the verb. If the user cancels the flow, acknowledge and stop; for an already
+connected project, cancellation leaves its current destinations unchanged.
+
+If `Create a new Workspace` is selected, it must be the only selection. Ask for
+the name and state that it will be created in the named organization. Selecting
+the create option and supplying a non-empty name is the explicit creation
+request, so do not add a second yes/no confirmation. Then shell-escape the name
+as one argument and run:
+
+```bash
+node "$CONNECT" --json --create-workspace <name>
+```
+
+If `--probe` returned `need_profile`, add `--profile <profileId>`. On
+`status: "need_workspace"`, name `createdWorkspace`, use the returned refreshed
+`workspaces` list, and ask the required non-empty destination question again.
+Creating a Workspace does not connect the project or select that Workspace by
+itself. On `workspace_created`, creation succeeded but the refreshed list failed:
+name `createdWorkspace`, run `--probe` once, and continue from its live list; do
+not create the Workspace again. On `status: "error"`, report `message`; do not
+claim creation succeeded.
 
 ```bash
 node "$CONNECT" --json --workspace <id> --workspace <id>
 ```
 
 Repeat `--workspace` once per selected Workspace. Pass the `id`s, never the
-names. If `--probe` returned `need_profile`, ask which organization first and add
-`--profile <profileId>`.
+names. The arguments are exactly the entries the user selected from the list you
+rendered — never a destination the user did not select, and never one they
+dropped. If `--probe` returned `need_profile`, ask which organization first and
+add `--profile <profileId>`.
+
+Creation and connection are separate calls: never pass `--create-workspace` and
+`--workspace` together, which is refused as `conflicting_verbs`.
 
 ## 4. Confirm
 
@@ -220,16 +247,17 @@ themselves. Do not describe the result as connected to everything the user
 selected.
 
 Mention that deleting `.augenta/config.json` or setting
-`AUGENTA_CAPTURE_ENABLED=0` disables activity and memory capture. There is no
-"select nothing" answer that disconnects an already-connected project — deleting
-the config is how the user turns it all off.
+`AUGENTA_CAPTURE_ENABLED=0` disables activity and memory capture. A completed
+connection always has at least one Workspace; deleting the config is how the user
+turns capture off.
 
 On `status: "error"`, report `message`. `unknown_workspace` means an id did not
 match the organization's live list and **nothing was created** — re-run `--probe`
 and ask again rather than guessing. `no_destination_linked` means no destination
-could be linked and no config was written. Other common causes are a missing Node
-runtime, a declined or expired authorization, no active Workspaces, or an
-organization not yet provisioned in Augenta.
+could be linked and no config was written. `workspace_required` means the caller
+sent no destination; ask the required question again. Other common causes are a
+missing Node runtime, a declined or expired authorization, no active Workspaces,
+or an organization not yet provisioned in Augenta.
 
 ## Agent constraints
 
