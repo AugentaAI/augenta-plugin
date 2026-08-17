@@ -192,4 +192,9 @@ jobs:
           printf '{"transcript_path":"%s/.codex/sessions/2026/06/24/rollout-2026-06-24T00-00-00-a.jsonl","cwd":"%s"}' \
             "$HOME" "$codex_project" \
             | node "$codex_plugin_root/dist/hooks/session-start.mjs" | tee codex-hook-out.json
-          jq -e '.hookSpecificOutput.initialUserMessage == "Connect Augenta"' codex-hook-out.json
+          jq -e '
+            .hookSpecificOutput.hookEventName == "SessionStart" and
+            (.hookSpecificOutput.additionalContext | type == "string") and
+            (.hookSpecificOutput.additionalContext | contains("$augenta:connect")) and
+            ((.hookSpecificOutput | keys | sort) == ["additionalContext", "hookEventName"])
+          ' codex-hook-out.json
