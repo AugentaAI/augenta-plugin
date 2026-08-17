@@ -1314,6 +1314,7 @@ try {
     cwd = payload.cwd;
 } catch {}
 var codex = isCodexHarness(transcriptPath);
+var connectAction = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
 var projectPath = cwd || process.cwd();
 var configuredRoot = resolveProjectRoot(projectPath);
 var cfg = configuredRoot ? loadProjectConfig(configuredRoot) : undefined;
@@ -1321,7 +1322,7 @@ var staleConfig = Boolean(configuredRoot) && !cfg;
 var connectedRoot = cfg ? configuredRoot : undefined;
 if (connectedRoot) {
   if (captureEnabled(cfg)) {
-    const action = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
+    const action = connectAction;
     const notices = [];
     const authNotice = takeAuthNotice(connectedRoot);
     if (authNotice) {
@@ -1375,7 +1376,7 @@ try {
 } catch {
   process.exit(0);
 }
-var codexContext = staleConfig ? "Augenta's saved connection for this project can no longer be read — reconnecting." : "Augenta isn't connected for this project yet — starting connection.";
+var codexContext = staleConfig ? `Augenta's saved connection for this project can no longer be read, so capture is off. Run ${connectAction} to reconnect it.` : `Augenta isn't connected for this project yet. Run ${connectAction} to connect it.`;
 var claudeContext = staleConfig ? "[Augenta] This project has an .augenta/config.json that this plugin version " + "cannot read — it predates the current connection format, or the write was " + "truncated — so capture is silently off. This is the one automatic prompt it " + "will ever get. Run the augenta connect skill now (/augenta:connect) to " + "reconnect it; anything already queued in the outbox ships once it succeeds. " + "Tokens and API keys must never be pasted into the chat." : "[Augenta] This project has not been connected for Augenta capture and this " + "is the one automatic prompt it will ever get. Run the augenta connect skill now " + "(/augenta:connect): it explains what capture does, then drives connect's --json " + "verbs itself so the user only answers one question and, at most, clicks one " + "sign-in link. Tokens and API keys must never be pasted into the chat.";
 var additionalContext = codex ? codexContext : claudeContext;
 process.stdout.write(JSON.stringify({

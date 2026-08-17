@@ -72,7 +72,9 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
       "additionalContext",
       "hookEventName",
     ]);
-    expect(parsed.hookSpecificOutput?.additionalContext).toContain("starting connection");
+    // Nothing auto-fires on Codex, so the one prompt this project ever gets must
+    // name how to act on it — a bare narration would strand the user.
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("$augenta:connect");
     expect(out).not.toContain("/augenta:connect");
     expect(out).not.toContain("[Augenta]");
   });
@@ -166,8 +168,16 @@ describe("a config file the parser rejects is UNCONNECTED, not connected", () =>
   test("Codex gets user-facing wording with no agent scaffolding", () => {
     writeConfig(LEGACY);
     const out = fire({ transcript_path: CODEX_TP, cwd: project });
-    expect(JSON.parse(out).hookSpecificOutput?.initialUserMessage).toBeUndefined();
-    expect(JSON.parse(out).hookSpecificOutput?.additionalContext).toContain("reconnecting");
+    const parsed = JSON.parse(out);
+    expect(parsed.hookSpecificOutput?.initialUserMessage).toBeUndefined();
+    // Same strict key set as the unconnected Codex case: both branches share one
+    // emit site, so any field Codex would reject must fail on either path.
+    expect(Object.keys(parsed.hookSpecificOutput).sort()).toEqual([
+      "additionalContext",
+      "hookEventName",
+    ]);
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("can no longer be read");
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("$augenta:connect");
     expect(out).not.toContain("[Augenta]");
     expect(out).not.toContain("/augenta:connect");
   });

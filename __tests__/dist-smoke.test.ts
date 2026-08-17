@@ -110,6 +110,9 @@ describe("session-start, run as the user's harness runs it", () => {
       "additionalContext",
       "hookEventName",
     ]);
+    // With no initialUserMessage nothing auto-fires, so the shipped bundle's one
+    // prompt has to tell the user how to connect.
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("$augenta:connect");
   });
 });
 

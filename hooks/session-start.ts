@@ -1,12 +1,15 @@
 /**
  * Augenta SessionStart hook — two jobs, via `hookSpecificOutput`:
  *
- *  Unconnected project → auto-fire the connect skill exactly once per project.
+ *  Unconnected project → prompt exactly once per project: auto-fire the connect
+ *  skill on Claude Code, ask the user to invoke it on Codex.
  *  SessionStart is the earliest point a plugin can act. Claude Code accepts an
  *  `initialUserMessage`, which creates the first connect turn on its own. Codex's
  *  SessionStart schema accepts only `hookEventName` and `additionalContext`, so
  *  it receives the user-facing reminder and the user invokes `$augenta:connect`
- *  (or asks to connect) explicitly.
+ *  (or asks to connect) explicitly. Because that reminder is the one automatic
+ *  prompt the project will ever get, it must NAME that invocation — narrating a
+ *  connection the hook is not starting would leave the user with no next step.
  *
  *  Run-once-per-project guarantee: fire only when the project has NO USABLE
  *  `.augenta/config.json` AND has not been auto-prompted before. The prompted
@@ -63,6 +66,10 @@ try {
 // On Codex, additionalContext is shown to the user (no hidden channel), so we
 // inject clean user-facing facts instead of internal agent instructions.
 const codex = isCodexHarness(transcriptPath);
+// How the user invokes connect in THIS harness. Codex has no slash commands, so
+// its prompts name the `$` form alongside the plain-English ask. Every prompt
+// below that asks the user to act routes through this.
+const connectAction = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
 const projectPath = cwd || process.cwd();
 
 // --- Connected? An ancestor has a .augenta/config.json the parser ACCEPTS. ----
@@ -78,7 +85,7 @@ if (connectedRoot) {
   // noise. Leaving the marker unread also keeps it — it surfaces on the first
   // session after capture is re-enabled, which is when it becomes actionable.
   if (captureEnabled(cfg)) {
-    const action = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
+    const action = connectAction;
     const notices: string[] = [];
     const authNotice = takeAuthNotice(connectedRoot);
     if (authNotice) {
@@ -168,9 +175,12 @@ try {
 
 // Codex shows additionalContext verbatim, so its wording stays clean and
 // user-facing; Claude Code's is agent-directed and may carry scaffolding.
+// Nothing auto-starts on Codex (no initialUserMessage), so these state the fact
+// AND the invocation — this is the project's only automatic prompt, and one that
+// narrated a connection nobody is making would strand the user with no next step.
 const codexContext = staleConfig
-  ? "Augenta's saved connection for this project can no longer be read — reconnecting."
-  : "Augenta isn't connected for this project yet — starting connection.";
+  ? `Augenta's saved connection for this project can no longer be read, so capture is off. Run ${connectAction} to reconnect it.`
+  : `Augenta isn't connected for this project yet. Run ${connectAction} to connect it.`;
 
 const claudeContext = staleConfig
   ? "[Augenta] This project has an .augenta/config.json that this plugin version " +
