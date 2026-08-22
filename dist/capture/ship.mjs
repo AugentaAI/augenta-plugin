@@ -52,11 +52,14 @@ import { mkdirSync as mkdirSync2, existsSync as existsSync2, readFileSync, write
 
 // capture/augenta-dir.ts
 import { join } from "node:path";
-import { mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
 function ensureAugentaDir(projectRoot) {
   const dir = join(projectRoot, ".augenta");
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
+    try {
+      chmodSync(dir, 448);
+    } catch {}
     const ignore = join(dir, ".gitignore");
     if (!existsSync(ignore))
       writeFileSync(ignore, `*
@@ -448,7 +451,7 @@ function captureEnabled(cfg) {
 
 // capture/auth.ts
 import {
-  chmodSync,
+  chmodSync as chmodSync2,
   existsSync as existsSync4,
   mkdirSync as mkdirSync3,
   readFileSync as readFileSync3,
@@ -476,13 +479,13 @@ var STALE_LOCK_MS = 30000;
 var REQUEST_TIMEOUT_MS = 15000;
 function ensureAuthRoot() {
   mkdirSync3(authRoot(), { recursive: true, mode: 448 });
-  chmodSync(authRoot(), 448);
+  chmodSync2(authRoot(), 448);
 }
 function readAuthStore() {
   try {
     ensureAuthRoot();
     if (existsSync4(authPath()))
-      chmodSync(authPath(), 384);
+      chmodSync2(authPath(), 384);
     const parsed = JSON.parse(readFileSync3(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
       return { version: 1, profiles: {} };
@@ -502,9 +505,9 @@ function writeAuthStore(store) {
       mode: 384,
       flag: "wx"
     });
-    chmodSync(tmp, 384);
+    chmodSync2(tmp, 384);
     renameSync2(tmp, path);
-    chmodSync(path, 384);
+    chmodSync2(path, 384);
   } finally {
     try {
       if (existsSync4(tmp))
@@ -597,7 +600,7 @@ function savePendingLogin(pending) {
   const path = pendingLoginPath();
   writeFileSync3(path, `${JSON.stringify(pending, null, 2)}
 `, { mode: 384 });
-  chmodSync(path, 384);
+  chmodSync2(path, 384);
 }
 function readPendingLogin() {
   try {
@@ -779,7 +782,7 @@ async function fetchWithProfile(profileId, url, init = {}) {
   const first = await send(false);
   return first.status === 401 ? send(true) : first;
 }
-var NOTICES = ["relogin", "connect"];
+var NOTICES = ["relogin", "badkey", "connect"];
 function noticePath(projectRoot, notice) {
   return join4(projectRoot, ".augenta", `${notice}-required`);
 }
@@ -1039,11 +1042,11 @@ function appendRejected(projectRoot, entries) {
 `);
 }
 function shippingNotice(authMode, status) {
-  if (authMode === "oauth" && status === 401)
-    return "relogin";
-  if (status === 403 || status === 404 || authMode === "api-key" && status === 401) {
-    return "connect";
+  if (status === 401) {
+    return authMode === "oauth" ? "relogin" : "badkey";
   }
+  if (status === 403 || status === 404)
+    return "connect";
   return;
 }
 async function drain(opts) {
@@ -1112,8 +1115,8 @@ function fanOutNotice(authMode, statuses) {
   let connect = false;
   for (const status of statuses) {
     const notice = shippingNotice(authMode, status);
-    if (notice === "relogin")
-      return "relogin";
+    if (notice === "relogin" || notice === "badkey")
+      return notice;
     if (notice === "connect")
       connect = true;
   }

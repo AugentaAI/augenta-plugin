@@ -8,7 +8,7 @@
  * Run: bun test capture/augenta-dir.test.ts
  */
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync, statSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureAugentaDir } from "./augenta-dir";
@@ -34,6 +34,41 @@ describe("ensureAugentaDir", () => {
     writeFileSync(gitignore(), "# mine\nconfig.json\n");
     ensureAugentaDir(project);
     expect(readFileSync(gitignore(), "utf8")).toBe("# mine\nconfig.json\n");
+  });
+
+  test("creates the dir 0700", () => {
+    ensureAugentaDir(project);
+    expect(statSync(join(project, ".augenta")).mode & 0o777).toBe(0o700);
+  });
+
+  /* The case the autonomous path makes ordinary. `mkdirSync`'s `mode` applies at
+     creation, so a directory the user made keeps their umask — 0755 by default —
+     and every local user can then traverse it to read config.json and the raw
+     trajectory buffers. Since writing that config by hand is now the DOCUMENTED
+     way to configure a service, the plugin is usually not the creator. */
+  test("narrows a pre-existing world-readable dir to 0700", () => {
+    const dir = join(project, ".augenta");
+    mkdirSync(dir, { recursive: true, mode: 0o755 });
+    chmodSync(dir, 0o755); // defeat the creating umask, so the premise is real
+    expect(statSync(dir).mode & 0o777).toBe(0o755);
+
+    ensureAugentaDir(project);
+
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+  });
+
+  test("a key already sitting in a loose dir is protected by the same call", () => {
+    const dir = join(project, ".augenta");
+    mkdirSync(dir, { recursive: true });
+    chmodSync(dir, 0o755);
+    writeFileSync(join(dir, "config.json"), '{"authMode":"api-key","apiKey":"sk-aug-x.y"}');
+
+    ensureAugentaDir(project);
+
+    // 0700 on the DIRECTORY is the load-bearing protection: reading the config
+    // needs search permission on the directory, so this closes the hole whatever
+    // mode the hand-written file itself has.
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
   });
 });
 

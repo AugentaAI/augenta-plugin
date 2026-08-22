@@ -408,11 +408,14 @@ import { mkdirSync as mkdirSync2, existsSync as existsSync2, readFileSync, write
 
 // capture/augenta-dir.ts
 import { join } from "node:path";
-import { mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
 function ensureAugentaDir(projectRoot) {
   const dir = join(projectRoot, ".augenta");
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
+    try {
+      chmodSync(dir, 448);
+    } catch {}
     const ignore = join(dir, ".gitignore");
     if (!existsSync(ignore))
       writeFileSync(ignore, `*

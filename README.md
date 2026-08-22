@@ -117,9 +117,26 @@ directory:
 
 Rotating access and refresh tokens live only in `~/.augenta/auth.json` (mode
 `0600`, inside a `0700` directory). The project stores no OAuth token,
-organization id, or Workspace id. Autonomous services and CI can use the
-advanced `--api-key <AugentaKey>` option; that path is single-destination and the
-assigned Connector is derived server-side.
+organization id, or Workspace id. Autonomous services and CI configure a **file** rather than run a command: write
+`{"authMode": "api-key", "apiKey": "<AugentaKey>"}` to `.augenta/config.json` and
+the plugin reads it directly. That path is single-destination and the assigned
+Connector is derived server-side, so there is no id to look up.
+
+Two CLI adjuncts exist for it, neither of them the interface. `--api-key <value>`
+writes that same file and verifies the key first, which is convenient
+interactively but expands the secret into `argv` where any local process can read
+it. `--verify-only` runs the same gateway check against the key **already** on
+disk and writes nothing — the pre-flight without the exposure, and the one to
+reach for in CI after provisioning:
+
+```bash
+node "<plugin-root>/dist/scripts/connect.mjs" --verify-only
+```
+
+Whoever writes the file owns its permissions: `.augenta/` wants `0700` and the
+config `0600`. The plugin narrows the directory to `0700` on every write it makes
+under it, and adds the self-ignoring `.gitignore`, but it cannot chmod a config it
+did not write.
 
 The presence of a **readable** `.augenta/config.json` is the project's consent to
 capture both agent activity and project memory. Delete that file—or the entire

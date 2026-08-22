@@ -126,11 +126,14 @@ import { mkdirSync as mkdirSync2, existsSync as existsSync3, readFileSync as rea
 
 // capture/augenta-dir.ts
 import { join as join2 } from "node:path";
-import { mkdirSync, existsSync as existsSync2, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, existsSync as existsSync2, writeFileSync } from "node:fs";
 function ensureAugentaDir(projectRoot) {
   const dir = join2(projectRoot, ".augenta");
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
+    try {
+      chmodSync(dir, 448);
+    } catch {}
     const ignore = join2(dir, ".gitignore");
     if (!existsSync2(ignore))
       writeFileSync(ignore, `*
@@ -900,7 +903,7 @@ function captureAgentMemory(opts) {
 
 // capture/auth.ts
 import {
-  chmodSync,
+  chmodSync as chmodSync2,
   existsSync as existsSync6,
   mkdirSync as mkdirSync4,
   readFileSync as readFileSync4,
@@ -973,13 +976,13 @@ var STALE_LOCK_MS = 30000;
 var REQUEST_TIMEOUT_MS = 15000;
 function ensureAuthRoot() {
   mkdirSync4(authRoot(), { recursive: true, mode: 448 });
-  chmodSync(authRoot(), 448);
+  chmodSync2(authRoot(), 448);
 }
 function readAuthStore() {
   try {
     ensureAuthRoot();
     if (existsSync6(authPath()))
-      chmodSync(authPath(), 384);
+      chmodSync2(authPath(), 384);
     const parsed = JSON.parse(readFileSync4(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
       return { version: 1, profiles: {} };
@@ -999,9 +1002,9 @@ function writeAuthStore(store) {
       mode: 384,
       flag: "wx"
     });
-    chmodSync(tmp, 384);
+    chmodSync2(tmp, 384);
     renameSync3(tmp, path);
-    chmodSync(path, 384);
+    chmodSync2(path, 384);
   } finally {
     try {
       if (existsSync6(tmp))
@@ -1094,7 +1097,7 @@ function savePendingLogin(pending) {
   const path = pendingLoginPath();
   writeFileSync4(path, `${JSON.stringify(pending, null, 2)}
 `, { mode: 384 });
-  chmodSync(path, 384);
+  chmodSync2(path, 384);
 }
 function readPendingLogin() {
   try {
@@ -1276,7 +1279,7 @@ async function fetchWithProfile(profileId, url, init = {}) {
   const first = await send(false);
   return first.status === 401 ? send(true) : first;
 }
-var NOTICES = ["relogin", "connect"];
+var NOTICES = ["relogin", "badkey", "connect"];
 function noticePath(projectRoot, notice) {
   return join6(projectRoot, ".augenta", `${notice}-required`);
 }
@@ -1325,7 +1328,9 @@ if (connectedRoot) {
     const action = connectAction;
     const notices = [];
     const authNotice = takeAuthNotice(connectedRoot);
-    if (authNotice) {
+    if (authNotice === "badkey") {
+      notices.push("Augenta has queued capture: the platform key in .augenta/config.json was refused (401). " + "Check that the key is complete and current, and that its Connector is still enabled; " + "capture resumes on its own once a request is accepted. " + `Do not run ${action} to fix this — it starts a browser sign-in and would replace this project's key config.`);
+    } else if (authNotice) {
       const reason = authNotice === "relogin" ? "a new Augenta sign-in" : "a valid inbound Connector";
       notices.push(`Augenta has queued capture waiting for ${reason}. Run ${action}; queued records will resume shipping after reconnecting.`);
     }

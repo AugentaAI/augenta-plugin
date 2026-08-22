@@ -88,7 +88,20 @@ if (connectedRoot) {
     const action = connectAction;
     const notices: string[] = [];
     const authNotice = takeAuthNotice(connectedRoot);
-    if (authNotice) {
+    if (authNotice === "badkey") {
+      /* Worded apart from the two below, not just with a different noun, because
+         the remedy is different in kind. This project authenticates with a platform
+         key from its own config file; there is no sign-in to redo and no browser to
+         do it in. Naming the connect command here would be actively wrong — without
+         --api-key it takes the oauth branch and overwrites this config — so it is
+         the one notice that tells the user NOT to run it. */
+      notices.push(
+        "Augenta has queued capture: the platform key in .augenta/config.json was refused (401). " +
+          "Check that the key is complete and current, and that its Connector is still enabled; " +
+          "capture resumes on its own once a request is accepted. " +
+          `Do not run ${action} to fix this — it starts a browser sign-in and would replace this project's key config.`,
+      );
+    } else if (authNotice) {
       const reason =
         authNotice === "relogin"
           ? "a new Augenta sign-in"

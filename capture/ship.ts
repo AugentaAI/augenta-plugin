@@ -452,14 +452,20 @@ export interface DrainResult {
 export function shippingNotice(
   authMode: AuthMode,
   status: number,
-): "relogin" | "connect" | undefined {
-  if (authMode === "oauth" && status === 401) return "relogin";
-  if (
-    (status === 403 || status === 404) ||
-    (authMode === "api-key" && status === 401)
-  ) {
-    return "connect";
+): "relogin" | "badkey" | "connect" | undefined {
+  if (status === 401) {
+    /* Split by mode, because the remedies are not just differently worded — they
+       are opposites. An oauth 401 means sign in again, which is what the connect
+       flow does. An api-key 401 means the KEY was refused, and the connect flow is
+       the wrong instrument for it: without --api-key it takes the oauth branch and
+       overwrites this project's config, so on the headless machines this mode
+       exists for it either dies at the device grant or silently converts a working
+       api-key project to one that needs a browser. This used to return "connect"
+       for both, which is how the notice came to recommend that. */
+    return authMode === "oauth" ? "relogin" : "badkey";
   }
+  // A Connector problem, and it reads the same in either mode.
+  if (status === 403 || status === 404) return "connect";
   return undefined;
 }
 
@@ -582,19 +588,23 @@ export interface FanOutResult {
 /**
  * The MOST GLOBAL notice across every destination's outcome.
  *
- * "relogin" outranks "connect" because the two have different scopes: a 401 is a
- * problem with the CREDENTIAL, which every destination shares, while a 403/404 is
- * a problem with ONE Connector. Telling a signed-out user to check a Workspace
- * would send them to fix the wrong thing. Pure.
+ * Both CREDENTIAL notices — "relogin" (oauth) and "badkey" (api-key) — outrank
+ * "connect", because they have different scopes: a 401 is a problem with the
+ * credential, which every destination shares, while a 403/404 is a problem with
+ * ONE Connector. Telling a signed-out user to check a Workspace would send them to
+ * fix the wrong thing. The two credential notices never compete: `authMode`
+ * decides which one a 401 can produce. Pure.
  */
 export function fanOutNotice(
   authMode: AuthMode,
   statuses: readonly number[],
-): "relogin" | "connect" | undefined {
+): "relogin" | "badkey" | "connect" | undefined {
   let connect = false;
   for (const status of statuses) {
     const notice = shippingNotice(authMode, status);
-    if (notice === "relogin") return "relogin";
+    // Either credential notice wins outright, for the reason in the docstring —
+    // and `authMode` means only one of the two can ever appear in one fan-out.
+    if (notice === "relogin" || notice === "badkey") return notice;
     if (notice === "connect") connect = true;
   }
   return connect ? "connect" : undefined;

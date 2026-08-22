@@ -274,8 +274,13 @@ or an organization not yet provisioned in Augenta.
   link you open in your browser"); attributing it is not.
 - `--api-key` is a human/CI path for autonomous clients. It is rejected in
   `--json` mode. Never run it, and never ask the user to paste a key to you.
-- Never hand-edit `.augenta/config.json`; the connect script owns permissions
-  and layout.
+- **You** must never write or hand-edit `.augenta/config.json` — on this path the
+  connect script owns its permissions and layout, and editing it yourself is how a
+  key would end up in your context. Note this is a constraint on *you*, not a
+  claim about the file: an autonomous client is configured precisely by writing it
+  from config management, with no agent involved. `--verify-only` checks the key a
+  project already has without writing anything, so it is the one api-key-adjacent
+  command that is safe for you to run if asked to confirm a connection.
 - Never add a destination the user did not select in the answer you just
   received, and never carry a destination forward from a previous run without
   showing it selected.

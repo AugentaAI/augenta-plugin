@@ -578,10 +578,15 @@ export async function fetchWithProfile(
   return first.status === 401 ? send(true) : first;
 }
 
-type Notice = "relogin" | "connect";
+type Notice = "relogin" | "badkey" | "connect";
 
-/** Most to least urgent — also the order {@link takeAuthNotice} reports in. */
-const NOTICES = ["relogin", "connect"] as const;
+/** Most to least urgent — also the order {@link takeAuthNotice} reports in.
+ *
+ *  The two CREDENTIAL notices lead, because a refused credential stops every
+ *  destination while a 403/404 stops one Connector. `relogin` and `badkey` are the
+ *  same rank in practice: `authMode` decides which of them can be written at all,
+ *  so they never compete. */
+const NOTICES = ["relogin", "badkey", "connect"] as const;
 
 function noticePath(projectRoot: string, notice: Notice): string {
   return join(projectRoot, ".augenta", `${notice}-required`);
