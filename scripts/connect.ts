@@ -25,6 +25,7 @@ import { isMain } from "../runtime/node";
 import { ensureAugentaDir } from "../capture/augenta-dir";
 import {
   DEFAULT_GATEWAY,
+  gatewayBase,
   loadProjectConfig,
 } from "../capture/config";
 import { Outbox } from "../capture/outbox";
@@ -1536,12 +1537,29 @@ export async function verifyProjectKey(
       `--verify-only checks a platform key, but this project is configured for ${cfg.authMode}`,
     );
   }
-  // The project's own endpoint is part of what is being verified: a key that works
-  // against the default gateway and not against the configured one is exactly the
-  // misconfiguration this is here to catch.
-  const gateway = (endpointOverride?.trim() || cfg.endpoint || DEFAULT_GATEWAY)
-    .replace(/\/+$/, "");
-  return { connector: await verifyApiKeyConnection(cfg.apiKey!, gateway), gateway };
+  const apiKey = cfg.apiKey?.trim();
+  if (!apiKey) {
+    // loadProjectConfig already refuses an empty key, so this is unreachable today
+    // — asserted rather than `!`-ed because the alternative is sending the literal
+    // header `AugentaKey undefined` and reporting whatever the gateway says about it.
+    throw new Error("the project config has no platform key to verify");
+  }
+  /* Resolved through gatewayBase, NOT by re-deriving the precedence here.
+     The shipper reaches the door via experiencesUrl -> gatewayBase, which reads
+     AUGENTA_API_URL FIRST and only then the config's `endpoint`. Hand-rolling
+     `endpoint || DEFAULT` looked equivalent and was not: with AUGENTA_API_URL set —
+     which is how a local or dev environment is pointed, and what dev-plugin-e2e.ts
+     does — this would have verified a different host than capture actually ships
+     to, and a green check against the wrong gateway is worse than no check.
+
+     An explicit --endpoint still wins: that is an operator saying "check this one".
+     AUGENTA_INGEST_URL is deliberately not consulted — it overrides the ingest path
+     only, and what is being verified here is the key and its Connector on the
+     control surface. */
+  const gateway = endpointOverride?.trim()
+    ? endpointOverride.trim().replace(/\/+$/, "")
+    : gatewayBase(cfg);
+  return { connector: await verifyApiKeyConnection(apiKey, gateway), gateway };
 }
 
 export async function connectWithApiKey(
@@ -1628,6 +1646,15 @@ if (isMain(import.meta.url)) {
       );
       if (payload.status === "error") process.exitCode = 1;
     } else if (args.verifyOnly) {
+      if (args.apiKey?.trim()) {
+        // Refused rather than resolved either way. --verify-only checks the key the
+        // project ALREADY has, so honouring a supplied one would change what the
+        // flag means, and ignoring it would print "the platform key is accepted"
+        // about a different credential than the one just named on the command line.
+        throw new Error(
+          "--verify-only checks the key already in .augenta/config.json; drop --api-key, or run --api-key on its own to write and verify a new one",
+        );
+      }
       const { connector, gateway } = await verifyProjectKey(
         projectRoot,
         args.endpoint,

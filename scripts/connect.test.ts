@@ -349,6 +349,63 @@ describe("platform-key connection", () => {
       expect(readFileSync(path, "utf8")).toBe(before);
     });
 
+    /* The bug this pins: the shipper reaches the door through gatewayBase, which
+       reads AUGENTA_API_URL BEFORE the config's endpoint. A hand-rolled
+       `endpoint || DEFAULT` here verified a different host than capture ships to,
+       so a green check could mean nothing. */
+    test("verifies the gateway the SHIPPER would use, env override included", async () => {
+      writeApiKeyConfig(project, "sk-aug-env.secret", "https://config.example.com");
+      const seen: string[] = [];
+      globalThis.fetch = (async (url, _init) => {
+        seen.push(String(url));
+        return connectorsOk();
+      }) as typeof fetch;
+
+      const previous = process.env.AUGENTA_API_URL;
+      process.env.AUGENTA_API_URL = "https://env.example.com";
+      try {
+        const { gateway } = await verifyProjectKey(project);
+        expect(gateway).toBe("https://env.example.com");
+        expect(seen).toEqual(["https://env.example.com/v1/connectors"]);
+      } finally {
+        if (previous === undefined) delete process.env.AUGENTA_API_URL;
+        else process.env.AUGENTA_API_URL = previous;
+      }
+    });
+
+    test("an explicit --endpoint still wins over both", async () => {
+      writeApiKeyConfig(project, "sk-aug-env.secret", "https://config.example.com");
+      const seen: string[] = [];
+      globalThis.fetch = (async (url, _init) => {
+        seen.push(String(url));
+        return connectorsOk();
+      }) as typeof fetch;
+
+      const previous = process.env.AUGENTA_API_URL;
+      process.env.AUGENTA_API_URL = "https://env.example.com";
+      try {
+        const { gateway } = await verifyProjectKey(project, "https://flag.example.com/");
+        expect(gateway).toBe("https://flag.example.com");
+        expect(seen).toEqual(["https://flag.example.com/v1/connectors"]);
+      } finally {
+        if (previous === undefined) delete process.env.AUGENTA_API_URL;
+        else process.env.AUGENTA_API_URL = previous;
+      }
+    });
+
+    test("--verify-only with --api-key is refused, not quietly redirected", () => {
+      writeApiKeyConfig(project, "sk-aug-ondisk.secret");
+      const r = spawnSync("bun", [CONNECT, "--verify-only", "--api-key", "sk-aug-other.secret"], {
+        cwd: project,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      // Otherwise it reports "the platform key is accepted" about the on-disk key
+      // while the user named a different one on the command line.
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("drop --api-key");
+    });
+
     test("a refused key is an error, not a silent pass", async () => {
       writeApiKeyConfig(project, "sk-aug-stale.secret", "https://gw.example.com");
       globalThis.fetch = (async (_url, _init) =>

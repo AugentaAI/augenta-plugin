@@ -1576,8 +1576,12 @@ async function verifyProjectKey(projectRoot, endpointOverride) {
   if (cfg.authMode !== "api-key") {
     throw new Error(`--verify-only checks a platform key, but this project is configured for ${cfg.authMode}`);
   }
-  const gateway = (endpointOverride?.trim() || cfg.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
-  return { connector: await verifyApiKeyConnection(cfg.apiKey, gateway), gateway };
+  const apiKey = cfg.apiKey?.trim();
+  if (!apiKey) {
+    throw new Error("the project config has no platform key to verify");
+  }
+  const gateway = endpointOverride?.trim() ? endpointOverride.trim().replace(/\/+$/, "") : gatewayBase(cfg);
+  return { connector: await verifyApiKeyConnection(apiKey, gateway), gateway };
 }
 async function connectWithApiKey(projectRoot, apiKey, endpoint2) {
   const gateway = (endpoint2?.trim() || DEFAULT_GATEWAY).replace(/\/+$/, "");
@@ -1626,6 +1630,9 @@ if (isMain(import.meta.url)) {
       if (payload.status === "error")
         process.exitCode = 1;
     } else if (args.verifyOnly) {
+      if (args.apiKey?.trim()) {
+        throw new Error("--verify-only checks the key already in .augenta/config.json; drop --api-key, or run --api-key on its own to write and verify a new one");
+      }
       const { connector, gateway } = await verifyProjectKey(projectRoot, args.endpoint);
       console.log(`The platform key in .augenta/config.json is accepted by ${gateway} and resolves to Connector ${connector.id} (${connector.status}, ${connector.direction}). Nothing was written.`);
     } else if (args.apiKey?.trim()) {
