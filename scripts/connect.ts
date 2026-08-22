@@ -52,6 +52,8 @@ interface Args {
   controlUrl?: string;
   harness?: "claude-code" | "codex";
   json?: boolean;
+  /** Check the key ALREADY on disk against the gateway and write nothing. */
+  verifyOnly?: boolean;
   probe?: boolean;
   login?: boolean;
   awaitLogin?: boolean;
@@ -155,6 +157,8 @@ export function parseArgs(argv: string[]): Args {
         throw new Error("--wait must be a positive number of seconds");
       }
       args.waitSeconds = value;
+    } else if (flag === "--verify-only") {
+      args.verifyOnly = true;
     } else if (flag === "--json") {
       args.json = true;
     } else if (flag === "--probe") {
@@ -1501,6 +1505,45 @@ export async function verifyApiKeyConnection(
   return connector;
 }
 
+/**
+ * Check the key the project ALREADY has, and write nothing.
+ *
+ * The reason this exists: the documented way to configure an autonomous client is
+ * to write `.augenta/config.json` yourself, which is right — a service configures
+ * a file, and the value never becomes an `argv` entry that every local process can
+ * read. But it gave up the one thing `--api-key` did well, which is
+ * {@link verifyApiKeyConnection}: a key checked against the gateway BEFORE anything
+ * depends on it. Without it the first sign a key is wrong is a 401 at shipping
+ * time, in a hook, on a machine with nobody watching.
+ *
+ * So: same check, reading the key from the file instead of the command line. The
+ * secret stays where it was put. Refuses an oauth project rather than pretending to
+ * verify one — its credential lives in the global auth file, not here, and the
+ * connect flow already reports on it.
+ */
+export async function verifyProjectKey(
+  projectRoot: string,
+  endpointOverride?: string,
+): Promise<{ connector: Connector; gateway: string }> {
+  const cfg = loadProjectConfig(projectRoot);
+  if (!cfg) {
+    throw new Error(
+      "no readable .augenta/config.json in this project — nothing to verify",
+    );
+  }
+  if (cfg.authMode !== "api-key") {
+    throw new Error(
+      `--verify-only checks a platform key, but this project is configured for ${cfg.authMode}`,
+    );
+  }
+  // The project's own endpoint is part of what is being verified: a key that works
+  // against the default gateway and not against the configured one is exactly the
+  // misconfiguration this is here to catch.
+  const gateway = (endpointOverride?.trim() || cfg.endpoint || DEFAULT_GATEWAY)
+    .replace(/\/+$/, "");
+  return { connector: await verifyApiKeyConnection(cfg.apiKey!, gateway), gateway };
+}
+
 export async function connectWithApiKey(
   projectRoot: string,
   apiKey: string,
@@ -1584,6 +1627,14 @@ if (isMain(import.meta.url)) {
         ),
       );
       if (payload.status === "error") process.exitCode = 1;
+    } else if (args.verifyOnly) {
+      const { connector, gateway } = await verifyProjectKey(
+        projectRoot,
+        args.endpoint,
+      );
+      console.log(
+        `The platform key in .augenta/config.json is accepted by ${gateway} and resolves to Connector ${connector.id} (${connector.status}, ${connector.direction}). Nothing was written.`,
+      );
     } else if (args.apiKey?.trim()) {
       const existed = existsSync(join(projectRoot, ".augenta", "config.json"));
       const { path, connector } = await connectWithApiKey(

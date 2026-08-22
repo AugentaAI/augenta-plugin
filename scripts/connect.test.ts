@@ -32,6 +32,7 @@ import {
   resolveProject,
   resolveTargetProject,
   runJsonVerb,
+  verifyProjectKey,
   selectedWorkspaces,
   startLogin,
   writeApiKeyConfig,
@@ -57,6 +58,18 @@ afterEach(() => {
 });
 
 describe("parseArgs", () => {
+  test("--verify-only is a boolean and takes no value", () => {
+    expect(parseArgs(["--verify-only"])).toEqual({ verifyOnly: true });
+    // It must not swallow the next token the way a value flag does, or
+    // `--verify-only --project /p` would lose the project.
+    expect(parseArgs(["--verify-only", "--project", "/p"])).toEqual({
+      verifyOnly: true,
+      project: "/p",
+    });
+    // And it never implies a key: this path reads the one already on disk.
+    expect(parseArgs(["--verify-only"]).apiKey).toBeUndefined();
+  });
+
   test("reads key, project, gateway, and control URL without legacy aliases", () => {
     expect(parseArgs(["--api-key", "k1"])).toEqual({ apiKey: "k1" });
     expect(parseArgs(["--apiKey", "k2"])).toEqual({});
@@ -206,10 +219,10 @@ describe("resolveProject in a linked worktree", () => {
 
 describe("project config writers", () => {
   test("writes platform-key config 0600 inside the self-gitignored dir", () => {
-    const path = writeApiKeyConfig(project, "key_test.secret", "http://gw.example.com");
+    const path = writeApiKeyConfig(project, "sk-aug-test.secret", "http://gw.example.com");
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
       authMode: "api-key",
-      apiKey: "key_test.secret",
+      apiKey: "sk-aug-test.secret",
       endpoint: "http://gw.example.com",
     });
     expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -217,10 +230,10 @@ describe("project config writers", () => {
   });
 
   test("omits endpoint when not given", () => {
-    const path = writeApiKeyConfig(project, "key_test.secret");
+    const path = writeApiKeyConfig(project, "sk-aug-test.secret");
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
       authMode: "api-key",
-      apiKey: "key_test.secret",
+      apiKey: "sk-aug-test.secret",
     });
   });
 
@@ -268,7 +281,7 @@ describe("platform-key connection", () => {
     globalThis.fetch = (async (url, init) => {
       expect(String(url)).toBe("https://gw.example.com/v1/connectors");
       expect(new Headers(init?.headers).get("authorization")).toBe(
-        "AugentaKey key_live.secret",
+        "AugentaKey sk-aug-live.secret",
       );
       return Response.json({
         connectors: [
@@ -285,15 +298,96 @@ describe("platform-key connection", () => {
 
     const result = await connectWithApiKey(
       project,
-      "key_live.secret",
+      "sk-aug-live.secret",
       "https://gw.example.com/",
     );
 
     expect(result.connector.id).toBe("connector_123");
     expect(JSON.parse(readFileSync(result.path, "utf8"))).toEqual({
       authMode: "api-key",
-      apiKey: "key_live.secret",
+      apiKey: "sk-aug-live.secret",
       endpoint: "https://gw.example.com",
+    });
+  });
+
+  /* --verify-only. The file path is the documented way to configure an autonomous
+     client, and it gave up the one thing `--api-key` did well: checking the key
+     against the gateway BEFORE anything depends on it. This restores that check
+     while leaving the secret where it was put — read from the config, never an argv
+     entry that every local process can see. */
+  describe("--verify-only", () => {
+    const connectorsOk = () =>
+      Response.json({
+        connectors: [
+          {
+            id: "connector_v",
+            kind: "agent",
+            direction: "inbound",
+            status: "active",
+            workspaceId: "ws-default",
+          },
+        ],
+      });
+
+    test("reads the key from the config and writes nothing", async () => {
+      const path = writeApiKeyConfig(project, "sk-aug-ondisk.secret", "https://gw.example.com");
+      const before = readFileSync(path, "utf8");
+      let seen = "";
+      globalThis.fetch = (async (url, init) => {
+        seen = new Headers(init?.headers).get("authorization") ?? "";
+        expect(String(url)).toBe("https://gw.example.com/v1/connectors");
+        return connectorsOk();
+      }) as typeof fetch;
+
+      const { connector, gateway } = await verifyProjectKey(project);
+
+      // The key came off disk, not from a caller — that is the whole point.
+      expect(seen).toBe("AugentaKey sk-aug-ondisk.secret");
+      expect(connector.id).toBe("connector_v");
+      // ...and the project's OWN endpoint was verified, not the default gateway.
+      expect(gateway).toBe("https://gw.example.com");
+      expect(readFileSync(path, "utf8")).toBe(before);
+    });
+
+    test("a refused key is an error, not a silent pass", async () => {
+      writeApiKeyConfig(project, "sk-aug-stale.secret", "https://gw.example.com");
+      globalThis.fetch = (async (_url, _init) =>
+        new Response("no", { status: 401 })) as typeof fetch;
+
+      await expect(verifyProjectKey(project)).rejects.toThrow("401");
+    });
+
+    test("refuses an oauth project instead of pretending to verify one", async () => {
+      writeOAuthConfig(project, "profile_1", ["connector_1"]);
+      let called = false;
+      globalThis.fetch = (async (_url, _init) => {
+        called = true;
+        return connectorsOk();
+      }) as typeof fetch;
+
+      await expect(verifyProjectKey(project)).rejects.toThrow("configured for oauth");
+      // Its credential is in the global auth file, so there is nothing here to check.
+      expect(called).toBe(false);
+    });
+
+    test("an unconfigured project says so rather than reporting success", async () => {
+      await expect(verifyProjectKey(project)).rejects.toThrow("nothing to verify");
+    });
+
+    test("the CLI surfaces it and still writes nothing", () => {
+      writeApiKeyConfig(project, "sk-aug-cli.secret", "http://127.0.0.1:1/unreachable");
+      const before = readFileSync(join(project, ".augenta", "config.json"), "utf8");
+      const r = spawnSync("bun", [CONNECT, "--verify-only"], {
+        cwd: project,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      // Unreachable gateway, so this asserts the failure path end to end: the flag
+      // is recognised, it reaches the network, and it exits non-zero without ever
+      // touching the config.
+      expect(r.status).toBe(1);
+      expect(r.stderr).toContain("Augenta connect:");
+      expect(readFileSync(join(project, ".augenta", "config.json"), "utf8")).toBe(before);
     });
   });
 
@@ -312,7 +406,7 @@ describe("platform-key connection", () => {
       })) as typeof fetch;
 
     await expect(
-      connectWithApiKey(project, "key_live.secret", "https://gw.example.com"),
+      connectWithApiKey(project, "sk-aug-live.secret", "https://gw.example.com"),
     ).rejects.toThrow("active inbound Connector");
     expect(() =>
       statSync(join(project, ".augenta", "config.json")),
@@ -1265,12 +1359,12 @@ describe("JSON verbs", () => {
     // process that handles one.
     const payload = await runJsonVerb({ projectRoot: project }, {
       ...baseArgs,
-      apiKey: "key_live.secret",
+      apiKey: "sk-aug-live.secret",
       probe: true,
     });
 
     expect(payload).toMatchObject({ status: "error", code: "api_key_not_supported" });
-    expect(JSON.stringify(payload)).not.toContain("key_live.secret");
+    expect(JSON.stringify(payload)).not.toContain("sk-aug-live.secret");
   });
 
   test("JSON mode without a verb explains the verbs instead of guessing", async () => {

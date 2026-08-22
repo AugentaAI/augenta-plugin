@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // scripts/connect.ts
 import { execFileSync } from "node:child_process";
-import { chmodSync as chmodSync2, existsSync as existsSync5, writeFileSync as writeFileSync4 } from "node:fs";
+import { chmodSync as chmodSync3, existsSync as existsSync5, writeFileSync as writeFileSync4 } from "node:fs";
 import { basename, dirname as dirname2, join as join5, resolve as resolve2 } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -51,11 +51,14 @@ function isHttpsUrl(value) {
 
 // capture/augenta-dir.ts
 import { join } from "node:path";
-import { mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
 function ensureAugentaDir(projectRoot) {
   const dir = join(projectRoot, ".augenta");
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
+    try {
+      chmodSync(dir, 448);
+    } catch {}
     const ignore = join(dir, ".gitignore");
     if (!existsSync(ignore))
       writeFileSync(ignore, `*
@@ -449,7 +452,7 @@ class Outbox {
 
 // capture/auth.ts
 import {
-  chmodSync,
+  chmodSync as chmodSync2,
   existsSync as existsSync4,
   mkdirSync as mkdirSync3,
   readFileSync as readFileSync3,
@@ -477,13 +480,13 @@ var STALE_LOCK_MS = 30000;
 var REQUEST_TIMEOUT_MS = 15000;
 function ensureAuthRoot() {
   mkdirSync3(authRoot(), { recursive: true, mode: 448 });
-  chmodSync(authRoot(), 448);
+  chmodSync2(authRoot(), 448);
 }
 function readAuthStore() {
   try {
     ensureAuthRoot();
     if (existsSync4(authPath()))
-      chmodSync(authPath(), 384);
+      chmodSync2(authPath(), 384);
     const parsed = JSON.parse(readFileSync3(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
       return { version: 1, profiles: {} };
@@ -503,9 +506,9 @@ function writeAuthStore(store) {
       mode: 384,
       flag: "wx"
     });
-    chmodSync(tmp, 384);
+    chmodSync2(tmp, 384);
     renameSync2(tmp, path);
-    chmodSync(path, 384);
+    chmodSync2(path, 384);
   } finally {
     try {
       if (existsSync4(tmp))
@@ -598,7 +601,7 @@ function savePendingLogin(pending) {
   const path = pendingLoginPath();
   writeFileSync3(path, `${JSON.stringify(pending, null, 2)}
 `, { mode: 384 });
-  chmodSync(path, 384);
+  chmodSync2(path, 384);
 }
 function readPendingLogin() {
   try {
@@ -780,7 +783,7 @@ async function fetchWithProfile(profileId, url, init = {}) {
   const first = await send(false);
   return first.status === 401 ? send(true) : first;
 }
-var NOTICES = ["relogin", "connect"];
+var NOTICES = ["relogin", "badkey", "connect"];
 function noticePath(projectRoot, notice) {
   return join4(projectRoot, ".augenta", `${notice}-required`);
 }
@@ -857,6 +860,8 @@ function parseArgs(argv) {
         throw new Error("--wait must be a positive number of seconds");
       }
       args.waitSeconds = value;
+    } else if (flag === "--verify-only") {
+      args.verifyOnly = true;
     } else if (flag === "--json") {
       args.json = true;
     } else if (flag === "--probe") {
@@ -907,7 +912,7 @@ function writeApiKeyConfig(projectRoot, apiKey, endpoint2) {
     ...endpoint2 ? { endpoint: endpoint2 } : {}
   }, null, 2)}
 `, { mode: 384 });
-  chmodSync2(path, 384);
+  chmodSync3(path, 384);
   return path;
 }
 function writeOAuthConfig(projectRoot, profileId, connectorIds, endpoint2) {
@@ -923,7 +928,7 @@ function writeOAuthConfig(projectRoot, profileId, connectorIds, endpoint2) {
     ...endpoint2 ? { endpoint: endpoint2 } : {}
   }, null, 2)}
 `, { mode: 384 });
-  chmodSync2(path, 384);
+  chmodSync3(path, 384);
   return path;
 }
 function detectedHarness(args) {
@@ -1563,6 +1568,17 @@ async function verifyApiKeyConnection(apiKey, gateway) {
   }
   return connector;
 }
+async function verifyProjectKey(projectRoot, endpointOverride) {
+  const cfg = loadProjectConfig(projectRoot);
+  if (!cfg) {
+    throw new Error("no readable .augenta/config.json in this project — nothing to verify");
+  }
+  if (cfg.authMode !== "api-key") {
+    throw new Error(`--verify-only checks a platform key, but this project is configured for ${cfg.authMode}`);
+  }
+  const gateway = (endpointOverride?.trim() || cfg.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+  return { connector: await verifyApiKeyConnection(cfg.apiKey, gateway), gateway };
+}
 async function connectWithApiKey(projectRoot, apiKey, endpoint2) {
   const gateway = (endpoint2?.trim() || DEFAULT_GATEWAY).replace(/\/+$/, "");
   const connector = await verifyApiKeyConnection(apiKey, gateway);
@@ -1609,6 +1625,9 @@ if (isMain(import.meta.url)) {
       }, null, 2));
       if (payload.status === "error")
         process.exitCode = 1;
+    } else if (args.verifyOnly) {
+      const { connector, gateway } = await verifyProjectKey(projectRoot, args.endpoint);
+      console.log(`The platform key in .augenta/config.json is accepted by ${gateway} and resolves to Connector ${connector.id} (${connector.status}, ${connector.direction}). Nothing was written.`);
     } else if (args.apiKey?.trim()) {
       const existed = existsSync5(join5(projectRoot, ".augenta", "config.json"));
       const { path, connector } = await connectWithApiKey(projectRoot, args.apiKey.trim(), args.endpoint);
@@ -1632,6 +1651,7 @@ if (isMain(import.meta.url)) {
 export {
   writeOAuthConfig,
   writeApiKeyConfig,
+  verifyProjectKey,
   verifyApiKeyConnection,
   startLogin,
   selectedWorkspaces,

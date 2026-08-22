@@ -68,14 +68,14 @@ describe("unified authentication headers", () => {
     const experience = groupIntoExperiences([ev(0)])[0]!;
     try {
       await postExperiences(url, "oauth-token", [experience], "link_1", "oauth");
-      await postExperiences(url, "key_public.secret", [experience], undefined, "api-key");
+      await postExperiences(url, "sk-aug-public.secret", [experience], undefined, "api-key");
     } finally {
       server.stop(true);
     }
     expect(seen[0]!.get("authorization")).toBe("Bearer oauth-token");
     expect(seen[0]!.get("x-augenta-connector-id")).toBe("link_1");
     expect(seen[1]!.get("authorization")).toBe(
-      "AugentaKey key_public.secret",
+      "AugentaKey sk-aug-public.secret",
     );
     expect(seen[1]!.get("x-augenta-connector-id")).toBeNull();
   });
@@ -105,12 +105,37 @@ describe("unified authentication headers", () => {
     expect(requests).toBe(0);
   });
 
-  test("maps expired human login and unusable key/link states to one actionable notice", () => {
+  /* A 401 is per-MODE, a 403/404 is not. This test previously asserted
+     `shippingNotice("api-key", 401) === "connect"`, which is what made
+     session-start tell a headless client to run the browser sign-in that would
+     overwrite its own config. The mode split is the fix, so the split is what this
+     asserts. */
+  test("a 401 names the credential that was refused, per auth mode", () => {
     expect(shippingNotice("oauth", 401)).toBe("relogin");
-    expect(shippingNotice("oauth", 403)).toBe("connect");
-    expect(shippingNotice("api-key", 401)).toBe("connect");
-    expect(shippingNotice("api-key", 403)).toBe("connect");
-    expect(shippingNotice("api-key", 500)).toBeUndefined();
+    expect(shippingNotice("api-key", 401)).toBe("badkey");
+    // Never the other mode's remedy: an api-key project has no sign-in to redo,
+    // and an oauth project has no key to correct.
+    expect(shippingNotice("api-key", 401)).not.toBe("relogin");
+    expect(shippingNotice("oauth", 401)).not.toBe("badkey");
+  });
+
+  test("a Connector rejection reads the same in either mode", () => {
+    for (const mode of ["oauth", "api-key"] as const) {
+      expect(shippingNotice(mode, 403)).toBe("connect");
+      expect(shippingNotice(mode, 404)).toBe("connect");
+      expect(shippingNotice(mode, 500)).toBeUndefined();
+      expect(shippingNotice(mode, 202)).toBeUndefined();
+    }
+  });
+
+  /* fanOutNotice must carry the new notice with the same precedence relogin has,
+     or a multi-destination api-key project would report the Connector problem and
+     bury the refused credential that caused every one of them. */
+  test("a refused credential outranks a Connector problem across destinations", () => {
+    expect(fanOutNotice("api-key", [403, 401, 202])).toBe("badkey");
+    expect(fanOutNotice("oauth", [403, 401, 202])).toBe("relogin");
+    expect(fanOutNotice("api-key", [403, 404])).toBe("connect");
+    expect(fanOutNotice("api-key", [202, 202])).toBeUndefined();
   });
 });
 
@@ -1025,7 +1050,7 @@ describe("fan-out across destinations", () => {
       url: url(),
       authMode: "api-key",
       connectorIds: [undefined],
-      token: () => Promise.resolve("key_public.secret"),
+      token: () => Promise.resolve("sk-aug-public.secret"),
     });
     expect(seqsFor("")).toEqual([0]); // arrived under the empty (absent) header
     expect(result.byDestination.get("")!.shipped).toBe(1);
