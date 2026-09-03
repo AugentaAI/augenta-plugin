@@ -9553,7 +9553,7 @@ var require_Predicate = __commonJS((exports) => {
       return this._regexp.test(str);
     }
     static escapePattern(pattern) {
-      return `^${pattern.replace(ESCAPE, "\\$&").replace("*", ".*")}$`;
+      return `^${pattern.replace(ESCAPE, "\\$&").replace(/\*/g, ".*")}$`;
     }
     static hasWildcard(pattern) {
       return pattern.includes("*");
