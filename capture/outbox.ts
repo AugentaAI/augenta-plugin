@@ -505,6 +505,11 @@ export class Outbox {
     }
   }
 
+  /** Remaining spool bytes, for low-cardinality operational telemetry only. */
+  pendingByteCount(destKey?: string): number {
+    return Math.max(0, this.spoolEnd() - this.shippedOffset(destKey));
+  }
+
   /**
    * Read up to `maxBatch` unshipped records (events, raws, and documents; spool
    * order preserved) starting at the cursor. Returns the records, the byte offset

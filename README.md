@@ -230,6 +230,14 @@ Memory revisions and deletion notices are buffered durably just like turns.
 Nothing is scanned or uploaded without `.augenta/config.json`; the
 `AUGENTA_CAPTURE_ENABLED=0` kill switch disables activity and memory capture.
 
+The detached shipper also sends strict operational telemetry: upload duration,
+counts, bytes, retries, failures, and outbox health. It never includes captured
+activity, memory text, prompts, responses, query text, credentials, raw URLs,
+exception messages, or local paths. Capture hooks remain network-free;
+telemetry starts only in the background shipper, and telemetry failure cannot
+delay capture or change an experience cursor. Hosted responses include an
+`X-Augenta-Trace-Id` correlation handle for delivery diagnostics.
+
 Project routing and queued activity or memory live under the self-git-ignored
 `.augenta/` directory; reusable sign-in credentials live in the global
 owner-only auth file. A durable, size-bounded outbox keeps records safe during
