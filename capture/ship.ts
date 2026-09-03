@@ -55,6 +55,7 @@ import {
 import type { CaptureEvent, DocumentExperience, Experience, TrajectoryExperience } from "./event";
 import {
   experiencesUrl,
+  gatewayBase,
   loadProjectConfig,
   captureEnabled,
   type AuthMode,
@@ -65,6 +66,7 @@ import {
   ReLoginRequiredError,
 } from "./auth";
 import { sanitizeTelemetryJsonl } from "./sanitize";
+import { createPluginTelemetry, type PluginTelemetry } from "./telemetry";
 
 /**
  * Per-envelope byte budget: an experience whose JSON form exceeds this many
@@ -332,6 +334,8 @@ export interface PostResult {
   status: number;
   /** Response body text, ≤2KB, present only on a non-2xx status. */
   errText?: string;
+  /** Server correlation handle; safe operational metadata, never captured content. */
+  traceId?: string;
 }
 
 /** Response bodies captured into a quarantine entry are capped here — the
@@ -346,6 +350,7 @@ export async function postExperiences(
   experiences: Experience[],
   connectorId?: string,
   authMode: AuthMode = "api-key",
+  telemetry?: PluginTelemetry,
 ): Promise<PostResult> {
   // In oauth mode the Connector is the ROUTE — a platform key carries its own
   // assignment, a bearer token does not. The door answers a missing header with
@@ -355,10 +360,12 @@ export async function postExperiences(
   if (authMode === "oauth" && !connectorId) {
     throw new Error("shipping with an Augenta sign-in requires a Connector id");
   }
-  const res = await fetch(url, {
+  const body = JSON.stringify({ experiences });
+  const send = async (propagated: Record<string, string> = {}) => fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
+      ...propagated,
       ...(token
         ? authMode === "oauth"
           ? {
@@ -370,12 +377,40 @@ export async function postExperiences(
           : { authorization: `AugentaKey ${token}` }
         : {}),
     },
-    body: JSON.stringify({ experiences }),
+    body,
     signal: AbortSignal.timeout(10_000),
   });
-  if (res.status >= 200 && res.status < 300) return { status: res.status };
+  const attrs = {
+    "operation.name": "experiences.upload",
+    "augenta.count": experiences.length,
+    "augenta.bytes": Buffer.byteLength(body, "utf8"),
+    ...(connectorId ? { "augenta.connector.id": connectorId } : {}),
+  };
+  let res: Response;
+  if (telemetry) {
+    let invoked = false;
+    let completed: Response | undefined;
+    try {
+      res = await telemetry.upload(attrs, async (headers) => {
+        invoked = true;
+        completed = await send(headers);
+        return completed;
+      });
+    } catch (error) {
+      // An exporter/instrumentation failure before or after the request is
+      // irrelevant to delivery. A real network failure from send() still
+      // propagates so the durable cursor remains in place.
+      if (completed) res = completed;
+      else if (!invoked) res = await send();
+      else throw error;
+    }
+  } else {
+    res = await send();
+  }
+  const traceId = res.headers.get("x-augenta-trace-id") ?? undefined;
+  if (res.status >= 200 && res.status < 300) return { status: res.status, ...(traceId ? { traceId } : {}) };
   const errText = await res.text().catch(() => "");
-  return { status: res.status, errText: errText.slice(0, MAX_ERR_TEXT_CHARS) };
+  return { status: res.status, errText: errText.slice(0, MAX_ERR_TEXT_CHARS), ...(traceId ? { traceId } : {}) };
 }
 
 /**
@@ -393,6 +428,7 @@ interface RejectedEntry {
   ts: string;
   status: number;
   error?: string;
+  traceId?: string;
   /** Which destination rejected these bytes. A project may feed several, and the
    *  same body can be accepted by one Workspace and rejected by another, so a
    *  quarantine entry is only actionable when it names the destination. Absent in
@@ -440,6 +476,7 @@ export interface DrainOptions {
   maxBatch?: number;
   /** Safety cap on batches per drain (a runaway backstop). */
   maxBatches?: number;
+  telemetry?: PluginTelemetry;
 }
 
 export interface DrainResult {
@@ -503,6 +540,7 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
   let shipped = 0;
   let batches = 0;
   let lastStatus = 0;
+  let rejectedBodies = 0;
 
   for (let i = 0; i < maxBatches; i++) {
     const pending = box.readPending(maxBatch, opts.connectorId);
@@ -528,6 +566,7 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
           body,
           opts.connectorId,
           opts.authMode,
+          opts.telemetry,
         );
         lastStatus = res.status;
         if (lastStatus >= 200 && lastStatus < 300) {
@@ -541,9 +580,11 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
             ts: new Date().toISOString(),
             status: lastStatus,
             ...(res.errText ? { error: res.errText } : {}),
+            ...(res.traceId ? { traceId: res.traceId } : {}),
             ...(opts.connectorId ? { destination: opts.connectorId } : {}),
             experiences: body,
           });
+          rejectedBodies += 1;
           continue;
         }
         sliceOk = false; // transient — keep the whole slice, discard this pass's quarantine candidates
@@ -572,6 +613,33 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
     // resolved once the spool is genuinely empty again — clearing it earlier
     // would let a still-overflowing spool go silent on the NEXT drop.
     if (!box.hasPendingBytes()) box.clearDropEpisode();
+  }
+  const pendingBytes = box.pendingByteCount(opts.connectorId);
+  const incomplete = pendingBytes > 0 && (lastStatus < 200 || lastStatus >= 300);
+  const failed = incomplete || rejectedBodies > 0;
+  const reason = incomplete
+    ? (lastStatus === 0 ? "transport" : `http_${lastStatus}`)
+    : rejectedBodies > 0 ? "rejected" : "success";
+  try {
+    opts.telemetry?.recordDrain({
+      "augenta.count": shipped,
+      "augenta.bytes": pendingBytes,
+      "augenta.reason": reason,
+    });
+    opts.telemetry?.event(failed ? "plugin.drain.failed" : "plugin.drain.completed", {
+      "augenta.count": shipped,
+      "augenta.bytes": pendingBytes,
+      "augenta.reason": reason,
+    });
+    if (incomplete) {
+      opts.telemetry?.recordRetry({
+        "augenta.count": 1,
+        "augenta.reason": reason,
+      });
+    }
+  } catch {
+    // A caller-supplied telemetry implementation is just as fail-open as the
+    // built-in exporter. Delivery and cursor state are already decided.
   }
   return { shipped, batches, lastStatus };
 }
@@ -643,6 +711,7 @@ export async function drainAll(opts: {
   /** Override the per-destination lag cap. Tests only — production uses
    *  {@link MAX_DEST_LAG_BYTES}, since the cap is a data-retention policy. */
   maxDestLagBytes?: number;
+  telemetry?: PluginTelemetry;
 }): Promise<FanOutResult> {
   const box = new Outbox(opts.projectRoot, {
     ...(opts.maxDestLagBytes !== undefined
@@ -698,6 +767,7 @@ export async function drainAll(opts: {
         projectRoot: opts.projectRoot,
         ...(opts.maxBatch !== undefined ? { maxBatch: opts.maxBatch } : {}),
         maxBatches,
+        telemetry: opts.telemetry,
       });
     try {
       let result = await drainOne(token);
@@ -797,7 +867,24 @@ if (isMain(import.meta.url)) {
   const projectRoot = process.argv[2];
   const cfg = projectRoot ? loadProjectConfig(projectRoot) : undefined;
   if (cfg && captureEnabled(cfg) && acquireLock(cfg.projectRoot)) {
+    let telemetry: PluginTelemetry | undefined;
     try {
+      let token = cfg.authMode === "oauth"
+        ? await accessTokenForProfile(cfg.profileId!)
+        : cfg.apiKey;
+      try {
+        telemetry = createPluginTelemetry({
+          gateway: gatewayBase(cfg),
+          token,
+          connectorId: cfg.authMode === "oauth" ? cfg.connectorIds![0] : undefined,
+          oauth: cfg.authMode === "oauth",
+          version: "0.9.2",
+        });
+      } catch {
+        // Operational telemetry is optional. It must never prevent the durable
+        // outbox from attempting delivery or affect any cursor.
+        telemetry = undefined;
+      }
       // Both credential kinds now take the same path: oauth fans out to every
       // configured Connector, a platform key ships once to the single unnamed
       // route the key itself resolves server-side.
@@ -806,10 +893,11 @@ if (isMain(import.meta.url)) {
         url: experiencesUrl(cfg),
         authMode: cfg.authMode,
         connectorIds: cfg.authMode === "oauth" ? cfg.connectorIds! : [undefined],
-        token: (refresh) =>
-          cfg.authMode === "oauth"
-            ? accessTokenForProfile(cfg.profileId!, refresh)
-            : Promise.resolve(cfg.apiKey),
+        token: async (refresh) => {
+          if (refresh && cfg.authMode === "oauth") token = await accessTokenForProfile(cfg.profileId!, true);
+          return token;
+        },
+        telemetry,
       });
       const notice = fanOutNotice(
         cfg.authMode,
@@ -823,6 +911,7 @@ if (isMain(import.meta.url)) {
         markAuthNotice(cfg.projectRoot, "relogin");
       }
     } finally {
+      await telemetry?.flush(1_000).catch(() => {});
       releaseLock(cfg.projectRoot);
     }
   }

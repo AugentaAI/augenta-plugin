@@ -74,7 +74,11 @@ for (const output of result.outputs) {
   // this only ever ADDS the node line; the strip is belt-and-braces against a
   // shebang creeping back into a source file and shipping a bun requirement.
   const body = source.startsWith("#!") ? source.slice(source.indexOf("\n") + 1) : source;
-  await Bun.write(output.path, `#!/usr/bin/env node\n${body}`);
+  // Some bundled OpenTelemetry diagnostics contain template-literal continuation
+  // lines indented with spaces followed by a tab. Preserve their visible
+  // indentation using spaces so the committed artifact passes git diff --check.
+  const cleanBody = body.replace(/^([ ]+)\t/gm, "$1  ");
+  await Bun.write(output.path, `#!/usr/bin/env node\n${cleanBody}`);
   chmodSync(output.path, 0o755); // outdir writes 0644
 }
 

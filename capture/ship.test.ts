@@ -39,6 +39,7 @@ import {
 import { Outbox, LAG_STRIKES } from "./outbox";
 import { takeAuthNotice } from "./auth";
 import type { CaptureEvent, DocumentRecord, TrajectoryExperience, RawRecord } from "./event";
+import type { PluginTelemetry } from "./telemetry";
 
 function ev(seq: number, opts: Partial<CaptureEvent> = {}): CaptureEvent {
   return {
@@ -103,6 +104,38 @@ describe("unified authentication headers", () => {
       server.stop(true);
     }
     expect(requests).toBe(0);
+  });
+
+  test("telemetry setup failure cannot suppress an experience request", async () => {
+    let requests = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        requests += 1;
+        return new Response(null, { status: 202, headers: { "x-augenta-trace-id": "a".repeat(32) } });
+      },
+    });
+    const brokenTelemetry: PluginTelemetry = {
+      async upload() { throw new Error("exporter unavailable"); },
+      recordDrain() { throw new Error("exporter unavailable"); },
+      recordRetry() { throw new Error("exporter unavailable"); },
+      event() { throw new Error("exporter unavailable"); },
+      async flush() { throw new Error("exporter unavailable"); },
+    };
+    try {
+      const result = await postExperiences(
+        `http://127.0.0.1:${server.port}/v1/experiences`,
+        "sk-aug-public.secret",
+        [groupIntoExperiences([ev(0)])[0]!],
+        undefined,
+        "api-key",
+        brokenTelemetry,
+      );
+      expect(result).toEqual({ status: 202, traceId: "a".repeat(32) });
+      expect(requests).toBe(1);
+    } finally {
+      server.stop(true);
+    }
   });
 
   /* A 401 is per-MODE, a 403/404 is not. This test previously asserted
@@ -704,8 +737,17 @@ describe("drain against a real loopback endpoint", () => {
     test("an all-400 drain still advances the cursor — the rejected body is quarantined, not retried forever", async () => {
       startServer(400);
       box.append([ev(0, { turn: 1 }), ev(1, { turn: 1 })]);
+      const events: string[] = [];
+      const drains: Record<string, unknown>[] = [];
+      const telemetry: PluginTelemetry = {
+        async upload(_attributes, fn) { return fn({}); },
+        recordDrain(attributes) { drains.push(attributes); },
+        recordRetry() {},
+        event(name) { events.push(name); },
+        async flush() {},
+      };
 
-      const res = await drain({ url: url(), projectRoot: project });
+      const res = await drain({ url: url(), projectRoot: project, telemetry });
       expect(res.shipped).toBe(2); // consumed — either shipped or quarantined, never left to wedge
       expect(res.lastStatus).toBe(400);
       expect(box.readPending().records).toEqual([]); // cursor advanced past the rejected body
@@ -714,6 +756,8 @@ describe("drain against a real loopback endpoint", () => {
       expect(rejected.length).toBe(1);
       expect(rejected[0]!.status).toBe(400);
       expect(rejected[0]!.experiences[0]!.events.map((e) => e.seq)).toEqual([0, 1]);
+      expect(events).toEqual(["plugin.drain.failed"]);
+      expect(drains[0]?.["augenta.reason"]).toBe("rejected");
     });
 
     test("413 is quarantined exactly like 400 (both are permanent, deterministic rejections)", async () => {
