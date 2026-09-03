@@ -77,7 +77,13 @@ for (const output of result.outputs) {
   // Some bundled OpenTelemetry diagnostics contain template-literal continuation
   // lines indented with spaces followed by a tab. Preserve their visible
   // indentation using spaces so the committed artifact passes git diff --check.
-  const cleanBody = body.replace(/^([ ]+)\t/gm, "$1  ");
+  const cleanBody = body
+    .replace(/^([ ]+)\t/gm, "$1  ")
+    // sdk-metrics 2.11.0 compiles its wildcard predicate with String.replace,
+    // which escapes only the first wildcard and is flagged by CodeQL in the
+    // shipped bundle. The plugin never configures wildcard views, but dist/ is
+    // still executable code: harden every bundled copy until upstream does.
+    .replaceAll('.replace("*", ".*")', '.replace(/\\*/g, ".*")');
   await Bun.write(output.path, `#!/usr/bin/env node\n${cleanBody}`);
   chmodSync(output.path, 0o755); // outdir writes 0644
 }
