@@ -275,6 +275,13 @@ Repo work runs on [Bun](https://bun.sh); it is a build-time tool only. What ship
 to users is `dist/`, which runs on Node — rebuild and commit it whenever a shipped
 source changes, or CI fails the PR.
 
+Use the Bun version in `.bun-version`: the committed bundles are byte-compared in
+CI, and Bun's bundler output changes between releases, so `bun run build` refuses
+to run on any other version and prints the install command. Run `bun install` in
+the checkout you build from — where dependencies resolve from is baked into the
+bundles too. Any platform works; the pinned Bun produces the same bytes on macOS
+and Linux.
+
 ```bash
 bun install --frozen-lockfile
 bun run build
