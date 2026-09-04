@@ -259,66 +259,64 @@ For integrations and local development, `AUGENTA_API_URL` overrides the gateway
 base and `AUGENTA_INGEST_URL` redirects the experiences endpoint. Neither
 variable opts a project into capture.
 
-`AUGENTA_CONTROL_URL` (or `scripts/connect.ts --control-url`) selects the
-environment's complete public login discovery: issuer, public client id, and
-gateway. Use it when connecting to dev or staging. `--endpoint` changes only the
-gateway and must not be used by itself for a new cross-environment sign-in.
-
-Augenta sign-in is a public-client OAuth device grant against WorkOS AuthKit,
-reached through Augenta's own `auth.augenta.ai` issuer. That is an implementation
-detail of the platform: no user-facing string in this plugin names the identity
-provider, and the stored `authMode` is the provider-neutral `oauth`.
+Augenta sign-in is a public-client OAuth device grant against Augenta's own
+`auth.augenta.ai` issuer. The project stores the provider-neutral `authMode` of
+`oauth` and no token of any kind.
 
 ## Development
 
-Repo work runs on [Bun](https://bun.sh); it is a build-time tool only. What ships
-to users is `dist/`, which runs on Node — rebuild and commit it whenever a shipped
-source changes, or CI fails the PR.
+Contributor setup, the verify commands, and the conventions this repository
+holds itself to live in [`CONTRIBUTING.md`](CONTRIBUTING.md) and `AGENTS.md`.
+
+## Troubleshooting
+
+**The hooks do nothing.** Check that the project is connected — capture is a
+deliberate silent no-op until `.augenta/config.json` exists in the project or one
+of its parent directories, so an unconnected project looks exactly like a broken
+install. `AUGENTA_CAPTURE_ENABLED=0` silences a connected project the same way.
+
+**`Augenta hook: no Node 20+ found`.** The plugin runs on Node and looks for it
+in the usual version-manager locations before falling back to `PATH`. Desktop
+apps often start with a much shorter `PATH` than your terminal, so a Node that
+works when you type `node` can be invisible to a hook. Point at it explicitly:
 
 ```bash
-bun install --frozen-lockfile
-bun run build
-bun run typecheck
-bun run test:e2e
-bun test
+export AUGENTA_NODE=/absolute/path/to/node
 ```
 
-After the platform dev topology, backend, and Pages app are deployed, connect a
-disposable project to dev and run the hosted human/plugin E2E:
+That message only ever appears for a **connected** project. A missing Node in an
+unconnected one stays silent, because nothing there opted in.
 
-```bash
-bun scripts/connect.ts \
-  --project /absolute/path/to/test-project \
-  --control-url https://dev.augenta.ai
+**Codex captures nothing after installing or updating.** Codex requires each hook
+to be trusted, pinned by content hash, and every plugin update re-prompts. Run
+`/hooks` in Codex and approve them.
 
-bun scripts/dev-e2e.ts \
-  --project /absolute/path/to/test-project \
-  --control-url https://dev.augenta.ai
-```
+**A prompt appeared asking to run `/augenta:connect` again.** The project's config
+was written by an older version that this one cannot read. Nothing is migrated on
+purpose — reusing a stale credential or routing decision would surface later as an
+unexplained authentication failure instead of a clear ask. Reconnect once; see
+[Upgrading from an earlier version](#upgrading-from-an-earlier-version).
 
-The test uses the stored owner-only sign-in profile, real outbox and shipper,
-and authenticated experience-read API to verify durable schema-v2 landing. It
-does not print or export the access or refresh token. The platform deployment
-order, GitHub Actions gates, variables, and browser acceptance steps live in
-the platform repository's `docs/deployment-runbook.md`.
+**Connect printed a command instead of a sign-in link.** The turn could not
+complete a sign-in — a plan-mode or print-mode run has no interactive user to
+click a link. Run the printed command in a terminal; it drives the same flow.
 
-For local testing, add this repository as a plugin marketplace and install it:
+**The sign-in link expired.** Ask the agent for a fresh link. It will not mint one
+on its own, so that a link you are part-way through opening is never invalidated
+underneath you.
 
-```bash
-# Claude Code
-claude plugin marketplace add ./path/to/augenta-plugin
-claude plugin install augenta@augenta
+**Connect reported a different project directory.** In a git worktree, the plugin
+connects the main checkout instead, because capture only ever walks upward from
+the current directory and would never find a config written into a linked
+worktree. Pass `--project` to override.
 
-# Codex
-codex plugin marketplace add ./path/to/augenta-plugin
-codex plugin add augenta@augenta
-```
+## License
 
-The main implementation lives in:
+See [`LICENSE`](LICENSE). The source is published so the plugin can be installed
+and inspected; use of Augenta itself is governed by Augenta's terms.
 
-- `hooks/` — lifecycle entrypoints for supported coding agents
-- `capture/` — normalization, scrubbing, durable buffering, and delivery
-- `scripts/connect.ts` — sign-in, Connector selection, safe project config, and
-  the agent-driven `--json` verbs
-- `scripts/dev-e2e.ts` — hosted sign-in/profile/plugin/durable-landing verification
-- `skills/connect/` — the guided connection flow
+## Links
+
+- [augenta.ai](https://augenta.ai)
+- [Issues](https://github.com/AugentaAI/augenta-plugin/issues)
+- [Security policy](SECURITY.md)

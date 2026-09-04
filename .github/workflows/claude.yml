@@ -69,9 +69,9 @@ jobs:
       # ci.yml and runs automatically on any PR this bot opens, so paying ~a minute of
       # npm-global install on every @claude mention would buy nothing.
       #
-      # The Augenta plugin is not dogfooded in this job either. To capture this agent's
-      # sessions into Augenta, add an AUGENTA_KEY repo secret, write it to
-      # "$HOME/.augenta/key" (chmod 600), and `touch "$HOME/.augenta/capture-enabled"`.
+      # The Augenta plugin is not dogfooded in this job either. The machine path for an
+      # autonomous client is a project `.augenta/config.json`, documented in README.md;
+      # nothing here writes one.
 
       - name: Run Claude Code
         id: claude
@@ -92,12 +92,11 @@ jobs:
           # `gh pr` / `gh issue` / `gh label` are enumerated by subcommand rather than
           # wildcarded, to withhold exactly two classes of verb:
           #
-          #   - `gh pr merge` — the merge gate must not be reachable by the bot. This repo's
-          #     `main` is NOT currently branch-protected, so the allowlist IS the gate; a
-          #     `gh pr *` wildcard would let a prompt-injected comment talk the bot into
-          #     merging its own unreviewed work. Once branch protection requires the CI
-          #     check plus an approval, GitHub enforces this too — but defense in depth is
-          #     cheap here, since a human merging is no hardship.
+          #   - `gh pr merge` — the merge gate must not be reachable by the bot. GitHub
+          #     enforces it: the `protect-main` ruleset requires both ci.yml checks, one
+          #     approving review, and a squash merge. Withholding the verb is defense in
+          #     depth behind that, so a prompt-injected comment cannot even talk the bot
+          #     into trying — and it costs nothing, since a human merging is no hardship.
           #   - `gh {pr,issue,label} delete` — permanent, and never something the bot needs.
           claude_args: >-
             --allowed-tools

@@ -12,8 +12,11 @@ Export the control URL. `augentaOAuthConfig` (`capture/auth.ts:210`) reads
 all four `--json` verbs, and the connect skill alike:
 
 ```bash
-export AUGENTA_CONTROL_URL=https://dev.augenta.ai
+export AUGENTA_CONTROL_URL=<control-url>
 ```
+
+The control URL for a non-production Augenta is not recorded in this public
+repository; get it from the platform team.
 
 The variable selects one environment's **complete** login discovery — issuer,
 public client id, and gateway together — by fetching
@@ -46,7 +49,7 @@ Claude Code loads a local checkout directly, so a skill or hook change is
 testable without a version bump or a marketplace install:
 
 ```bash
-AUGENTA_CONTROL_URL=https://dev.augenta.ai \
+AUGENTA_CONTROL_URL=<control-url> \
   claude --plugin-dir /absolute/path/to/augenta-plugin
 ```
 
@@ -96,12 +99,15 @@ printf '{"cwd":"%s","hook_event_name":"Stop"}' "$PWD" \
 ```bash
 bun scripts/connect.ts \
   --project /absolute/path/to/test-project \
-  --control-url https://dev.augenta.ai
+  --control-url <control-url>
 
 bun scripts/dev-e2e.ts \
   --project /absolute/path/to/test-project \
-  --control-url https://dev.augenta.ai
+  --control-url <control-url>
 ```
+
+`dev-e2e.ts` requires `--control-url`; it has no default, so there is no
+environment it can silently reach.
 
 The connect step needs an interactive terminal: the Workspace choice goes through
 `chooseMany`, which refuses a non-TTY rather than print a menu nobody can answer.

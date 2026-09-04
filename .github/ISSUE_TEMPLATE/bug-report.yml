@@ -1,0 +1,100 @@
+name: Bug report
+description: Something in the plugin does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Suspected vulnerability?** Do not file it here. Open a private
+        advisory instead — see [SECURITY.md](https://github.com/AugentaAI/augenta-plugin/blob/main/SECURITY.md).
+
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Harness
+      description: Where does this happen?
+      options:
+        - Claude Code
+        - Codex
+        - Both
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: "`claude plugin list` or `codex plugin list`."
+      placeholder: "0.9.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: connected
+    attributes:
+      label: Was the project connected?
+      description: >
+        A project is connected when it (or a parent directory) contains
+        `.augenta/config.json`. Capture is a deliberate silent no-op without it,
+        so this changes what the expected behavior even is.
+      options:
+        - "Yes — signed in (authMode: oauth)"
+        - "Yes — platform key (authMode: api-key)"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version
+      description: "`node --version`. The plugin requires Node 20+."
+      placeholder: "v20.11.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS 15.3 / Ubuntu 24.04 / Windows 11"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Include any error text verbatim.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Install the plugin into ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: no-sensitive-data
+    attributes:
+      label: Before you file
+      options:
+        - label: >
+            This report contains no transcript content, no token, and no contents
+            of `.augenta/config.json` or `~/.augenta/auth.json`. (Describe what
+            you saw instead — a redacted path, a file mode, an HTTP status.)
+          required: true

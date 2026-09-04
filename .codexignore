@@ -10,3 +10,10 @@ bun.lock
 # agentic CI workflows run. Neither manifest reaches .claude/ — both declare
 # "skills": "./skills/" — so this is bundle hygiene, not a correctness fix.
 .claude/
+
+# Repository documentation for humans on GitHub. The plugin's own runtime docs
+# ship (README.md, skills/); these are policy and process for contributors and
+# reporters, and nothing at runtime reads them.
+SECURITY.md
+CONTRIBUTING.md
+CHANGELOG.md

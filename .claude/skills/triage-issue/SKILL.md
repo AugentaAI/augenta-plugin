@@ -98,7 +98,9 @@ batched into a single deliberate release rather than shipped incrementally.
 
 **Clarity** — is the issue actionable as written? Missing or unclear reproduction steps,
 or an unstated harness and plugin version, should be flagged. If it overlaps an existing
-issue, find it and link it.
+issue, find it and link it. `.github/ISSUE_TEMPLATE/bug-report.yml` now collects harness,
+plugin version, whether the project was connected, Node version, and OS as required
+fields — so an issue missing them was filed before the form, or filed around it.
 
 ## Step 3: Check for Duplicates
 
