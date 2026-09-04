@@ -12,6 +12,11 @@ bun test
 git diff --check
 ```
 
+`bun install` is first because dependency resolution is a build input, not just
+setup — see the runtime-boundary section below. `bun run build` refuses to run on
+an unpinned Bun or a checkout resolving dependencies from elsewhere, so a failed
+build there is telling you which of the two to fix.
+
 Run `claude plugin validate . --strict` for the Claude package. The bundled
 Codex plugin-creator validator currently rejects Codex's supported `hooks`
 manifest field, so the Codex release gate is a real marketplace installation
@@ -61,6 +66,30 @@ bundles, never the `.ts` sources, which are not directly Node-runnable anyway
 committed because both marketplaces install a git checkout and run no build step,
 so **the bundles are the shipped artifact** — run `bun run build` and commit the
 result whenever a shipped source changes. CI fails a PR whose `dist/` has drifted.
+
+**The build is byte-reproducible, and that is enforced rather than hoped for.**
+CI compares a fresh build against the committed bundles, so anything that changes
+the bundler's output is a build input. Two of them do:
+
+- **The Bun version**, pinned in `.bun-version`. Bun's bundler codegen changes
+  between releases — 1.3.14 emits the `__toESMCache_*` ESM-interop prelude, 1.3.5
+  the older `get: () => mod[key]` form, 1.4.1 something else again — so one
+  version off rewrites all five bundles. `scripts/build.ts` reads the same file
+  CI does and refuses to build on any other Bun, naming the version and how to
+  install it. Do not re-type the number into a workflow; a contract test fails
+  that. To move the pin, edit `.bun-version` and commit the rebuilt `dist/` with
+  it.
+- **Where `node_modules` resolved from.** Bun labels every bundled module with
+  its path relative to the build root, so a checkout that resolves a dependency
+  from an ancestor directory bakes `../../../node_modules/…` into the bytes. A
+  git worktree is the easy way in: `.claude/worktrees/` is gitignored, so a
+  worktree starts with no `node_modules`, and one created before a dependency was
+  added keeps resolving it from the parent checkout. `bun run build` refuses
+  this too and tells you to `bun install --frozen-lockfile` in that directory.
+
+**What is not a build input is the platform.** Measured 2026-09-04 at 1.3.14:
+darwin-arm64 and CI's linux-x64 emit byte-identical bundles. A macOS contributor
+needs the pinned Bun and a local `bun install`, not a container.
 
 The asymmetry to keep in mind: contributors exercise *sources under Bun* while
 users exercise *bundles under Node*, so a Bun-only API can enter runtime code and

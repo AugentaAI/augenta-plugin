@@ -14,7 +14,7 @@
  * Run: bun test __tests__/contract.test.ts
  */
 import { test, expect, describe } from "bun:test";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 
 // This repo IS the plugin: __tests__/ sits at the repo root, so PLUGIN_ROOT is
@@ -911,5 +911,102 @@ describe("manifests — cross-harness packaging and one version", () => {
     expect(readme).toContain("/augenta:connect");
     expect(readme).toContain("$augenta:connect");
     expect(readme).not.toContain("codex plugin install");
+  });
+});
+
+describe("the committed dist/ is reproducible", () => {
+  // CI byte-compares dist/ against a fresh build, so anything that changes the
+  // bundler's output is a build INPUT and has to be pinned rather than left to
+  // whatever a contributor's machine happens to have. Two inputs decide it;
+  // platform, measured 2026-09-04, is not one of them — darwin-arm64 and
+  // linux-x64 on one revision emit identical bytes.
+  const PIN_PATH = join(PLUGIN_ROOT, ".bun-version");
+  const pinnedBun = readFileSync(PIN_PATH, "utf8").trim();
+  const buildSource = readFileSync(join(PLUGIN_ROOT, "scripts", "build.ts"), "utf8");
+  const workflowsDir = join(PLUGIN_ROOT, ".github", "workflows");
+
+  test(".bun-version is a single bare version", () => {
+    // setup-bun's bun-version-file and build.ts's string compare both take the
+    // file verbatim, so a stray `v` prefix or range would break the pin in two
+    // places at once.
+    expect(pinnedBun).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  test("the build REFUSES an unpinned Bun and leaves dist/ intact", () => {
+    // Behavioral, not a grep: the guard has to actually exit non-zero, and it
+    // has to do so BEFORE the rmSync that wipes dist/. Asserting the source
+    // order instead would still pass with an inverted condition or a deleted
+    // process.exit. Swapping the pin is safe precisely because the guard is
+    // non-destructive — which is the property under test.
+    const original = readFileSync(PIN_PATH, "utf8");
+    const witness = join(PLUGIN_ROOT, "dist", "hooks", "session-start.mjs");
+    const before = existsSync(witness) ? readFileSync(witness) : null;
+    try {
+      writeFileSync(PIN_PATH, "0.0.0\n");
+      const proc = Bun.spawnSync([process.execPath, join("scripts", "build.ts")], {
+        cwd: PLUGIN_ROOT,
+        stdout: "pipe",
+        stderr: "pipe",
+        // Neutralized explicitly: a contributor with the bypass exported would
+        // otherwise run a real build here instead of exercising the guard.
+        env: { ...process.env, AUGENTA_ALLOW_BUN_MISMATCH: "0" },
+      });
+      expect(proc.exitCode).toBe(1);
+      const stderr = proc.stderr.toString();
+      expect(stderr).toContain("0.0.0");
+      expect(stderr).toContain(Bun.version);
+      if (before) expect(readFileSync(witness)).toEqual(before);
+    } finally {
+      writeFileSync(PIN_PATH, original);
+    }
+  });
+
+  test("the pin comes from .bun-version, not a literal in the build", () => {
+    // The whole point: before this, .bun-version was honored ONLY by CI, so a
+    // contributor on any other Bun rebuilt all five bundles and CI answered by
+    // demanding a revert without naming the cause.
+    expect(buildSource).toContain('readFileSync(join(ROOT, ".bun-version"), "utf8")');
+    expect(buildSource, "build.ts hardcodes a Bun version").not.toContain(`"${pinnedBun}"`);
+  });
+
+  test("dependency resolution is checked at the cause, before the wipe", () => {
+    // Bun labels each bundled module with its path relative to the build root,
+    // so a checkout that resolves a dependency from an ancestor directory bakes
+    // `../../../node_modules/…` into the bytes. A gitignored git worktree is the
+    // easy way in. Checking installed-ness up front catches that without
+    // clobbering dist/ first, which scraping the emitted bundles cannot.
+    const check = buildSource.indexOf("uninstalled.length > 0");
+    const wipe = buildSource.indexOf('rmSync(join(ROOT, "dist")');
+    expect(check).toBeGreaterThan(-1);
+    expect(wipe).toBeGreaterThan(check);
+    expect(buildSource).toContain("bun install --frozen-lockfile");
+  });
+
+  test("the byte-level dependency check cannot silently stop checking", () => {
+    // It reads Bun's module-label comments, which survive only while the build
+    // stays unminified. A check whose evidence can vanish has to fail closed, or
+    // a future `minify: true` would turn it into a no-op that still reports green.
+    expect(buildSource).toContain("labels.length === 0");
+    const failClosed = buildSource.indexOf("labels.length === 0");
+    const write = buildSource.indexOf("for (const { path, body } of finished)");
+    expect(write).toBeGreaterThan(failClosed);
+  });
+
+  test("every workflow reads the pin from .bun-version", () => {
+    // Same reasoning the release-version tests apply to the plugin version: a
+    // number re-typed into a second file is a second source of truth that goes
+    // stale silently. Here it would also break the build guard, which trusts
+    // the file alone.
+    const setUpBun = readdirSync(workflowsDir)
+      .filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"))
+      .filter((f) => readFileSync(join(workflowsDir, f), "utf8").includes("oven-sh/setup-bun"));
+    // Non-vacuity: without this the whole test passes with zero assertions the
+    // day the action is renamed or replaced.
+    expect(setUpBun, "no workflow sets Bun up — this test checked nothing").toContain("ci.yml");
+    for (const file of setUpBun) {
+      const yaml = readFileSync(join(workflowsDir, file), "utf8");
+      expect(yaml, `${file} pins Bun without .bun-version`).toContain("bun-version-file: .bun-version");
+      expect(yaml, `${file} hardcodes the Bun version ${pinnedBun}`).not.toContain(`bun-version: "${pinnedBun}"`);
+    }
   });
 });
