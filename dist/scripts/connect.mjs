@@ -83,6 +83,9 @@ function isHttpsUrl(value) {
   }
 }
 
+// runtime/version.ts
+var PLUGIN_VERSION = "0.9.3";
+
 // capture/augenta-dir.ts
 import { join } from "node:path";
 import { chmodSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
@@ -849,7 +852,6 @@ function takeAuthNotice(projectRoot) {
 
 // scripts/connect.ts
 var DEFAULT_WAIT_SECONDS = 90;
-var PLUGIN_VERSION = "0.9.3";
 var DEFAULT_WORKSPACE_NAME = "Default Workspace";
 
 class AugentaRequestError extends Error {
@@ -1089,26 +1091,28 @@ async function selectOrCreateProfile(oauth, preferredProfileId) {
   }
   return saveVerifiedLogin(oauth, await deviceLogin(oauth));
 }
+var WORKSPACE_LIST_PAGE_SIZE = 200;
 var WORKSPACE_LIST_MAX_PAGES = 10;
-async function listWorkspaces(profileId, gateway) {
+async function fetchAllWorkspaces(profileId, gateway) {
   const workspaces = [];
   let cursor;
-  let exhausted = false;
   for (let page = 0;page < WORKSPACE_LIST_MAX_PAGES; page++) {
-    const query = new URLSearchParams({ limit: "200" });
+    const query = new URLSearchParams({ limit: String(WORKSPACE_LIST_PAGE_SIZE) });
     if (cursor)
       query.set("cursor", cursor);
     const body = await bearerJson(profileId, `${gateway}/v1/workspaces?${query.toString()}`);
     workspaces.push(...body.workspaces ?? []);
-    if (!body.nextCursor) {
-      exhausted = true;
-      break;
+    if (!body.nextCursor)
+      return workspaces;
+    if (body.nextCursor === cursor) {
+      throw new Error("the Workspace list did not advance — the API returned the same page cursor twice");
     }
     cursor = body.nextCursor;
   }
-  if (!exhausted) {
-    throw new Error(`the organization lists more than ${WORKSPACE_LIST_MAX_PAGES * 200} Workspaces — ` + "refusing to offer a partial list of destinations");
-  }
+  throw new Error(`the Workspace list did not finish within ${WORKSPACE_LIST_MAX_PAGES} pages of ` + `${WORKSPACE_LIST_PAGE_SIZE} — refusing to offer a partial list of destinations`);
+}
+async function listWorkspaces(profileId, gateway) {
+  const workspaces = await fetchAllWorkspaces(profileId, gateway);
   if (workspaces.length === 0) {
     throw new Error("the authenticated organization has no active Workspaces");
   }
@@ -1727,5 +1731,6 @@ export {
   connectToWorkspaces,
   connectProject,
   awaitLogin,
-  PLUGIN_VERSION
+  WORKSPACE_LIST_PAGE_SIZE,
+  WORKSPACE_LIST_MAX_PAGES
 };

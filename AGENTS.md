@@ -137,9 +137,25 @@ under suspicion.
 
 ## Releases
 
-Version changes are atomic. Keep the same version in `package.json`, both
-plugin manifests, and both marketplace metadata and plugin entries. Update the
-versioned marketplace descriptions at the same time.
+Version changes are atomic, across **eight** values in six files, and the
+contract test pins every one of them to a single value:
+
+- `package.json` — `version`
+- `.claude-plugin/plugin.json` — `version`
+- `.codex-plugin/plugin.json` — `version`
+- `.claude-plugin/marketplace.json` — `metadata.version` AND `plugins[0].version`
+- `.agents/plugins/marketplace.json` — `metadata.version` AND `plugins[0].version`
+- `runtime/version.ts` — `PLUGIN_VERSION`, the ONE version written in TypeScript
+
+Update the versioned marketplace descriptions at the same time, and bump
+`RELEASE_VERSION` in `__tests__/contract.test.ts` to match.
+
+**Never write a version literal anywhere else.** Both things that report a
+version — the Connector metadata `scripts/connect.ts` sends and the
+OpenTelemetry attribution `capture/ship.ts` sends — import `PLUGIN_VERSION`.
+The shipper's used to be its own hardcoded string and it silently drifted a
+release behind; a gate now fails on any quoted semver in `capture/`, `hooks/`,
+`runtime/` or `scripts/` outside `runtime/version.ts`.
 
 ## Privacy invariants
 

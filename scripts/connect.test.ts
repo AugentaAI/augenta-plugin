@@ -37,6 +37,8 @@ import {
   startLogin,
   writeApiKeyConfig,
   writeOAuthConfig,
+  WORKSPACE_LIST_MAX_PAGES,
+  WORKSPACE_LIST_PAGE_SIZE,
   type WorkspacePrompts,
 } from "./connect";
 import { Outbox } from "../capture/outbox";
@@ -567,7 +569,17 @@ describe("JSON verbs", () => {
            only while rows remain. A stub that always answered the whole list
            would let an unbounded or non-advancing loop pass. */
         const limit = Math.min(Number(query.get("limit")) || 50, 200);
-        const from = Number(query.get("cursor") ?? "0");
+        const rawCursor = query.get("cursor");
+        const from = rawCursor === null ? 0 : Number(rawCursor);
+        /* 400, not an empty 200. `Number("garbage")` is NaN and
+           `slice(NaN, NaN)` is `[]` with no cursor, so the tolerant version
+           answered a mangled cursor with a SUCCESSFUL empty list — and the
+           client then reported "no active Workspaces", which sends the reader to
+           the wrong end. A stub that cannot fail cannot catch the bug it exists
+           to catch. */
+        if (!Number.isInteger(from) || from < 0) {
+          return Response.json({ error: `stub: uninterpretable cursor ${rawCursor}` }, { status: 400 });
+        }
         const page = liveWorkspaces.slice(from, from + limit);
         const next = from + limit < liveWorkspaces.length ? String(from + limit) : undefined;
         return Response.json({ workspaces: page, ...(next ? { nextCursor: next } : {}) });
@@ -676,25 +688,64 @@ describe("JSON verbs", () => {
       { id: "ws_01ABC", name: "Default Workspace" },
       { id: "ws_01HZY", name: "Scratch" },
     ]);
-    // The largest page the API will give, so a normal org costs one round trip.
-    expect(requests).toContain(`GET ${GATEWAY}/v1/workspaces?limit=200`);
-    expect(requests).toContain(`GET ${GATEWAY}/v1/workspaces?limit=200&cursor=p2`);
+    /* Asserted on the PARSED query rather than an exact string: parameter order
+       is `URLSearchParams` insertion order, and reordering it is behaviour-neutral
+       — a test that fails on it sends the reader hunting a paging bug that is not
+       there. What matters is that both pages ask for the largest page the API
+       gives, and that only the second carries the cursor. */
+    const asked = requests
+      .filter((r) => r.startsWith(`GET ${GATEWAY}/v1/workspaces?`))
+      .map((r) => new URL(r.slice("GET ".length)).searchParams)
+      .map((q) => ({ limit: q.get("limit"), cursor: q.get("cursor") }));
+    expect(asked).toEqual([
+      { limit: String(WORKSPACE_LIST_PAGE_SIZE), cursor: null },
+      { limit: String(WORKSPACE_LIST_PAGE_SIZE), cursor: "p2" },
+    ]);
   });
 
   test("a cursor that never ends REFUSES rather than offering a partial list", async () => {
     /* The one place this plugin prefers an error to a result. Every other list
        here is a display; this one is the question "which Workspaces may this
        project write into", and a truncated answer is a wrong answer the user
-       cannot see is wrong. */
+       cannot see is wrong.
+
+       An ADVANCING cursor, so the walk runs to the ceiling rather than tripping
+       the stall guard below. The ceiling is derived from the constants, not
+       restated: a raised ceiling should not fail this test as if the message
+       were wrong. */
     await signIn();
+    let issued = 0;
     route({
       [`GET ${GATEWAY}/v1/workspaces`]: () =>
-        Response.json({ workspaces: [{ id: "ws_1", name: "One" }], nextCursor: "always" }),
+        Response.json({
+          workspaces: [{ id: `ws_${issued}`, name: `W${issued}` }],
+          nextCursor: `page-${++issued}`,
+        }),
     });
 
     await expect(probeConnection({ projectRoot: project }, baseArgs)).rejects.toThrow(
-      /more than 2000 Workspaces/,
+      new RegExp(`did not finish within ${WORKSPACE_LIST_MAX_PAGES} pages of ${WORKSPACE_LIST_PAGE_SIZE}`),
     );
+    // Bounded, and bounded at the ceiling — not one request more.
+    expect(requests.filter((r) => r.includes("/v1/workspaces?")).length).toBe(WORKSPACE_LIST_MAX_PAGES);
+  });
+
+  test("a cursor that does not ADVANCE fails immediately, naming the API", async () => {
+    /* Distinguished from the case above on purpose. A server that repeats a
+       cursor is stuck; without this guard it costs the full ten round trips,
+       accumulates the same page ten times, and then blames the organization's
+       size for what is an API bug. */
+    await signIn();
+    route({
+      [`GET ${GATEWAY}/v1/workspaces`]: () =>
+        Response.json({ workspaces: [{ id: "ws_1", name: "One" }], nextCursor: "stuck" }),
+    });
+
+    await expect(probeConnection({ projectRoot: project }, baseArgs)).rejects.toThrow(
+      /same page cursor twice/,
+    );
+    // TWO requests, not ten: the first learns the cursor, the second proves it stuck.
+    expect(requests.filter((r) => r.includes("/v1/workspaces?")).length).toBe(2);
   });
 
   test("an organization without a Default Workspace still lists every choice", async () => {
