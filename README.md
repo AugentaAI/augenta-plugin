@@ -283,13 +283,6 @@ and looks for it in the usual version-manager locations before falling back to
 so a Node that works when you type `node` can be invisible to a hook. Point at it
 explicitly:
 
-Use the Bun version in `.bun-version`: the committed bundles are byte-compared in
-CI, and Bun's bundler output changes between releases, so `bun run build` refuses
-to run on any other version and prints the install command. Run `bun install` in
-the checkout you build from — where dependencies resolve from is baked into the
-bundles too. Any platform works; the pinned Bun produces the same bytes on macOS
-and Linux.
-
 ```bash
 export AUGENTA_NODE=/absolute/path/to/node
 ```

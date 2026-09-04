@@ -58,6 +58,13 @@ while users exercise *bundles under Node*, so a Bun-only API can enter runtime
 code and fail only in the field. `AGENTS.md` → "The runtime boundary" explains
 the three gates that close that, and the entrypoint rule that goes with it.
 
+Use the Bun version in `.bun-version`: the committed bundles are byte-compared in
+CI, and Bun's bundler output changes between releases, so `bun run build` refuses
+to run on any other version and prints the install command. Run `bun install` in
+the checkout you build from — where dependencies resolve from is baked into the
+bundles too. Any platform works; the pinned Bun produces the same bytes on macOS
+and Linux.
+
 ## Where things live
 
 - `hooks/` — lifecycle entrypoints for the supported coding agents
