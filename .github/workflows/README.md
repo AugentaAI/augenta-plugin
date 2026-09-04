@@ -19,8 +19,8 @@ All three Claude workflows need a repo secret:
 gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo AugentaAI/augenta-plugin
 ```
 
-Without it the jobs run and do nothing. This is a *repo-level* secret on the platform
-repo too, not an org secret, so it has to be set here separately.
+Without it the jobs run and do nothing. It is a *repo-level* secret rather than an org
+secret, so it has to be set on this repository separately.
 
 ## `ci.yml` — the deterministic gate
 
@@ -68,26 +68,15 @@ GitHub mobile app too). It runs with `contents: write` and its allowlist include
 
 What it cannot do is **merge**. `gh pr`, `gh issue`, and `gh label` are enumerated by
 subcommand rather than wildcarded, specifically to withhold `gh pr merge` and every
-`delete`. That matters more here than in the platform repo: **`main` is not currently
-branch-protected**, so the allowlist is the only merge gate. A `gh pr *` wildcard plus
-`contents: write` would let a prompt-injected issue comment talk the bot into merging its
-own unreviewed work.
+`delete`. The merge gate itself is enforced by GitHub: the `protect-main` ruleset on the
+default branch requires both `ci.yml` checks, one approving review, and a squash merge.
+The allowlist is defense in depth behind that — a `gh pr *` wildcard plus `contents: write`
+would let a prompt-injected issue comment talk the bot into *trying* to merge its own
+unreviewed work, and not handing it the verb costs nothing, since a human merging is no
+hardship.
 
 The `claude` and `codex` CLIs are deliberately not installed in this job; the
 marketplace-install check lives in `ci.yml` and runs on any PR the bot opens.
-
-### Recommended one-time admin setup
-
-Not required for the workflows to run, but it turns the merge gate into something GitHub
-enforces rather than something an allowlist withholds:
-
-- **Settings → Branches → add rule for `main`:**
-  - Require status checks to pass → select **`CI / typecheck + test`** and
-    **`CI / Claude + Codex marketplace install smoke test`**.
-  - Require a pull request before merging → require **at least 1 approval**.
-
-With that in place, a broken or injected PR cannot merge even if a bot is tricked into
-trying — the green check and human approval become hard gates.
 
 ## Two activation facts that cause confusion
 

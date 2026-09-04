@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/AugentaAI/augenta-plugin/security/advisories/new
+    about: Privately, through a GitHub security advisory. Never in a public issue.
+  - name: Account, billing, or platform support
+    url: https://augenta.ai
+    about: This repository is the plugin only. For the hosted Augenta service, start here.

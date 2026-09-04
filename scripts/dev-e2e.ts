@@ -8,7 +8,10 @@
  * Usage:
  *   bun scripts/dev-e2e.ts \
  *     --project /absolute/path/to/connected-project \
- *     --control-url https://dev.augenta.ai
+ *     --control-url <control-url>
+ *
+ * `--control-url` is required and has no default: the non-production control URL
+ * is not recorded in this repository. See DEBUG.md.
  */
 import {
   chmodSync,
@@ -30,7 +33,7 @@ import { resolveTargetProject } from "./connect";
 
 interface Args {
   project?: string;
-  controlUrl: string;
+  controlUrl?: string;
 }
 
 interface MeResponse {
@@ -54,7 +57,7 @@ interface ExperienceRow {
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { controlUrl: "https://dev.augenta.ai" };
+  const args: Args = {};
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--project") {
       args.project = argv[++i];
@@ -122,6 +125,15 @@ function check(ok: boolean, label: string, detail?: string): void {
 }
 
 const args = parseArgs(process.argv.slice(2));
+if (!args.controlUrl) {
+  // No default: which non-production Augenta this points at is a deployment fact
+  // that does not belong in a public repository. DEBUG.md says where to get it.
+  console.error(
+    "Usage: bun scripts/dev-e2e.ts [--project <path>] --control-url <control-url>",
+  );
+  process.exit(2);
+}
+const controlUrl = args.controlUrl;
 const projectRoot = resolveTargetProject(
   { ...(args.project ? { project: args.project } : {}) },
   process.cwd(),
@@ -141,7 +153,7 @@ if (cfg?.authMode !== "oauth" || !cfg.profileId || !cfg.connectorIds?.length) {
 const destinations = cfg.connectorIds;
 
 console.log(`dev-e2e — project=${projectRoot}`);
-const discovered = await augentaOAuthConfig(args.controlUrl);
+const discovered = await augentaOAuthConfig(controlUrl);
 const gateway = (cfg.endpoint || discovered.gateway).replace(/\/+$/, "");
 const profile = getAuthProfile(cfg.profileId);
 check(Boolean(profile), "global sign-in profile exists");

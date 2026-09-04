@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest a change to how the plugin works.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Changes to **telemetry APIs, payloads, consent semantics, or capture
+        behavior** need an explicit product decision, not just agreement that
+        they would be convenient. Those are recorded as invariants in
+        [AGENTS.md](https://github.com/AugentaAI/augenta-plugin/blob/main/AGENTS.md#privacy-invariants)
+        — worth a read before proposing one, since the reasoning is usually
+        there.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and where does the plugin get in the way?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+      description: If you have an idea of the shape, describe it. If not, the problem alone is fine.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Which harness
+      description: One manifest serves both, so a change to one usually has to work for the other.
+      options:
+        - Claude Code
+        - Codex
+        - Both
+        - Not harness-specific
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Existing flags, environment variables, or workarounds, and why they fall short.
+    validations:
+      required: false

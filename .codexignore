@@ -10,3 +10,12 @@ bun.lock
 # agentic CI workflows run. Neither manifest reaches .claude/ — both declare
 # "skills": "./skills/" — so this is bundle hygiene, not a correctness fix.
 .claude/
+
+# Policy and process for humans on GitHub, none of it reachable from an installed
+# plugin. README.md and AGENTS.md deliberately still ship — they are what someone
+# inspecting an installed copy reads — but nothing below is addressed to that
+# reader, and .github/ is now three issue/PR templates that only GitHub renders.
+SECURITY.md
+CONTRIBUTING.md
+CHANGELOG.md
+.github/

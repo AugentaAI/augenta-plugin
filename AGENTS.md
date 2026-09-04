@@ -30,16 +30,16 @@ Codex trust-pins each hook by content hash in `~/.codex/config.toml`
 user for trust. Batch hook changes into a single deliberate release; never ship
 them incrementally.
 
-For a hosted dev release, follow the platform repository's
-`docs/deployment-runbook.md`. Connect a disposable project with:
+For a hosted dev release, follow the platform team's deployment runbook. Connect
+a disposable project with:
 
 ```bash
 bun scripts/connect.ts \
   --project /absolute/path/to/test-project \
-  --control-url https://dev.augenta.ai
+  --control-url <control-url>
 bun scripts/dev-e2e.ts \
   --project /absolute/path/to/test-project \
-  --control-url https://dev.augenta.ai
+  --control-url <control-url>
 ```
 
 This is the positive human OAuth gate. GitHub Actions intentionally verifies
@@ -185,6 +185,19 @@ OpenTelemetry attribution `capture/ship.ts` sends — import `PLUGIN_VERSION`.
 The shipper's used to be its own hardcoded string and it silently drifted a
 release behind; a gate now fails on any quoted semver in `capture/`, `hooks/`,
 `runtime/` or `scripts/` outside `runtime/version.ts`.
+
+The `CHANGELOG.md` entry is part of the same atomic change, not a follow-up. It
+is the only account of a release a user can read — the marketplaces install from
+`main` and show no notes — so a version that lands without one ships a break
+nobody can look up. Write it in the user's terms: what changed for a connected
+project, and whether reconnecting is required.
+
+**Do not cite private-repo issues or PRs in commit messages or PR
+descriptions.** This repository is public and its commit log is part of what
+users read; a bare `#123` against a repository nobody can open is noise at best
+and a disclosure of internal planning at worst. Describe the platform-side
+change in words instead — "pairs with the platform change that pages
+`GET /v1/workspaces`" says everything the number was carrying.
 
 ## Privacy invariants
 
