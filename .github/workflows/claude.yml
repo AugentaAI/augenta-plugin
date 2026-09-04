@@ -59,10 +59,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Read from .bun-version, never re-typed here. This agent can commit a
+      # rebuilt dist/, and scripts/build.ts refuses to build on anything but the
+      # pinned Bun — a literal duplicated into this file would silently become a
+      # second source of truth and block the bot the day the pin moves.
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.14"
+          bun-version-file: .bun-version
 
       # NOTE: the `claude` and `codex` CLIs are deliberately NOT installed here. The
       # marketplace-install smoke test (plugin details, skill count, hook count) lives in

@@ -180,6 +180,28 @@ claude --plugin-dir . plugin details augenta
 whatever you last built.** Skip the build after changing a hook and you will watch
 the old behavior and conclude your change did nothing.
 
+If `bun run build` refuses to run, it is one of the two build inputs behind CI's
+byte-comparison of `dist/`, and the message names which:
+
+- **Wrong Bun.** `dist/` is built on the version in `.bun-version`, because Bun's
+  bundler codegen differs between releases. Install that exact version —
+  `curl -fsSL https://bun.sh/install | bash -s "bun-v$(cat .bun-version)"`;
+  plain `bun upgrade` goes to latest and will not pin.
+- **Dependencies resolved from outside this checkout.** Run
+  `bun install --frozen-lockfile` **in this directory**. This is the common one
+  in a git worktree, which starts without `node_modules` and will otherwise
+  quietly use the parent checkout's.
+
+Neither is platform-related: a Mac and CI's linux runner produce identical
+bundles on one Bun, so there is no container step to reproduce a CI `dist/`
+failure locally.
+
+`AUGENTA_ALLOW_BUN_MISMATCH=1` skips the version check for a one-off experiment
+— bisecting a bundler regression, or seeing what a newer Bun emits. It does not
+skip the dependency check, and its output must never be committed: CI rebuilds on
+the pinned Bun and will reject it. To actually move the pin, edit `.bun-version`
+and commit the rebuilt `dist/` in the same change instead.
+
 `plugin details` must report the manifest version, one `connect` skill, every
 event in `hooks/hooks.json`, and no load errors. It cannot catch an over-declared
 hook timeout — only a real Codex install can. See `AGENTS.md`.
