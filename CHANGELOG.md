@@ -20,6 +20,8 @@ release a user can read.
 
 ### Changed
 
+- Both marketplace listings show `support@augenta.ai` as the owner contact,
+  replacing a personal address.
 - `README.md` gained a Troubleshooting section covering the failure modes users
   actually hit, and lost the contributor and deployment notes that belonged in
   `CONTRIBUTING.md` and `AGENTS.md`.
@@ -48,7 +50,7 @@ release a user can read.
 - Corrected documentation that said an organization starts with one shared
   `Default Workspace`. Every member is provisioned their own.
 
-## [0.9.2] — 2026-08-17
+## 0.9.2 — 2026-08-17
 
 ### Fixed
 
@@ -68,7 +70,7 @@ release a user can read.
 
 - Hook commands changed, so **Codex re-prompts for hook trust** on upgrade.
 
-## [0.9.1] — 2026-08-16
+## 0.9.1 — 2026-08-16
 
 ### Fixed
 
@@ -78,7 +80,7 @@ release a user can read.
   It now states the fact and names the invocation to run, which is the whole
   point of the only prompt a project ever gets.
 
-## [0.9.0] — 2026-08-14
+## 0.9.0 — 2026-08-14
 
 ### Changed
 
@@ -94,7 +96,7 @@ release a user can read.
   comes from login discovery, and refusing anything else costs nothing — the
   link and code are always printed for the user to open themselves.
 
-## [0.8.0] — 2026-08-13
+## 0.8.0 — 2026-08-13
 
 ### Changed
 
@@ -112,7 +114,7 @@ plugin ships is unchanged, but the ids in an existing `.augenta/config.json` no
 longer resolve. Autonomous clients need re-issued platform keys, since a key is
 assigned to one Connector.
 
-## [0.7.0] — 2026-08-12
+## 0.7.0 — 2026-08-12
 
 ### Changed
 
@@ -132,7 +134,7 @@ Every project connected on an earlier version must re-run `/augenta:connect`.
 There is no fallback read, so an unconverted project has no destination
 configured and captures nothing.
 
-## [0.6.0] — 2026-07-28
+## 0.6.0 — 2026-07-28
 
 ### Added
 
@@ -161,7 +163,7 @@ configured and captures nothing.
 - The platform-key path stays single-destination: it has no consent gate, and its
   config format has no field in which to express a route.
 
-## [0.5.1] — 2026-07-28
+## 0.5.1 — 2026-07-28
 
 ### Fixed
 
@@ -176,7 +178,7 @@ configured and captures nothing.
   between reading the transcript and handing off — because `Stop` scans at the
   end of every turn and session start scans as the backstop.
 
-## [0.5.0] — 2026-07-28
+## 0.5.0 — 2026-07-28
 
 ### Added
 
@@ -202,7 +204,7 @@ configured and captures nothing.
   transcript, cache reads were over five thousand times the counted input volume.
   Codex turns now also record the model.
 
-## [0.4.0] — 2026-07-27
+## 0.4.0 — 2026-07-27
 
 ### Changed
 
@@ -232,7 +234,7 @@ configured and captures nothing.
 A config written before 0.4.0 becomes a one-time reconnect prompt rather than a
 reused credential that fails later as an unexplained 401.
 
-## [0.3.0] — 2026-07-27
+## 0.3.0 — 2026-07-27
 
 ### Added
 
@@ -255,7 +257,7 @@ authentication scheme the platform no longer accepts. They are not migrated:
 reusing the old credential would trade a clear reconnect for an unexplained
 authentication failure.
 
-## [0.2.3] — 2026-07-22
+## 0.2.3 — 2026-07-22
 
 ### Added
 

@@ -58,8 +58,11 @@ project and the honest answer is that response time depends on the week.
   same advisory form; we will route it rather than turn you away.
 - **Third-party dependencies** with no path through this plugin. If you can
   reach one *through* the plugin, that is in scope and worth reporting.
-- **Permissions a user widened themselves.** The plugin cannot chmod a config it
-  did not write, which README says where a user will hit it.
+- **Permissions a user widened themselves.** The plugin narrows `.augenta/` to
+  `0700` on every write it makes under it, whoever created the directory — that
+  mode is the real barrier, since reading the config needs search permission on
+  the directory. It cannot chmod a config *file* it did not write, and README
+  says so where a user will hit it.
 - **Bugs in Claude Code or Codex themselves.** Those belong to their own
   projects; report them there.
 - **Findings from scanning `dist/`.** Those bundles inline their whole import

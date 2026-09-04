@@ -129,9 +129,12 @@ For each path the diff touches, run the matching checks. A finding here is almos
 
 ### Manifests, marketplace, `package.json` — atomicity
 
-- A version change is atomic across **all five**: `package.json`, both plugin manifests,
-  and both the marketplace `metadata` and `plugins` entry — including the versioned
-  descriptions.
+- A version change is atomic across **all eight** values in six files: `package.json`,
+  both plugin manifests, both marketplaces' `metadata.version` AND `plugins[0].version`,
+  and `runtime/version.ts`'s `PLUGIN_VERSION` — including the versioned descriptions.
+  `RELEASE_VERSION` in `__tests__/contract.test.ts` moves with them, and so does the
+  `CHANGELOG.md` entry: `AGENTS.md` → Releases makes it part of the same atomic change,
+  not a follow-up. No version literal belongs anywhere outside `runtime/version.ts`.
 - `.claude-plugin/plugin.json` must **not** declare `hooks` (Claude auto-discovers them);
   `.codex-plugin/plugin.json` **must**.
 - No duplication of `skills/` or `hooks/` under `.claude-plugin/` or `.codex-plugin/`.

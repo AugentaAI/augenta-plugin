@@ -175,8 +175,8 @@ per project after upgrading:
 
 - **Connected before 0.3.0** — the project holds an API key from the old setup
   script, under an authentication scheme the platform no longer accepts.
-- **Connected on 0.3.x** — the project's `authMode` uses the older `workos`
-  spelling, replaced by the provider-neutral `oauth`.
+- **Connected on 0.3.x** — the project's `authMode` holds an older
+  provider-specific spelling, replaced by the provider-neutral `oauth`.
 - **Connected before 0.7.0** — the routing key in `config.json` was renamed to
   `connectorIds`, along with the API route and header behind it. Every project
   connected on an earlier version must re-run `/augenta:connect`; there is no
@@ -266,7 +266,9 @@ Augenta sign-in is a public-client OAuth device grant against Augenta's own
 ## Development
 
 Contributor setup, the verify commands, and the conventions this repository
-holds itself to live in [`CONTRIBUTING.md`](CONTRIBUTING.md) and `AGENTS.md`.
+holds itself to live in
+[`CONTRIBUTING.md`](https://github.com/AugentaAI/augenta-plugin/blob/main/CONTRIBUTING.md)
+and `AGENTS.md`.
 
 ## Troubleshooting
 
@@ -275,17 +277,21 @@ deliberate silent no-op until `.augenta/config.json` exists in the project or on
 of its parent directories, so an unconnected project looks exactly like a broken
 install. `AUGENTA_CAPTURE_ENABLED=0` silences a connected project the same way.
 
-**`Augenta hook: no Node 20+ found`.** The plugin runs on Node and looks for it
-in the usual version-manager locations before falling back to `PATH`. Desktop
-apps often start with a much shorter `PATH` than your terminal, so a Node that
-works when you type `node` can be invisible to a hook. Point at it explicitly:
+**`Augenta hook: Node.js 20 or newer was not found`.** The plugin runs on Node
+and looks for it in the usual version-manager locations before falling back to
+`PATH`. Desktop apps often start with a much shorter `PATH` than your terminal,
+so a Node that works when you type `node` can be invisible to a hook. Point at it
+explicitly:
 
 ```bash
 export AUGENTA_NODE=/absolute/path/to/node
 ```
 
-That message only ever appears for a **connected** project. A missing Node in an
-unconnected one stays silent, because nothing there opted in.
+That message only appears for a **connected** project — a missing Node in an
+unconnected one stays silent, because nothing there opted in. If `AUGENTA_NODE`
+itself is wrong you get `Augenta hook: AUGENTA_NODE is not a working Node.js 20+
+executable` instead, which is deliberately not gated: you asked for that
+executable by name, so a broken one is worth reporting either way.
 
 **Codex captures nothing after installing or updating.** Codex requires each hook
 to be trusted, pinned by content hash, and every plugin update re-prompts. Run
@@ -319,4 +325,4 @@ and inspected; use of Augenta itself is governed by Augenta's terms.
 
 - [augenta.ai](https://augenta.ai)
 - [Issues](https://github.com/AugentaAI/augenta-plugin/issues)
-- [Security policy](SECURITY.md)
+- [Security policy](https://github.com/AugentaAI/augenta-plugin/blob/main/SECURITY.md)
