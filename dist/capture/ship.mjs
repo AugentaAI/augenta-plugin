@@ -16749,7 +16749,7 @@ if (isMain(import.meta.url)) {
           token,
           connectorId: cfg.authMode === "oauth" ? cfg.connectorIds[0] : undefined,
           oauth: cfg.authMode === "oauth",
-          version: "0.9.2"
+          version: "0.9.3"
         });
       } catch {
         telemetry = undefined;

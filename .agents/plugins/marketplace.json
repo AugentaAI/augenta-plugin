@@ -9,13 +9,13 @@
   },
   "metadata": {
     "description": "Augenta for Codex — per-project, opt-in agent activity and project-memory capture.",
-    "version": "0.9.2"
+    "version": "0.9.3"
   },
   "plugins": [
     {
       "name": "augenta",
-      "description": "Augenta v0.9.2 — captures agent activity and project memory from connected projects. Run $augenta:connect or ask \"Connect Augenta\" to begin.",
-      "version": "0.9.2",
+      "description": "Augenta v0.9.3 — captures agent activity and project memory from connected projects. Run $augenta:connect or ask \"Connect Augenta\" to begin.",
+      "version": "0.9.3",
       "category": "Productivity",
       "keywords": ["augenta", "telemetry", "memory", "codex"],
       "source": {

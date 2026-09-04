@@ -849,7 +849,7 @@ function takeAuthNotice(projectRoot) {
 
 // scripts/connect.ts
 var DEFAULT_WAIT_SECONDS = 90;
-var PLUGIN_VERSION = "0.9.2";
+var PLUGIN_VERSION = "0.9.3";
 var DEFAULT_WORKSPACE_NAME = "Default Workspace";
 
 class AugentaRequestError extends Error {
@@ -1089,8 +1089,26 @@ async function selectOrCreateProfile(oauth, preferredProfileId) {
   }
   return saveVerifiedLogin(oauth, await deviceLogin(oauth));
 }
+var WORKSPACE_LIST_MAX_PAGES = 10;
 async function listWorkspaces(profileId, gateway) {
-  const { workspaces } = await bearerJson(profileId, `${gateway}/v1/workspaces`);
+  const workspaces = [];
+  let cursor;
+  let exhausted = false;
+  for (let page = 0;page < WORKSPACE_LIST_MAX_PAGES; page++) {
+    const query = new URLSearchParams({ limit: "200" });
+    if (cursor)
+      query.set("cursor", cursor);
+    const body = await bearerJson(profileId, `${gateway}/v1/workspaces?${query.toString()}`);
+    workspaces.push(...body.workspaces ?? []);
+    if (!body.nextCursor) {
+      exhausted = true;
+      break;
+    }
+    cursor = body.nextCursor;
+  }
+  if (!exhausted) {
+    throw new Error(`the organization lists more than ${WORKSPACE_LIST_MAX_PAGES * 200} Workspaces — ` + "refusing to offer a partial list of destinations");
+  }
   if (workspaces.length === 0) {
     throw new Error("the authenticated organization has no active Workspaces");
   }

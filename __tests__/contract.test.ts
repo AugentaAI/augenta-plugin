@@ -40,7 +40,7 @@ const KNOWN_HOOK_EVENTS = new Set([
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.9.2";
+const RELEASE_VERSION = "0.9.3";
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -646,6 +646,11 @@ describe("manifests — cross-harness packaging and one version", () => {
     const pluginVersion = connectSource.match(
       /^export const PLUGIN_VERSION = "([^"]+)";$/m,
     )?.[1];
+    // The shipper's telemetry attribution is a release surface for the same reason and
+    // was NOT covered when it was introduced: it is a bare literal inside a call, so a
+    // bump reaches every manifest and leaves every span reporting the previous release.
+    const shipSource = readFileSync(join(PLUGIN_ROOT, "capture", "ship.ts"), "utf8");
+    const telemetryVersion = shipSource.match(/^\s+version: "([^"]+)",$/m)?.[1];
     const versions = new Set([
       claudePluginJson.version,
       claudeMarketplaceJson.metadata?.version,
@@ -655,6 +660,7 @@ describe("manifests — cross-harness packaging and one version", () => {
       agentsMarketplaceJson.plugins?.[0]?.version,
       packageJson.version,
       pluginVersion,
+      telemetryVersion,
     ]);
     expect([...versions]).toEqual([RELEASE_VERSION]);
   });

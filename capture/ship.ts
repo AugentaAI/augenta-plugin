@@ -878,7 +878,14 @@ if (isMain(import.meta.url)) {
           token,
           connectorId: cfg.authMode === "oauth" ? cfg.connectorIds![0] : undefined,
           oauth: cfg.authMode === "oauth",
-          version: "0.9.2",
+          // A RELEASE SURFACE, asserted by `__tests__/contract.test.ts` alongside the
+          // manifests. Not imported from `scripts/connect.ts`'s `PLUGIN_VERSION`: there
+          // is no `capture/ -> scripts/` edge, and adding one would pull the whole
+          // connect module graph into the lean shipper bundle. So it is a literal the
+          // gate pins instead — this is the version every shipped span is attributed to,
+          // and it would otherwise drift a release behind exactly the way `PLUGIN_VERSION`
+          // did before that gate covered it.
+          version: "0.9.3",
         });
       } catch {
         // Operational telemetry is optional. It must never prevent the durable

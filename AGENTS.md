@@ -164,8 +164,8 @@ paste any credential into chat.
 **Consent stays explicit and in the user's hands.** Which Workspaces a project
 feeds is the user's decision, asked every time, and the answer is always a
 **non-empty, complete set of destinations** — never defaulted, never inferred,
-never carried forward from a previous run. Every organization is provisioned
-with `Default Workspace`, but availability is not consent: the question is still
+never carried forward from a previous run. Every member is provisioned their
+own `Default Workspace`, but availability is not consent: the question is still
 asked when that is the only Workspace and when the project is already connected
 (the current set is shown pre-selected and must be re-affirmed). Moving that
 question from a terminal menu into the harness's user-input mechanism is fine;

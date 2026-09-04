@@ -96,7 +96,7 @@ interface Connector {
  * (AGENTS.md → Releases) alongside both plugin manifests, both marketplace files,
  * and package.json; the contract test pins all of them to one value.
  */
-export const PLUGIN_VERSION = "0.9.2";
+export const PLUGIN_VERSION = "0.9.3";
 
 /** The Workspace every organization is provisioned with. Only an ordering hint —
  *  it is never auto-selected, and its absence is not an error. */
@@ -507,14 +507,48 @@ async function selectOrCreateProfile(
   return saveVerifiedLogin(oauth, await deviceLogin(oauth));
 }
 
+/**
+ * How many pages `listWorkspaces` will follow before giving up.
+ *
+ * It THROWS at the ceiling rather than returning what it has, which is the
+ * opposite of what a display surface would do — and deliberate. This list is the
+ * consent question: the user picks their destinations from it, and a silently
+ * partial list is a silently partial consent surface. Refusing is the honest
+ * failure; 10 × 200 destinations is far past where a person is choosing anyway.
+ */
+const WORKSPACE_LIST_MAX_PAGES = 10;
+
 async function listWorkspaces(
   profileId: string,
   gateway: string,
 ): Promise<Workspace[]> {
-  const { workspaces } = await bearerJson<{ workspaces: Workspace[] }>(
-    profileId,
-    `${gateway}/v1/workspaces`,
-  );
+  /* `GET /v1/workspaces` is paged (keyset over id, `?limit` clamped to 200), so
+     the whole list is assembled here before anything is offered. `?limit=200` is
+     the largest page the API will give, which keeps a normal organization to one
+     round trip. */
+  const workspaces: Workspace[] = [];
+  let cursor: string | undefined;
+  let exhausted = false;
+  for (let page = 0; page < WORKSPACE_LIST_MAX_PAGES; page++) {
+    const query = new URLSearchParams({ limit: "200" });
+    if (cursor) query.set("cursor", cursor);
+    const body = await bearerJson<{ workspaces: Workspace[]; nextCursor?: string }>(
+      profileId,
+      `${gateway}/v1/workspaces?${query.toString()}`,
+    );
+    workspaces.push(...(body.workspaces ?? []));
+    if (!body.nextCursor) {
+      exhausted = true;
+      break;
+    }
+    cursor = body.nextCursor;
+  }
+  if (!exhausted) {
+    throw new Error(
+      `the organization lists more than ${WORKSPACE_LIST_MAX_PAGES * 200} Workspaces — ` +
+        "refusing to offer a partial list of destinations",
+    );
+  }
   if (workspaces.length === 0) {
     throw new Error("the authenticated organization has no active Workspaces");
   }

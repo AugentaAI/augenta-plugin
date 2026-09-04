@@ -516,14 +516,22 @@ describe("JSON verbs", () => {
     { id: "ws-scratch", name: "Scratch" },
   ];
 
-  /** Minimal control plane. Unrouted paths fail loudly rather than silently 200. */
-  function route(extra: Record<string, () => Response> = {}) {
+  /** Minimal control plane. Unrouted paths fail loudly rather than silently 200.
+   *
+   *  `path` is normalized to origin+pathname and the query is handed to the
+   *  handler separately, so the exact-string routes below keep matching now that
+   *  `GET /v1/workspaces` carries `?limit=` and `?cursor=`. `requests` still
+   *  records the FULL url — several assertions read the query off it. */
+  function route(extra: Record<string, (query: URLSearchParams) => Response> = {}) {
     globalThis.fetch = (async (url, init) => {
-      const path = String(url);
+      const full = String(url);
+      const parsed = new URL(full);
+      const path = `${parsed.origin}${parsed.pathname}`;
+      const query = parsed.searchParams;
       const method = (init as RequestInit | undefined)?.method ?? "GET";
-      requests.push(`${method} ${path}`);
+      requests.push(`${method} ${full}`);
       const custom = extra[`${method} ${path}`] ?? extra[path];
-      if (custom) return custom();
+      if (custom) return custom(query);
       if (path === `${CONTROL}/.well-known/augenta.json`) {
         return Response.json({
           issuer: ISSUER,
@@ -555,7 +563,14 @@ describe("JSON verbs", () => {
         });
       }
       if (path === `${GATEWAY}/v1/workspaces` && method === "GET") {
-        return Response.json({ workspaces: liveWorkspaces });
+        /* Paged like the real door: keyset over the list index, `nextCursor`
+           only while rows remain. A stub that always answered the whole list
+           would let an unbounded or non-advancing loop pass. */
+        const limit = Math.min(Number(query.get("limit")) || 50, 200);
+        const from = Number(query.get("cursor") ?? "0");
+        const page = liveWorkspaces.slice(from, from + limit);
+        const next = from + limit < liveWorkspaces.length ? String(from + limit) : undefined;
+        return Response.json({ workspaces: page, ...(next ? { nextCursor: next } : {}) });
       }
       // Creates a link in whichever Workspace the body asks for, so a fan-out
       // cannot pass by accident against a mock that always answers "ws-default".
@@ -640,6 +655,46 @@ describe("JSON verbs", () => {
     const payload = await probeConnection({ projectRoot: project }, baseArgs);
 
     expect(payload.workspaces).toEqual([remote[1], remote[0]]);
+  });
+
+  test("follows nextCursor and offers the UNION, still Default-first", async () => {
+    /* The consent surface has to be the whole list. Splitting the Default
+       Workspace onto the SECOND page is the arrangement that matters: a
+       first-page-only client would offer "Scratch" alone and the user would ship
+       their work somewhere they did not choose — with no error to notice. */
+    await signIn();
+    route({
+      [`GET ${GATEWAY}/v1/workspaces`]: (query) =>
+        query.get("cursor") === "p2"
+          ? Response.json({ workspaces: [{ id: "ws_01ABC", name: "Default Workspace" }] })
+          : Response.json({ workspaces: [{ id: "ws_01HZY", name: "Scratch" }], nextCursor: "p2" }),
+    });
+
+    const payload = await probeConnection({ projectRoot: project }, baseArgs);
+
+    expect(payload.workspaces).toEqual([
+      { id: "ws_01ABC", name: "Default Workspace" },
+      { id: "ws_01HZY", name: "Scratch" },
+    ]);
+    // The largest page the API will give, so a normal org costs one round trip.
+    expect(requests).toContain(`GET ${GATEWAY}/v1/workspaces?limit=200`);
+    expect(requests).toContain(`GET ${GATEWAY}/v1/workspaces?limit=200&cursor=p2`);
+  });
+
+  test("a cursor that never ends REFUSES rather than offering a partial list", async () => {
+    /* The one place this plugin prefers an error to a result. Every other list
+       here is a display; this one is the question "which Workspaces may this
+       project write into", and a truncated answer is a wrong answer the user
+       cannot see is wrong. */
+    await signIn();
+    route({
+      [`GET ${GATEWAY}/v1/workspaces`]: () =>
+        Response.json({ workspaces: [{ id: "ws_1", name: "One" }], nextCursor: "always" }),
+    });
+
+    await expect(probeConnection({ projectRoot: project }, baseArgs)).rejects.toThrow(
+      /more than 2000 Workspaces/,
+    );
   });
 
   test("an organization without a Default Workspace still lists every choice", async () => {
