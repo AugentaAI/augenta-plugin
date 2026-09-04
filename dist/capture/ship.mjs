@@ -15363,6 +15363,9 @@ function isHttpsUrl(value) {
   }
 }
 
+// runtime/version.ts
+var PLUGIN_VERSION = "0.9.3";
+
 // capture/ship.ts
 import { join as join5, dirname as dirname2 } from "node:path";
 import { mkdirSync as mkdirSync4, openSync, writeSync, closeSync, unlinkSync as unlinkSync3, statSync as statSync3, appendFileSync as appendFileSync2 } from "node:fs";
@@ -16749,7 +16752,7 @@ if (isMain(import.meta.url)) {
           token,
           connectorId: cfg.authMode === "oauth" ? cfg.connectorIds[0] : undefined,
           oauth: cfg.authMode === "oauth",
-          version: "0.9.2"
+          version: PLUGIN_VERSION
         });
       } catch {
         telemetry = undefined;

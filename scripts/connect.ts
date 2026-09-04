@@ -22,6 +22,9 @@ import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { isMain } from "../runtime/node";
+// Reported to the platform as Connector metadata. One shared constant rather
+// than a literal per call site — see runtime/version.ts for why.
+import { PLUGIN_VERSION } from "../runtime/version";
 import { ensureAugentaDir } from "../capture/augenta-dir";
 import {
   DEFAULT_GATEWAY,
@@ -91,15 +94,9 @@ interface Connector {
   _etag?: string;
 }
 
-/**
- * Reported to the platform as Connector metadata. Part of the atomic release set
- * (AGENTS.md → Releases) alongside both plugin manifests, both marketplace files,
- * and package.json; the contract test pins all of them to one value.
- */
-export const PLUGIN_VERSION = "0.9.2";
-
-/** The Workspace every organization is provisioned with. Only an ordering hint —
- *  it is never auto-selected, and its absence is not an error. */
+/** The Workspace every MEMBER is provisioned with on first sign-in — not one per
+ *  organization, which is what this used to say. Only an ordering hint: it is
+ *  never auto-selected, and its absence is not an error. */
 const DEFAULT_WORKSPACE_NAME = "Default Workspace";
 
 class AugentaRequestError extends Error {
@@ -507,14 +504,70 @@ async function selectOrCreateProfile(
   return saveVerifiedLogin(oauth, await deviceLogin(oauth));
 }
 
+/** The page `listWorkspaces` asks for. 200 is the largest `?limit` the API will
+ *  honour (it clamps), so a normal organization costs one round trip. */
+export const WORKSPACE_LIST_PAGE_SIZE = 200;
+/**
+ * How many pages the walk will follow before refusing.
+ *
+ * It THROWS at the ceiling rather than returning what it has, which is the
+ * opposite of what a display surface would do — and deliberate. This list is the
+ * consent question: the user picks their destinations from it, and a silently
+ * partial list is a silently partial consent surface. Refusing is the honest
+ * failure, and 10 pages is far past where a person is choosing anyway.
+ *
+ * Exported so the tests can assert the refusal names the ceiling that was
+ * actually applied, rather than restating the product of two constants.
+ */
+export const WORKSPACE_LIST_MAX_PAGES = 10;
+
+/**
+ * Every Workspace the caller reaches, following `nextCursor` to exhaustion.
+ *
+ * Its own function so the terminating branch can simply RETURN and the throw
+ * after the loop is unconditional — no "did we finish?" flag to leave false by
+ * accident, and no path that can throw over a complete list.
+ */
+async function fetchAllWorkspaces(profileId: string, gateway: string): Promise<Workspace[]> {
+  const workspaces: Workspace[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < WORKSPACE_LIST_MAX_PAGES; page++) {
+    const query = new URLSearchParams({ limit: String(WORKSPACE_LIST_PAGE_SIZE) });
+    if (cursor) query.set("cursor", cursor);
+    const body = await bearerJson<{ workspaces: Workspace[]; nextCursor?: string }>(
+      profileId,
+      `${gateway}/v1/workspaces?${query.toString()}`,
+    );
+    workspaces.push(...(body.workspaces ?? []));
+    if (!body.nextCursor) return workspaces;
+    /* A cursor identical to the one just sent is a stuck server, not a long list.
+       Caught here rather than at the ceiling because otherwise it costs ten
+       identical round trips, accumulates the same page ten times, and then blames
+       the organization's size for what is an API bug. */
+    if (body.nextCursor === cursor) {
+      throw new Error(
+        "the Workspace list did not advance — the API returned the same page cursor twice",
+      );
+    }
+    cursor = body.nextCursor;
+  }
+  /* Deliberately says what was OBSERVED and not why. "More than N Workspaces" is
+     one explanation; a broken cursor is another, and this code cannot tell them
+     apart — so naming the first would send an operator to look at an organization
+     that may have four Workspaces in it. */
+  throw new Error(
+    `the Workspace list did not finish within ${WORKSPACE_LIST_MAX_PAGES} pages of ` +
+      `${WORKSPACE_LIST_PAGE_SIZE} — refusing to offer a partial list of destinations`,
+  );
+}
+
 async function listWorkspaces(
   profileId: string,
   gateway: string,
 ): Promise<Workspace[]> {
-  const { workspaces } = await bearerJson<{ workspaces: Workspace[] }>(
-    profileId,
-    `${gateway}/v1/workspaces`,
-  );
+  /* `GET /v1/workspaces` is paged (keyset over id), so the whole list is
+     assembled before anything is offered — see `fetchAllWorkspaces`. */
+  const workspaces = await fetchAllWorkspaces(profileId, gateway);
   if (workspaces.length === 0) {
     throw new Error("the authenticated organization has no active Workspaces");
   }

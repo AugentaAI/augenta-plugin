@@ -87,7 +87,7 @@ Connection is a deliberate per-project opt-in. Run `/augenta:connect` (Codex:
 `$augenta:connect` or "Connect Augenta") and answer in the chat:
 
 1. Pick **every** Workspace this project should feed — one or several, with at
-   least one required. Every organization starts with `Default Workspace`; the
+   least one required. Everyone gets their own `Default Workspace`; the
    plugin also lets you create another Workspace before choosing. That choice is
    the consent boundary, and **each one you pick receives the full record**.
 2. The first time only, click the `auth.augenta.ai` link your agent shows you.

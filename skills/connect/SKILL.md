@@ -158,7 +158,7 @@ This single question is both the consent gate and the target choice, so it is th
 one step that always happens. **The answer is the complete set of destinations
 and must be non-empty** — the project will feed exactly what the user selects
 here and nothing else, and a successful connection must feed at least one Workspace.
-Every organization starts with `Default Workspace`. Ask it every time,
+Everyone has their own `Default Workspace`. Ask it every time,
 including when that is the only Workspace and including when the project is
 already connected. Never offer to keep the current selection without showing it;
 never treat one answer as authorization for more than one destination; never

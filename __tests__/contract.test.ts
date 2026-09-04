@@ -15,7 +15,7 @@
  */
 import { test, expect, describe } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 // This repo IS the plugin: __tests__/ sits at the repo root, so PLUGIN_ROOT is
 // the repo root (one level up from here).
@@ -40,7 +40,10 @@ const KNOWN_HOOK_EVENTS = new Set([
 const EXPECTED_SKILLS = new Set(["connect"]);
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.9.2";
+const RELEASE_VERSION = "0.9.3";
+/** How many values the release must set. AGENTS.md → Releases lists them, and a
+ *  test below asserts its count is this one. */
+const RELEASE_SURFACES = 8;
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
 
 interface Frontmatter {
@@ -639,14 +642,23 @@ describe("manifests — cross-harness packaging and one version", () => {
 
   test("all release surfaces agree on ONE version", () => {
     const packageJson = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf8"));
-    // connect.ts reports its version to the platform as Connector metadata, so
-    // it is a release surface too — and the only one not expressed as JSON, which
-    // is exactly how it drifted a release behind before this assertion existed.
-    const connectSource = readFileSync(join(PLUGIN_ROOT, "scripts", "connect.ts"), "utf8");
-    const pluginVersion = connectSource.match(
+    /* The code half of the release set: `runtime/version.ts` is the ONE place a
+       version is written in TypeScript, and both the Connector metadata and the
+       shipper's OpenTelemetry attribution import it. It is a release surface —
+       and the only one not expressed as JSON, which is exactly how it drifted a
+       release behind before this assertion existed.
+
+       Two literals used to be pinned here by pattern match. That is a weak pin: a
+       regex binds to the FIRST line that looks right, so a second `version:`
+       property added anywhere above the telemetry call would have made this gate
+       assert the wrong literal while every shipped span reported the previous
+       release. An import cannot drift, so this reads one file and the compiler
+       covers the rest — which is also why the next test exists. */
+    const versionSource = readFileSync(join(PLUGIN_ROOT, "runtime", "version.ts"), "utf8");
+    const pluginVersion = versionSource.match(
       /^export const PLUGIN_VERSION = "([^"]+)";$/m,
     )?.[1];
-    const versions = new Set([
+    const surfaces = [
       claudePluginJson.version,
       claudeMarketplaceJson.metadata?.version,
       claudeMarketplaceJson.plugins?.[0]?.version,
@@ -655,8 +667,59 @@ describe("manifests — cross-harness packaging and one version", () => {
       agentsMarketplaceJson.plugins?.[0]?.version,
       packageJson.version,
       pluginVersion,
-    ]);
-    expect([...versions]).toEqual([RELEASE_VERSION]);
+    ];
+    // The COUNT as well as the agreement, so AGENTS.md's list can be pinned to it.
+    expect(surfaces.length).toBe(RELEASE_SURFACES);
+    expect([...new Set(surfaces)]).toEqual([RELEASE_VERSION]);
+  });
+
+  test("AGENTS.md names as many release surfaces as the gate above pins", () => {
+    /* The count in AGENTS.md is what a human counts off when cutting a release,
+       and it was already wrong once (it listed five of eight). Pinning it to the
+       set above means adding a surface without documenting it fails here rather
+       than being discovered by whoever bumps next. */
+    const agents = readFileSync(join(PLUGIN_ROOT, "AGENTS.md"), "utf8");
+    const claimed = agents.match(/atomic, across \*\*(\w+)\*\* values/)?.[1];
+    const asWord: Record<string, number> = {
+      five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+    };
+    expect(claimed, "AGENTS.md → Releases must state the surface count").toBeDefined();
+    expect(asWord[claimed!]).toBe(RELEASE_SURFACES);
+  });
+
+  test("no source file writes a version literal of its own", () => {
+    /* The assertion that makes the single import trustworthy, and the one the
+       previous regex pin could not make: it is not enough that
+       `runtime/version.ts` agrees with the manifests if some other module has
+       quietly hardcoded a version beside it. The shipper's telemetry
+       attribution did exactly that, and the gate above could not see it.
+
+       Scoped to the plugin's own TypeScript, excluding runtime/version.ts (the
+       one legitimate home) and the tests (which name versions on purpose). */
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (!["node_modules", "dist", ".git"].includes(entry.name)) walk(full);
+        } else if (entry.name.endsWith(".ts") && !entry.name.includes(".test.")) {
+          const rel = relative(PLUGIN_ROOT, full);
+          if (rel === join("runtime", "version.ts")) continue;
+          const source = readFileSync(full, "utf8");
+          // A quoted semver anywhere in a source file. Comments are stripped first
+          // so prose about a past release (this repo has plenty) is not an offender.
+          const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/[^\n]*$/gm, "");
+          for (const match of code.matchAll(/"(\d+\.\d+\.\d+)"/g)) {
+            offenders.push(`${rel}: ${match[1]}`);
+          }
+        }
+      }
+    };
+    for (const dir of ["capture", "hooks", "runtime", "scripts"]) {
+      const root = join(PLUGIN_ROOT, dir);
+      if (existsSync(root)) walk(root);
+    }
+    expect(offenders).toEqual([]);
   });
 
   test("CI derives the release version and hook count instead of hardcoding them", () => {

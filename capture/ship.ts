@@ -43,6 +43,7 @@
  * location.
  */
 import { isMain } from "../runtime/node";
+import { PLUGIN_VERSION } from "../runtime/version";
 import { join, dirname } from "node:path";
 import { mkdirSync, openSync, writeSync, closeSync, unlinkSync, statSync, appendFileSync } from "node:fs";
 import {
@@ -878,7 +879,10 @@ if (isMain(import.meta.url)) {
           token,
           connectorId: cfg.authMode === "oauth" ? cfg.connectorIds![0] : undefined,
           oauth: cfg.authMode === "oauth",
-          version: "0.9.2",
+          // The version every shipped span is attributed to. Imported rather than
+          // written out, so it cannot drift a release behind the manifests — which
+          // is exactly what it had done until this was noticed.
+          version: PLUGIN_VERSION,
         });
       } catch {
         // Operational telemetry is optional. It must never prevent the durable
