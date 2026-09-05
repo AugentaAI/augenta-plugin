@@ -53,13 +53,18 @@ import * as nodeRuntime from "../runtime/node";
 // `startLogin` -> `beginDeviceLogin` opens a browser unless the caller passes
 // `openBrowser: false` (capture/auth.ts). `startLogin` takes no such option and
 // should not grow one for a test, so the seam every caller shares is stubbed here
-// instead. Without this, three tests below hand the fixture URL to `open`/`xdg-open`
-// and a full `bun test` puts three real tabs on auth.example.com in the developer's
-// browser. Nothing is sent there -- the HTTP endpoint is routed to a stub and the
-// domain is IANA-reserved -- but a test suite has no business driving the desktop.
+// instead. Without this, every test below that reaches `startLogin` without a live
+// pending login hands the fixture URL to `open`/`xdg-open`, and a full `bun test`
+// puts real tabs on auth.example.com in the developer's browser. Nothing is sent
+// there -- the device-authorization endpoint is routed to a stub and the domain is
+// IANA-reserved -- but a test suite has no business driving the desktop.
 //
 // The real module is spread first: it also exports `readStdin` and `isMain`, and the
 // CLI subprocess tests need both to keep working.
+//
+// Measured, not assumed: this mock is scoped to this file. A sibling test importing
+// `runtime/node` in the same `bun test` run still gets the real `openBrowser`, so
+// nothing here weakens another file's coverage.
 const browserLaunches: string[][] = [];
 mock.module("../runtime/node", () => ({
   ...nodeRuntime,
@@ -1142,9 +1147,12 @@ describe("JSON verbs", () => {
     await startLogin(baseArgs);
 
     expect(browserLaunches).toHaveLength(1);
-    expect(browserLaunches[0]?.[browserLaunches[0].length - 1]).toBe(
-      `${ISSUER}/device?user_code=OPEN-CODE`,
-    );
+    // The URL is the last argument whichever opener the platform picked
+    // (`open` on darwin, `xdg-open` elsewhere), so assert that rather than an
+    // argv shape that differs by OS.
+    const launch = browserLaunches[0] ?? [];
+    expect(launch.length).toBeGreaterThan(1);
+    expect(launch.at(-1)).toBe(`${ISSUER}/device?user_code=OPEN-CODE`);
   });
 
   test("await-login reports pending while the link is still good", async () => {
