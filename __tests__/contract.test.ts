@@ -486,6 +486,7 @@ describe("the consent gate is plural, explicit, and fully disclosed", () => {
   test("README states the plural consent step and the union audience", () => {
     expect(readme).toMatch(/every\*\* Workspace this project should feed/i);
     expect(readme).toMatch(/union/);
+    expect(readme).toMatch(/## What gets captured/i);
     expect(readme).toMatch(/full record/);
     expect(readme).toMatch(/raw transcript records are structurally sanitized/i);
     expect(readme).toMatch(/not secret-scrubbed/i);
@@ -920,6 +921,7 @@ describe("manifests — cross-harness packaging and one version", () => {
     expect(readme).toContain("/plugin install augenta@augenta");
     expect(readme).toContain("codex plugin marketplace add AugentaAI/augenta-plugin --ref main");
     expect(readme).toContain("codex plugin add augenta@augenta");
+    expect(readme).toContain("/hooks");
     expect(readme).toContain("/augenta:connect");
     expect(readme).toContain("$augenta:connect");
     expect(readme).not.toContain("codex plugin install");

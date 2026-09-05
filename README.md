@@ -36,7 +36,8 @@ codex plugin marketplace add AugentaAI/augenta-plugin --ref main
 codex plugin add augenta@augenta
 ```
 
-Start a new session and trust the Augenta hooks when Codex asks. Open the
+Start a new session and trust the Augenta hooks when Codex asks. Codex asks
+again after plugin updates; if you dismiss the prompt, run `/hooks`. Open the
 project you want to connect and run:
 
 ```text
@@ -66,10 +67,14 @@ The connect skill signs you in through your browser when needed, then asks you
 to select **every** Workspace this project should feed. At least one is
 required, and you can choose more than one.
 
-That selection is the consent boundary. Every selected Workspace receives the
-**full record**: the same agent activity, raw transcript records, and project
-memory. The effective audience is the **union** of everyone with access to any
-selected Workspace.
+That selection is the consent boundary. The effective audience is the
+**union** of everyone with access to any selected Workspace.
+
+## What gets captured
+
+Every selected Workspace receives the **full record**: the same normalized
+agent activity, raw transcript records, and project memory. Normalized activity
+and project memory are scrubbed for common credential patterns.
 
 Raw transcript records are structurally sanitized but are **not
 secret-scrubbed**. Only connect projects whose agent activity you are
