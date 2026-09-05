@@ -61,8 +61,8 @@ project and the honest answer is that response time depends on the week.
 - **Permissions a user widened themselves.** The plugin narrows `.augenta/` to
   `0700` on every write it makes under it, whoever created the directory — that
   mode is the real barrier, since reading the config needs search permission on
-  the directory. It cannot chmod a config *file* it did not write, and README
-  says so where a user will hit it.
+  the directory. It cannot chmod a config *file* it did not write; that file's
+  permissions remain the responsibility of whoever created it.
 - **Bugs in Claude Code or Codex themselves.** Those belong to their own
   projects; report them there.
 - **Findings from scanning `dist/`.** Those bundles inline their whole import

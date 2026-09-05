@@ -74,8 +74,8 @@ jobs:
       # npm-global install on every @claude mention would buy nothing.
       #
       # The Augenta plugin is not dogfooded in this job either. The machine path for an
-      # autonomous client is a project `.augenta/config.json`, documented in README.md;
-      # nothing here writes one.
+      # autonomous client is a project `.augenta/config.json`, documented in the
+      # Augenta dashboard's Getting Started guide; nothing here writes one.
 
       - name: Run Claude Code
         id: claude

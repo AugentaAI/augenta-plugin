@@ -486,6 +486,10 @@ describe("the consent gate is plural, explicit, and fully disclosed", () => {
   test("README states the plural consent step and the union audience", () => {
     expect(readme).toMatch(/every\*\* Workspace this project should feed/i);
     expect(readme).toMatch(/union/);
+    expect(readme).toMatch(/## What gets captured/i);
+    expect(readme).toMatch(/full record/);
+    expect(readme).toMatch(/raw transcript records are structurally sanitized/i);
+    expect(readme).toMatch(/not secret-scrubbed/i);
     // The old singular framing must not survive alongside the new one.
     expect(readme).not.toMatch(/That single choice is the consent boundary/);
   });
@@ -581,6 +585,10 @@ describe("the identity provider stays behind the scenes", () => {
     expect(readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8")).not.toContain(
       "WorkOS",
     );
+  });
+
+  test("the user-facing README never names it either", () => {
+    expect(readFileSync(join(PLUGIN_ROOT, "README.md"), "utf8")).not.toMatch(/workos/i);
   });
 
   test("the connect skill forbids the agent from naming it", () => {
@@ -902,15 +910,24 @@ describe("manifests — cross-harness packaging and one version", () => {
     }
   });
 
-  test("README documents the current shell install commands", () => {
+  test("README documents the current four-path Getting Started flow", () => {
     const readme = readFileSync(join(PLUGIN_ROOT, "README.md"), "utf8");
-    expect(readme).toContain("claude plugin marketplace add AugentaAI/augenta-plugin");
-    expect(readme).toContain("claude plugin install augenta@augenta");
+    const flat = readme.replace(/\s+/g, " ");
+
+    for (const heading of ["Claude Code", "Codex CLI", "Claude Desktop", "ChatGPT Desktop"]) {
+      expect(readme).toContain(`### ${heading}`);
+    }
+    expect(readme).toContain("/plugin marketplace add AugentaAI/augenta-plugin");
+    expect(readme).toContain("/plugin install augenta@augenta");
     expect(readme).toContain("codex plugin marketplace add AugentaAI/augenta-plugin --ref main");
     expect(readme).toContain("codex plugin add augenta@augenta");
+    expect(readme).toContain("/hooks");
     expect(readme).toContain("/augenta:connect");
     expect(readme).toContain("$augenta:connect");
     expect(readme).not.toContain("codex plugin install");
+    expect(flat).toMatch(/Claude Desktop.*automatic sync/i);
+    expect(flat).toMatch(/ChatGPT Desktop.*`main` as the Git ref.*Sparse paths empty/i);
+    expect(readme).toContain("https://augenta.ai/dashboard/getting-started");
   });
 });
 
