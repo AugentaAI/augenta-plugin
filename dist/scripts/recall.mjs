@@ -782,6 +782,13 @@ function classifyRecallResponse(parts) {
       message: say("this sign-in is not entitled to read that Workspace")
     };
   }
+  if (status === 409) {
+    return {
+      kind: "failed",
+      code: code ?? "workspace_archived",
+      message: say("that Workspace is archived and cannot be read")
+    };
+  }
   if (status === 429) {
     const retryAfter = retryAfterSeconds(parts.retryAfter);
     return {

@@ -327,6 +327,19 @@ export function classifyRecallResponse(parts: RecallResponseParts): Outcome {
       message: say("this sign-in is not entitled to read that Workspace"),
     };
   }
+  if (status === 409) {
+    /* Two meanings, told apart by the body. The platform door answers 409 for an
+       ARCHIVED Workspace — its Workspace routes' own spelling for "this exists,
+       you may see it, and it is closed" — and passes the retrieval service's
+       typed `embedder_mismatch` through with the same status, which is a
+       deployment fault rather than anything the asker did. A typed code wins;
+       otherwise this is the archived case. */
+    return {
+      kind: "failed",
+      code: code ?? "workspace_archived",
+      message: say("that Workspace is archived and cannot be read"),
+    };
+  }
   if (status === 429) {
     const retryAfter = retryAfterSeconds(parts.retryAfter);
     return {

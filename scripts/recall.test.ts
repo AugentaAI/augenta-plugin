@@ -305,6 +305,25 @@ describe("classifyRecallResponse", () => {
     ).toEqual({ kind: "failed", code: "recall_timeout", message: "too slow" });
   });
 
+  test("409 is an archived Workspace, or the upstream's typed deployment fault", () => {
+    /* Added to the platform door after this client was written: an archived
+       Workspace is a clean, actionable refusal, and falling through to
+       `unexpected_status` would have reported it as "something odd happened". */
+    expect(
+      classifyRecallResponse(parts(409, { error: 'workspace "ws-old" is archived' })),
+    ).toEqual({
+      kind: "failed",
+      code: "workspace_archived",
+      message: 'workspace "ws-old" is archived',
+    });
+    // A typed code on the same status is the retrieval service, not the door.
+    expect(
+      classifyRecallResponse(
+        parts(409, { error: { code: "embedder_mismatch", message: "corpus mismatch" } }),
+      ),
+    ).toMatchObject({ code: "embedder_mismatch" });
+  });
+
   test("statuses map to codes a caller can act on", () => {
     expect(classifyRecallResponse(parts(401, { error: "bad token" }))).toMatchObject({
       code: "need_login",

@@ -469,6 +469,7 @@ describe("the recall skill drives recall itself", () => {
       "not_entitled",
       "recall_timeout",
       "unknown_workspace",
+      "workspace_archived",
       "workspace_not_selectable",
       "unreadable_config",
       "unresolvedConnectorIds",
