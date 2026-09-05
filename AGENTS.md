@@ -22,8 +22,8 @@ Codex plugin-creator validator currently rejects Codex's supported `hooks`
 manifest field, so the Codex release gate is a real marketplace installation
 with `codex plugin marketplace add` followed by `codex plugin add`.
 Also run `claude --plugin-dir . plugin details augenta` and verify it reports
-the manifest version, one `connect` skill, every event in `hooks/hooks.json`
-(currently eight), and no load errors.
+the manifest version, both skills (`connect` and `recall`), every event in
+`hooks/hooks.json` (currently eight), and no load errors.
 
 Codex trust-pins each hook by content hash in `~/.codex/config.toml`
 (`[hooks.state]`), so **any** edit to `hooks/hooks.json` re-prompts every Codex
@@ -50,8 +50,8 @@ selecting a non-production issuer/client/gateway set.
 `DEBUG.md` carries the rest of the contributor levers: pointing a harness at a
 non-production Augenta with `AUGENTA_CONTROL_URL`, running the working tree
 instead of an installed copy, and resetting local sign-in state. It is contributor
-documentation and stays unlinked from `README.md` — the connect skill itself has
-no environment flag, and the reasoning for that is recorded there.
+documentation and stays unlinked from `README.md` — neither skill has an
+environment flag, and the reasoning for that is recorded there.
 
 ## The runtime boundary: Bun builds, Node ships
 
@@ -59,8 +59,8 @@ no environment flag, and the reasoning for that is recorded there.
 role as a compiler — tests, typecheck, and bundling. Nothing that reaches a user
 may depend on it.
 
-What ships is `dist/`: five Node ESM bundles built from the five entrypoints by
-`scripts/build.ts`. `hooks/hooks.json` and `skills/connect/SKILL.md` invoke those
+What ships is `dist/`: six Node ESM bundles built from the six entrypoints by
+`scripts/build.ts`. `hooks/hooks.json` and the two SKILL.md files invoke those
 bundles, never the `.ts` sources, which are not directly Node-runnable anyway
 (`moduleResolution: "bundler"` means extensionless relative imports). `dist/` is
 committed because both marketplaces install a git checkout and run no build step,
@@ -74,7 +74,7 @@ the bundler's output is a build input. Two of them do:
 - **The Bun version**, pinned in `.bun-version`. Bun's bundler codegen changes
   between releases — 1.3.14 emits the `__toESMCache_*` ESM-interop prelude, 1.3.5
   the older `get: () => mod[key]` form, 1.4.1 something else again — so one
-  version off rewrites all five bundles. `scripts/build.ts` reads the same file
+  version off rewrites every bundle. `scripts/build.ts` reads the same file
   CI does and refuses to build on any other Bun, naming the version and how to
   install it. Do not re-type the number into a workflow; a contract test fails
   that. To move the pin, edit `.bun-version` and commit the rebuilt `dist/` with

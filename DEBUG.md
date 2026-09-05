@@ -7,9 +7,9 @@ and never something to walk a user through.
 
 ## Point the plugin at a non-production Augenta
 
-Export the control URL. `augentaOAuthConfig` (`capture/auth.ts:210`) reads
+Export the control URL. `augentaOAuthConfig` (`capture/auth.ts:211`) reads
 `AUGENTA_CONTROL_URL` on every code path, so this reaches the interactive script,
-all four `--json` verbs, and the connect skill alike:
+every `--json` verb, and the connect skill alike:
 
 ```bash
 export AUGENTA_CONTROL_URL=<control-url>
@@ -27,17 +27,26 @@ Do not use `--endpoint` alone to reach another environment. It moves the gateway
 only, leaving the issuer and client id on the previous environment, which fails
 later as an unexplained 401 rather than at the point of the mistake.
 
-**The connect skill has no environment flag, on purpose.** `SKILL.md` stays
+**Recall is not redirected by that variable, and does not need to be.** It never
+touches the control plane: it posts to the GATEWAY in the project's own
+`.augenta/config.json`, which connect wrote when the project was connected to
+that environment. So a project connected against dev asks dev, whatever
+`AUGENTA_CONTROL_URL` says. To aim recall somewhere else, either reconnect the
+project or set `AUGENTA_API_URL`, which `gatewayBase` reads first. This is also
+why `recallEnvironment` (`scripts/recall.ts:520`) consults BOTH coordinates — the
+control URL alone would report `prod` about a question going to dev.
+
+**Neither skill has an environment flag, on purpose.** `SKILL.md` stays
 environment-agnostic and the variable does the work, for two reasons. A user
 connecting a project has no environment to choose, so an agent that knows about
 one can offer a decision nobody can answer. And a flag would have to be applied
 to *every* verb: `--await-login` compares the pending grant's issuer and client id
 against fresh discovery and **clears the grant** on mismatch
-(`scripts/connect.ts:973`), so one verb missing the flag mid-flow throws away a
+(`scripts/connect.ts:1095`), so one verb missing the flag mid-flow throws away a
 sign-in the user already authorized in their browser. A process-wide variable
 cannot be applied to only some of the verbs.
 
-Disclosure is unaffected. `environmentLabel` (`scripts/connect.ts:826`) reads the
+Disclosure is unaffected. `environmentLabel` (`capture/platform.ts:155`) reads the
 same variable, so every payload's `environment` field becomes the literal URL
 instead of `prod`, and `SKILL.md` requires the agent to state a non-prod
 environment in both the Workspace question and the confirmation. If a skill run
@@ -202,6 +211,6 @@ skip the dependency check, and its output must never be committed: CI rebuilds o
 the pinned Bun and will reject it. To actually move the pin, edit `.bun-version`
 and commit the rebuilt `dist/` in the same change instead.
 
-`plugin details` must report the manifest version, one `connect` skill, every
-event in `hooks/hooks.json`, and no load errors. It cannot catch an over-declared
+`plugin details` must report the manifest version, both skills (`connect` and
+`recall`), every event in `hooks/hooks.json`, and no load errors. It cannot catch an over-declared
 hook timeout — only a real Codex install can. See `AGENTS.md`.

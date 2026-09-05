@@ -16,9 +16,8 @@
  * subset invariant and `linkForWorkspace` for why links are adopted, never moved.
  * A platform key stays single-destination (`verifyApiKeyConnection`).
  */
-import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { isMain } from "../runtime/node";
@@ -33,12 +32,34 @@ import {
 } from "../capture/config";
 import { Outbox } from "../capture/outbox";
 import {
+  AugentaRequestError,
+  bearerJson,
+  currentConnector,
+  describeError,
+  environmentLabel,
+  fetchAllWorkspaces,
+  type Connector,
+  type Workspace,
+} from "../capture/platform";
+import { resolveProject, type ResolvedProject } from "../capture/project";
+/* Re-exported, not re-implemented. These moved to modules a second entrypoint
+   can import (an entrypoint may not import another entrypoint), but they are
+   still part of this file's published surface: scripts/dev-e2e.ts and
+   scripts/connect.test.ts import them from here. */
+export {
+  resolveProject,
+  resolveTargetProject,
+  type ResolvedProject,
+} from "../capture/project";
+export {
+  WORKSPACE_LIST_MAX_PAGES,
+  WORKSPACE_LIST_PAGE_SIZE,
+} from "../capture/platform";
+import {
   augentaOAuthConfig,
   beginDeviceLogin,
   clearPendingLogin,
-  DEFAULT_CONTROL_URL,
   deviceLogin,
-  fetchWithProfile,
   pollDeviceToken,
   readPendingLogin,
   ReLoginRequiredError,
@@ -80,34 +101,10 @@ interface MeResponse {
   org: { id: string; name: string };
 }
 
-interface Workspace {
-  id: string;
-  name: string;
-}
-
-interface Connector {
-  id: string;
-  kind: string;
-  direction: "inbound" | "outbound" | "bidirectional";
-  status: "active" | "disabled";
-  workspaceId: string;
-  _etag?: string;
-}
-
 /** The Workspace every MEMBER is provisioned with on first sign-in — not one per
  *  organization, which is what this used to say. Only an ordering hint: it is
  *  never auto-selected, and its absence is not an error. */
 const DEFAULT_WORKSPACE_NAME = "Default Workspace";
-
-class AugentaRequestError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "AugentaRequestError";
-  }
-}
 
 export function parseArgs(argv: string[]): Args {
   const args: Args = {};
@@ -168,59 +165,6 @@ export function parseArgs(argv: string[]): Args {
     }
   }
   return args;
-}
-
-export interface ResolvedProject {
-  projectRoot: string;
-  /** Set when cwd was a linked worktree and the main checkout was used instead.
-   *  Reported rather than applied silently — the caller tells the user. */
-  worktreeRedirect?: { from: string; to: string };
-}
-
-function gitRevParse(cwd: string, arg: string): string | undefined {
-  try {
-    const value = execFileSync("git", ["rev-parse", arg], {
-      cwd,
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .toString()
-      .trim();
-    return value || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Pick the project to connect: `--project` > main checkout > git toplevel > cwd.
- *
- * The main-checkout step exists because `--show-toplevel` returns the LINKED
- * WORKTREE's root, and capture only ever walks UPWARD from cwd looking for
- * `.augenta/config.json` (capture/config.ts → resolveProjectRoot). Connect from
- * an out-of-tree worktree such as `~/.codex/worktrees/<id>/<name>` and the config
- * lands somewhere the real repo can never see, so every hook keeps silently
- * no-opping — the user completes the whole flow and captures nothing.
- *
- * `--git-common-dir` prints relative to cwd in a normal repo (`../.git`) and
- * absolute in a linked worktree, which `resolve` handles either way.
- */
-export function resolveProject(args: Args, cwd: string): ResolvedProject {
-  if (args.project) return { projectRoot: resolve(cwd, args.project) };
-  const top = gitRevParse(cwd, "--show-toplevel");
-  // A non-git directory is still a valid explicitly connected project.
-  if (!top) return { projectRoot: cwd };
-  const commonDir = gitRevParse(cwd, "--git-common-dir");
-  if (commonDir) {
-    const mainRoot = dirname(resolve(cwd, commonDir));
-    if (mainRoot !== top && existsSync(mainRoot)) {
-      return { projectRoot: mainRoot, worktreeRedirect: { from: top, to: mainRoot } };
-    }
-  }
-  return { projectRoot: top };
-}
-
-export function resolveTargetProject(args: Args, cwd: string): string {
-  return resolveProject(args, cwd).projectRoot;
 }
 
 export function writeApiKeyConfig(
@@ -394,22 +338,6 @@ async function chooseMany<T>(
   }
 }
 
-async function bearerJson<T>(
-  profileId: string,
-  url: string,
-  init: RequestInit = {},
-): Promise<T> {
-  const response = await fetchWithProfile(profileId, url, init);
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new AugentaRequestError(
-      response.status,
-      `Augenta request failed (${response.status})${detail ? `: ${detail}` : ""}`,
-    );
-  }
-  return (await response.json()) as T;
-}
-
 async function verifyFreshLogin(
   oauth: OAuthConfig,
   accessToken: string,
@@ -502,63 +430,6 @@ async function selectOrCreateProfile(
     );
   }
   return saveVerifiedLogin(oauth, await deviceLogin(oauth));
-}
-
-/** The page `listWorkspaces` asks for. 200 is the largest `?limit` the API will
- *  honour (it clamps), so a normal organization costs one round trip. */
-export const WORKSPACE_LIST_PAGE_SIZE = 200;
-/**
- * How many pages the walk will follow before refusing.
- *
- * It THROWS at the ceiling rather than returning what it has, which is the
- * opposite of what a display surface would do — and deliberate. This list is the
- * consent question: the user picks their destinations from it, and a silently
- * partial list is a silently partial consent surface. Refusing is the honest
- * failure, and 10 pages is far past where a person is choosing anyway.
- *
- * Exported so the tests can assert the refusal names the ceiling that was
- * actually applied, rather than restating the product of two constants.
- */
-export const WORKSPACE_LIST_MAX_PAGES = 10;
-
-/**
- * Every Workspace the caller reaches, following `nextCursor` to exhaustion.
- *
- * Its own function so the terminating branch can simply RETURN and the throw
- * after the loop is unconditional — no "did we finish?" flag to leave false by
- * accident, and no path that can throw over a complete list.
- */
-async function fetchAllWorkspaces(profileId: string, gateway: string): Promise<Workspace[]> {
-  const workspaces: Workspace[] = [];
-  let cursor: string | undefined;
-  for (let page = 0; page < WORKSPACE_LIST_MAX_PAGES; page++) {
-    const query = new URLSearchParams({ limit: String(WORKSPACE_LIST_PAGE_SIZE) });
-    if (cursor) query.set("cursor", cursor);
-    const body = await bearerJson<{ workspaces: Workspace[]; nextCursor?: string }>(
-      profileId,
-      `${gateway}/v1/workspaces?${query.toString()}`,
-    );
-    workspaces.push(...(body.workspaces ?? []));
-    if (!body.nextCursor) return workspaces;
-    /* A cursor identical to the one just sent is a stuck server, not a long list.
-       Caught here rather than at the ceiling because otherwise it costs ten
-       identical round trips, accumulates the same page ten times, and then blames
-       the organization's size for what is an API bug. */
-    if (body.nextCursor === cursor) {
-      throw new Error(
-        "the Workspace list did not advance — the API returned the same page cursor twice",
-      );
-    }
-    cursor = body.nextCursor;
-  }
-  /* Deliberately says what was OBSERVED and not why. "More than N Workspaces" is
-     one explanation; a broken cursor is another, and this code cannot tell them
-     apart — so naming the first would send an operator to look at an organization
-     that may have four Workspaces in it. */
-  throw new Error(
-    `the Workspace list did not finish within ${WORKSPACE_LIST_MAX_PAGES} pages of ` +
-      `${WORKSPACE_LIST_PAGE_SIZE} — refusing to offer a partial list of destinations`,
-  );
 }
 
 async function listWorkspaces(
@@ -682,23 +553,6 @@ export async function selectedWorkspaces(
     // destination the consent invariant bans (AGENTS.md → Privacy invariants).
     choices = await listWorkspaces(profileId, gateway);
   }
-}
-
-async function currentConnector(
-  profileId: string,
-  gateway: string,
-  id: string | undefined,
-): Promise<Connector | undefined> {
-  if (!id) return undefined;
-  const response = await fetchWithProfile(
-    profileId,
-    `${gateway}/v1/connectors/${encodeURIComponent(id)}`,
-  );
-  if (response.status === 403 || response.status === 404) return undefined;
-  if (!response.ok) {
-    throw new Error(`could not inspect the existing Connector (${response.status})`);
-  }
-  return ((await response.json()) as { connector: Connector }).connector;
 }
 
 /**
@@ -987,7 +841,7 @@ export async function connectProject(
   const priorIds = prior?.connectorIds ?? [];
   const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds);
   const available = await listWorkspaces(selected.profileId, gateway);
-  const environment = environmentLabel(args);
+  const environment = environmentLabel(args.controlUrl);
 
   // BEFORE the answer, not after. This is the disclosure the consent invariant
   // turns on (AGENTS.md → Privacy invariants): a list of Workspace names does not
@@ -1076,17 +930,6 @@ export async function connectProject(
 export interface JsonPayload {
   status: string;
   [key: string]: unknown;
-}
-
-/** `prod` or the literal non-production control URL, so a caller can say which
- *  environment a project is about to feed instead of connecting dev by accident. */
-function environmentLabel(args: Args): string {
-  const url = (
-    args.controlUrl?.trim() ||
-    process.env.AUGENTA_CONTROL_URL ||
-    DEFAULT_CONTROL_URL
-  ).replace(/\/+$/, "");
-  return url === DEFAULT_CONTROL_URL ? "prod" : url;
 }
 
 function secondsUntil(timestamp: number): number {
@@ -1632,36 +1475,6 @@ export async function connectWithApiKey(
   };
 }
 
-/**
- * One readable sentence for any thrown failure.
- *
- * Node's fetch reports every connection-level failure as the bare string
- * "fetch failed", putting the actual cause (DNS, refused, TLS, timeout) one level
- * down in `error.cause`. Since the shipped CLI runs on Node, that string would be
- * the ENTIRE diagnosis a user or agent gets for being offline, behind a proxy, or
- * pointed at a dead `--control-url`. Unwrap the cause so the message names
- * something actionable.
- */
-function describeError(error: unknown): string {
-  const message = (error as Error)?.message ?? String(error);
-  if (message !== "fetch failed") return message;
-  const cause = (error as { cause?: { code?: string; message?: string } }).cause;
-  const code = cause?.code;
-  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
-    return "cannot reach Augenta: the host name did not resolve. Check your network or DNS.";
-  }
-  if (code === "ECONNREFUSED") {
-    return "cannot reach Augenta: the connection was refused. Check the URL, and any proxy or firewall.";
-  }
-  if (code === "CERT_HAS_EXPIRED" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {
-    return "cannot reach Augenta: the TLS certificate could not be verified. Check for a TLS-intercepting proxy.";
-  }
-  const detail = cause?.message ?? code;
-  return detail
-    ? `cannot reach Augenta: ${detail}`
-    : "cannot reach Augenta: the network request failed. Check your connection.";
-}
-
 if (isMain(import.meta.url)) {
   const argv = process.argv.slice(2);
   // Read straight off argv: parseArgs itself can throw, and a caller that asked
@@ -1687,7 +1500,7 @@ if (isMain(import.meta.url)) {
         JSON.stringify(
           {
             ...payload,
-            environment: environmentLabel(args),
+            environment: environmentLabel(args.controlUrl),
             projectRoot,
             ...(resolved.worktreeRedirect
               ? { worktreeRedirect: resolved.worktreeRedirect }

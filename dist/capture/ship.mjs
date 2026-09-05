@@ -15364,7 +15364,7 @@ function isHttpsUrl(value) {
 }
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.9.3";
+var PLUGIN_VERSION = "0.10.0";
 
 // capture/ship.ts
 import { join as join5, dirname as dirname2 } from "node:path";
@@ -16066,6 +16066,9 @@ async function saveDeviceProfile(config, tokens, identity) {
     writeAuthStore(store);
     return { profileId, profile };
   });
+}
+function getAuthProfile(profileId) {
+  return readAuthStore().profiles[profileId];
 }
 function reusableProfiles(config) {
   return Object.entries(readAuthStore().profiles).filter(([, profile]) => profile.issuer.replace(/\/+$/, "") === config.issuer.replace(/\/+$/, "") && profile.clientId === config.clientId && profile.gateway.replace(/\/+$/, "") === config.gateway.replace(/\/+$/, "")).map(([profileId, profile]) => ({ profileId, profile })).sort((a, b) => b.profile.updatedAt.localeCompare(a.profile.updatedAt));

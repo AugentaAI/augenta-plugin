@@ -69,6 +69,7 @@ const BUNDLES = [
   "capture/capture.mjs",
   "capture/ship.mjs",
   "scripts/connect.mjs",
+  "scripts/recall.mjs",
 ];
 
 describe("the built bundles exist and are what hooks.json points at", () => {
@@ -198,5 +199,59 @@ describe("connect", () => {
     const parsed = JSON.parse(r.stdout);
     expect(parsed.status).toBe("error");
     expect(r.stderr).toBe("");
+  });
+});
+
+describe("recall", () => {
+  test("an unconnected project answers not_connected, and asks nothing", () => {
+    // The privacy invariant on the read door, verified against the bytes that
+    // ship: with no project config there is nothing to ask and nowhere to ask it,
+    // so the question never leaves — and no state is created for a project that
+    // never opted in.
+    const r = run("scripts/recall.mjs", ["--json", "--project", project, "what", "did", "we", "learn"], {
+      cwd: project,
+    });
+    expect(r.stderr).toBe("");
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.status).toBe("not_connected");
+    expect(parsed.query).toBe("what did we learn");
+    expect(existsSync(join(project, ".augenta"))).toBe(false);
+    // not_connected is a state, not a fault: a non-zero exit here would make a
+    // normal answer look like a broken command.
+    expect(r.exitCode).toBe(0);
+  });
+
+  test("a bad flag returns JSON rather than a stack trace", () => {
+    // Recall's parser is STRICT — leftover words are the question, so a mistyped
+    // flag must not become part of what gets asked. That refusal has to survive
+    // bundling as a JSON answer, not a module-load crash.
+    const r = run("scripts/recall.mjs", ["--json", "--wokspace", "ws-1"], { cwd: project });
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.status).toBe("error");
+    expect(parsed.message).toContain("--wokspace");
+    expect(r.stderr).toBe("");
+  });
+
+  test("an unreachable gateway is reported in words a user can act on", () => {
+    // Node reports every connection failure as the bare string "fetch failed";
+    // describeError unwraps error.cause. Under `bun test` the sources would show
+    // Bun's own message instead, so this is the only place the SHIPPED wording is
+    // checked. api-key mode because it needs no global sign-in state — the key
+    // stays in the project file and never reaches the payload.
+    mkdirSync(join(project, ".augenta"), { recursive: true });
+    writeFileSync(
+      join(project, ".augenta", "config.json"),
+      JSON.stringify({ authMode: "api-key", apiKey: "sk-aug-smoke.secret" }),
+    );
+    const r = run("scripts/recall.mjs", ["--json", "--project", project, "--timeout", "5", "anything"], {
+      cwd: project,
+      env: { AUGENTA_API_URL: "http://127.0.0.1:9" },
+    });
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.failed[0].message).toContain("cannot reach Augenta");
+    expect(parsed.failed[0].message).not.toBe("fetch failed");
+    expect(r.stderr).toBe("");
+    // The credential never appears in anything the agent reads.
+    expect(r.stdout).not.toContain("sk-aug-smoke");
   });
 });

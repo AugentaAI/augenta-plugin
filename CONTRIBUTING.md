@@ -31,8 +31,8 @@ claude plugin validate . --strict
 claude --plugin-dir . plugin details augenta
 ```
 
-`plugin details` must report the manifest version, one `connect` skill, every
-event in `hooks/hooks.json`, and no load errors. To exercise an installed copy,
+`plugin details` must report the manifest version, both skills (`connect` and
+`recall`), every event in `hooks/hooks.json`, and no load errors. To exercise an installed copy,
 add the checkout as a marketplace:
 
 ```bash
@@ -48,7 +48,7 @@ codex plugin add augenta@augenta
 ## Bun builds, Node ships
 
 Bun is a build-time tool here, in the same role as a compiler; nothing that
-reaches a user may depend on it. What ships is `dist/` — five Node ESM bundles,
+reaches a user may depend on it. What ships is `dist/` — six Node ESM bundles,
 **committed**, because both marketplaces install a git checkout and run no build
 step. Run `bun run build` and commit the result whenever a shipped source
 changes; CI fails a pull request whose `dist/` has drifted.
@@ -72,7 +72,10 @@ and Linux.
 - `runtime/` — the Node shims and `PLUGIN_VERSION`
 - `scripts/connect.ts` — sign-in, destination selection, project config, and the
   agent-driven `--json` verbs
+- `scripts/recall.ts` — the read door: one question, fanned out to every
+  Workspace the project feeds
 - `skills/connect/` — the guided connection flow
+- `skills/recall/` — asking those Workspaces what they remember
 - `__tests__/contract.test.ts` — the structural invariants, including the ones
   that live in prose
 

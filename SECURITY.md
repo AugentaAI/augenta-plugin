@@ -2,9 +2,9 @@
 
 ## Scope
 
-This repository is the Augenta plugin: eight lifecycle hooks and one connect
-script, all of which run **on the user's own machine** under Claude Code or
-Codex. What that code touches is the useful boundary for a report:
+This repository is the Augenta plugin: eight lifecycle hooks, a connect script,
+and a recall script, all of which run **on the user's own machine** under Claude
+Code or Codex. What that code touches is the useful boundary for a report:
 
 - **`~/.augenta/auth.json`** — the global, owner-only sign-in file. Rotating
   OAuth access and refresh tokens live here and nowhere else, mode `0600` inside
@@ -15,9 +15,11 @@ Codex. What that code touches is the useful boundary for a report:
   adds a self-ignoring `.gitignore`.
 - **What leaves the machine, and to where** — README's
   [What gets captured](README.md#what-gets-captured) is the authoritative
-  description. Two channels: normalized events scrubbed client-side for common
-  credential patterns, and raw transcript records that are structurally
-  sanitized but **not** secret-scrubbed.
+  description. Three channels: normalized events scrubbed client-side for common
+  credential patterns; raw transcript records that are structurally sanitized
+  but **not** secret-scrubbed; and, only when a user or their agent asks for it,
+  a recall question — the query text alone, sent to the Workspaces the project
+  already feeds, with no transcript or file content attached.
 
 Anything that breaks one of those — a token reaching a place it should not, a
 file created wider than stated, capture running for a project that never opted

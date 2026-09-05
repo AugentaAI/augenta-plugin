@@ -15,8 +15,9 @@ Read a pull request diff, assess it, and post a single structured review comment
 > **This is contributor tooling, not a shipped plugin skill.** It lives under `.claude/`
 > on purpose. `skills/` at the repo root is the plugin's *product* surface: both manifests
 > declare `"skills": "./skills/"`, `__tests__/contract.test.ts` asserts the skill set is
-> exactly `{connect}`, and `ci.yml` greps for a literal `Skills (1)`. A second skill under
-> `skills/` fails three gates at once. Never move this file there.
+> exactly `{connect, recall}`, and `ci.yml` checks the installed skill count and names
+> against `skills/` itself. A skill added there ships to every user. Never move this file
+> there.
 
 ## Prerequisites
 

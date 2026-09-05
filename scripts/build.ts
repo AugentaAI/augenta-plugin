@@ -1,11 +1,11 @@
 /**
- * Builds the five shipped entrypoints into dist/.
+ * Builds the six shipped entrypoints into dist/.
  *
  * WHY THIS EXISTS AT ALL: the plugin's users run Node, not Bun. The sources use
  * extensionless relative imports (`moduleResolution: "bundler"`), so Node cannot
  * execute them directly — bundling is what makes the plugin installable on a
- * stock machine. `hooks/hooks.json` and `skills/connect/SKILL.md` invoke the
- * OUTPUT of this script, never the sources.
+ * stock machine. `hooks/hooks.json` and the SKILL.md files under `skills/`
+ * invoke the OUTPUT of this script, never the sources.
  *
  * dist/ is committed. Both marketplaces install a git checkout and run no build
  * step, so these bundles ARE the shipped artifact: anything this script fails to
@@ -29,7 +29,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
  * Bun's bundler codegen changes between releases: 1.3.5 emits the older
  * `get: () => mod[key]` ESM-interop shim, while 1.3.14 emits the
  * `__toESMCache_*` / `__accessProp` prelude, and 1.4.1 differs again. One
- * version behind rewrites ALL FIVE bundles, so CI rejects the result and asks
+ * version behind rewrites EVERY bundle, so CI rejects the result and asks
  * for a revert without ever naming the cause.
  *
  * What is NOT a variable is the platform. Measured 2026-09-04 on 1.3.14:
@@ -82,9 +82,14 @@ if (Bun.version !== PINNED_BUN && process.env.AUGENTA_ALLOW_BUN_MISMATCH !== "1"
 }
 
 /**
- * The shipped surface: every file a harness or the connect skill invokes
- * directly. The contract test pins this list against hooks/hooks.json, so an
- * entrypoint added here without a hook wiring (or vice versa) fails the suite.
+ * The shipped surface: every file a harness or a skill invokes directly. The
+ * contract test pins this list against hooks/hooks.json and the skills, so an
+ * entrypoint added here that nothing wires up — or a hook or skill pointing at a
+ * bundle nobody builds — fails the suite.
+ *
+ * Two of these are CLIs rather than hooks: `scripts/connect.ts` writes a
+ * project's routing decision and `scripts/recall.ts` reads back what its
+ * Workspaces remember. Each is invoked by its own SKILL.md, never by hooks.json.
  */
 export const ENTRYPOINTS = [
   "hooks/session-start.ts",
@@ -92,6 +97,7 @@ export const ENTRYPOINTS = [
   "capture/capture.ts",
   "capture/ship.ts",
   "scripts/connect.ts",
+  "scripts/recall.ts",
 ] as const;
 
 /**
