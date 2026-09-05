@@ -133,15 +133,25 @@ jobs:
           grep -Fq "augenta $version" claude-plugin-details.txt
           grep -Fq "Hooks ($hook_count)" claude-plugin-details.txt
 
-          # The inventory line reads "Skills (2)  connect, recall". Assert the
-          # count AND that every skill in the tree is named on it.
+          # The inventory line reads "Skills (2)  connect, recall". Compare the
+          # LISTED NAMES as a set against the tree, not as substrings of the whole
+          # line: `grep -Fq "call"` matches the `recall` entry, so a substring
+          # check passes for a skill the harness never loaded — the exact failure
+          # this is here to catch. The count is asserted too, since a set match
+          # alone would not notice the harness reporting a wrong total.
           skills_line="$(grep -E '^ *Skills \(' claude-plugin-details.txt)"
           test -n "$skills_line"
           echo "$skills_line" | grep -Fq "Skills ($skill_count)"
-          for name in $skill_names; do
-            echo "$skills_line" | grep -Fq "$name" \
-              || { echo "Claude did not load the $name skill: $skills_line"; exit 1; }
-          done
+          listed="$(
+            sed -E 's/^ *Skills \([0-9]+\)[[:space:]]*//' <<<"$skills_line" \
+              | tr ',' '\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' | sort
+          )"
+          if [[ "$listed" != "$skill_names" ]]; then
+            echo "Claude loaded a different skill set than the tree declares:"
+            echo "  declared: $(tr '\n' ' ' <<<"$skill_names")"
+            echo "  loaded:   $(tr '\n' ' ' <<<"$listed")"
+            exit 1
+          fi
 
           # Everything above inspects manifests. The rest of this step checks the
           # thing only a real install can: that dist/ is actually COPIED by the

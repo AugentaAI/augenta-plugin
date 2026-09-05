@@ -657,6 +657,7 @@ function resolveTargetProject(args, cwd) {
 
 // scripts/recall.ts
 var DEFAULT_TIMEOUT_SECONDS = 75;
+var MAX_TIMEOUT_SECONDS = 600;
 var MAX_QUERY_CHARS = 4096;
 function parseArgs(argv) {
   const args = { words: [] };
@@ -681,6 +682,9 @@ function parseArgs(argv) {
       const value = Number(valueFor(flag, i++));
       if (!Number.isFinite(value) || value <= 0) {
         throw new Error("--timeout must be a positive number of seconds");
+      }
+      if (value > MAX_TIMEOUT_SECONDS) {
+        throw new Error(`--timeout must be at most ${MAX_TIMEOUT_SECONDS} seconds; a longer wait does not work (see MAX_TIMEOUT_SECONDS)`);
       }
       args.timeoutSeconds = value;
     } else if (flag.startsWith("--")) {
@@ -779,11 +783,12 @@ function classifyRecallResponse(parts) {
     };
   }
   if (status === 429) {
+    const retryAfter = retryAfterSeconds(parts.retryAfter);
     return {
       kind: "failed",
       code: "rate_limited",
       message: say("Augenta is rate limiting recall requests"),
-      ...retryAfterSeconds(parts.retryAfter) !== undefined ? { retryAfterSeconds: retryAfterSeconds(parts.retryAfter) } : {}
+      ...retryAfter !== undefined ? { retryAfterSeconds: retryAfter } : {}
     };
   }
   if (status === 400) {
@@ -872,19 +877,6 @@ function aggregateStatus(payload) {
   }
   return "partially_answered";
 }
-function fail(status, code, message, query, environment, startedAt) {
-  return {
-    status,
-    query,
-    answers: [],
-    nothingRemembered: [],
-    failed: [],
-    code,
-    message,
-    environment,
-    elapsedMs: Date.now() - startedAt
-  };
-}
 async function resolveDestinations(profileId, gateway, connectorIds) {
   const destinations = [];
   const unresolvedConnectorIds = [];
@@ -929,19 +921,34 @@ async function runRecall(resolved, args) {
   const startedAt = Date.now();
   const query = questionFrom(args);
   let environment = recallEnvironment(DEFAULT_GATEWAY);
+  let projectRoot = resolved.projectRoot;
+  const bail = (status2, code, message, extra = {}) => ({
+    status: status2,
+    query,
+    answers: [],
+    nothingRemembered: [],
+    failed: [],
+    code,
+    message,
+    environment,
+    projectRoot,
+    elapsedMs: Date.now() - startedAt,
+    ...extra
+  });
   if (!query) {
-    return fail("error", "query_required", "ask a question: recall takes the text to look up", query, environment, startedAt);
+    return bail("error", "query_required", "ask a question: recall takes the text to look up");
   }
   if (query.length > MAX_QUERY_CHARS) {
-    return fail("error", "query_too_long", `the question is ${query.length} characters; Augenta accepts ${MAX_QUERY_CHARS}`, query, environment, startedAt);
+    return bail("error", "query_too_long", `the question is ${query.length} characters; Augenta accepts ${MAX_QUERY_CHARS}`);
   }
-  const projectRoot = resolveProjectRoot(resolved.projectRoot);
-  if (!projectRoot) {
-    return fail("not_connected", "not_connected", "this project is not connected to Augenta; run the connect skill first", query, environment, startedAt);
+  const found = resolveProjectRoot(resolved.projectRoot);
+  if (!found) {
+    return bail("not_connected", "not_connected", "this project is not connected to Augenta; run the connect skill first");
   }
+  projectRoot = found;
   const cfg = loadProjectConfig(projectRoot);
   if (!cfg) {
-    return fail("not_connected", "unreadable_config", "this project's Augenta config cannot be read; reconnect with the connect skill", query, environment, startedAt);
+    return bail("not_connected", "unreadable_config", "this project's Augenta config cannot be read; reconnect with the connect skill");
   }
   const gateway = gatewayBase(cfg);
   environment = recallEnvironment(gateway);
@@ -956,16 +963,23 @@ async function runRecall(resolved, args) {
   if (cfg.authMode === "oauth") {
     const profileId = cfg.profileId;
     if (!getAuthProfile(profileId)) {
-      return fail("need_login", "need_login", "this project's Augenta sign-in is missing; sign in again with the connect skill", query, environment, startedAt);
+      return bail("need_login", "need_login", "this project's Augenta sign-in is missing; sign in again with the connect skill");
     }
-    const resolution = await resolveDestinations(profileId, gateway, cfg.connectorIds ?? []);
+    const [resolution, named] = await Promise.all([
+      resolveDestinations(profileId, gateway, cfg.connectorIds ?? []),
+      fetchAllWorkspaces(profileId, gateway).catch(() => [])
+    ]);
     if (resolution.needLogin) {
-      return fail("need_login", "need_login", "this project's Augenta sign-in has expired; sign in again with the connect skill", query, environment, startedAt);
+      return bail("need_login", "need_login", "this project's Augenta sign-in has expired; sign in again with the connect skill");
     }
-    destinations = resolution.destinations;
+    destinations = [];
+    for (const destination of resolution.destinations) {
+      if (destinations.some((seen) => seen.workspaceId === destination.workspaceId))
+        continue;
+      destinations.push(destination);
+    }
     unresolvedConnectorIds = resolution.unresolvedConnectorIds;
     failed.push(...resolution.failed);
-    const named = await fetchAllWorkspaces(profileId, gateway).catch(() => []);
     for (const destination of destinations) {
       const name = named.find((workspace) => workspace.id === destination.workspaceId)?.name;
       if (name)
@@ -975,23 +989,24 @@ async function runRecall(resolved, args) {
       const requested = new Set(args.workspaces);
       const unknown = args.workspaces.filter((id) => !destinations.some((destination) => destination.workspaceId === id));
       if (unknown.length > 0) {
-        return fail("error", "unknown_workspace", `this project does not feed ${unknown.join(", ")}; recall can only ask the Workspaces it sends to`, query, environment, startedAt);
+        return bail("error", "unknown_workspace", `this project does not feed ${unknown.join(", ")}; recall can only ask the Workspaces it sends to`);
       }
       destinations = destinations.filter((destination) => destination.workspaceId && requested.has(destination.workspaceId));
     }
     ctx = { url, query, timeoutMs, profileId };
   } else {
     if (args.workspaces?.length) {
-      return fail("error", "workspace_not_selectable", "this project uses a platform key, whose Connector fixes the Workspace; --workspace selects nothing", query, environment, startedAt);
+      return bail("error", "workspace_not_selectable", "this project uses a platform key, whose Connector fixes the Workspace; --workspace selects nothing");
+    }
+    const apiKey = cfg.apiKey?.trim();
+    if (!apiKey) {
+      return bail("error", "unreadable_config", "this project's platform key is missing from its Augenta config; reconnect");
     }
     destinations = [{}];
-    ctx = { url, query, timeoutMs, apiKey: cfg.apiKey };
+    ctx = { url, query, timeoutMs, apiKey };
   }
   if (destinations.length === 0 && failed.length === 0) {
-    return {
-      ...fail("error", "no_destination", unresolvedConnectorIds.length > 0 ? `this project lists ${unresolvedConnectorIds.join(", ")}, but ${unresolvedConnectorIds.length === 1 ? "it is" : "they are"} not readable with this sign-in; reconnect` : "this project has no destination to ask; reconnect with the connect skill", query, environment, startedAt),
-      ...unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {}
-    };
+    return bail("error", "no_destination", unresolvedConnectorIds.length > 0 ? `this project lists ${unresolvedConnectorIds.join(", ")}, but ${unresolvedConnectorIds.length === 1 ? "it is" : "they are"} not readable with this sign-in; reconnect` : "this project has no destination to ask; reconnect with the connect skill", unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {});
   }
   const outcomes = await Promise.all(destinations.map(async (destination) => ({
     destination,
@@ -1017,6 +1032,7 @@ async function runRecall(resolved, args) {
     failed,
     ...unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {},
     environment,
+    projectRoot,
     elapsedMs: Date.now() - startedAt
   };
 }
@@ -1035,6 +1051,9 @@ function printPayload(payload) {
     const label = entry.workspaceName ?? entry.workspaceId ?? entry.connectorId ?? "Augenta";
     console.error(`Augenta recall: could not ask ${label}: ${entry.message}`);
   }
+  if (payload.unresolvedConnectorIds?.length) {
+    console.error(`Augenta recall: did not ask ${payload.unresolvedConnectorIds.join(", ")} — ` + `this project lists ${payload.unresolvedConnectorIds.length === 1 ? "that Connector" : "those Connectors"} ` + `but ${payload.unresolvedConnectorIds.length === 1 ? "it is" : "they are"} not readable with this sign-in.`);
+  }
   if (payload.message && payload.answers.length === 0) {
     console.error(`Augenta recall: ${payload.message}`);
   }
@@ -1048,7 +1067,6 @@ if (isMain(import.meta.url)) {
     const payload = await runRecall(resolved, args);
     const envelope = {
       ...payload,
-      projectRoot: resolved.projectRoot,
       ...resolved.worktreeRedirect ? { worktreeRedirect: resolved.worktreeRedirect } : {}
     };
     if (args.json) {

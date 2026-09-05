@@ -527,6 +527,25 @@ describe("the recall skill drives recall itself", () => {
     expect(flat).toMatch(/not `prod`, say so/);
   });
 
+  test("AGENTS.md records the read door's invariants as invariants", () => {
+    /* The same treatment connect's consent gate gets, and for the same reason:
+       AGENTS.md is what a future contributor checks against, so an invariant that
+       lives only in this file's assertions is one nobody editing recall will
+       read. Every phrase below is a rule a plausible change would break. */
+    const agents = readFileSync(join(PLUGIN_ROOT, "AGENTS.md"), "utf8").replace(/\s+/g, " ");
+    for (const phrase of [
+      /Recall is a READ, and its invariants are its own/i,
+      /Only the question text leaves/i,
+      /NOT gated on `AUGENTA_CAPTURE_ENABLED`/,
+      /needs no consent gate because it creates no new disclosure/i,
+      /`--workspace` may only NARROW that set/,
+      /client never names an organization/i,
+      /A young Workspace is not an error/i,
+    ]) {
+      expect(agents, `AGENTS.md no longer records: ${phrase}`).toMatch(phrase);
+    }
+  });
+
   test("recall reads project config and is NOT gated on the capture kill switch", () => {
     /* A read is not a capture. `AUGENTA_CAPTURE_ENABLED=0` stops the project
        SENDING; a user who turned that off may still legitimately ask what was

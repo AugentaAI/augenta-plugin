@@ -28,13 +28,23 @@ import { saveDeviceProfile } from "./auth";
 
 const GATEWAY = "https://gw.example.com";
 const realFetch = globalThis.fetch;
-const savedControlUrl = process.env.AUGENTA_CONTROL_URL;
+
+/** Both of these are variables DEBUG.md tells a contributor to export, so the
+ *  suite runs from a known state and puts the caller's values back. Restoring —
+ *  not deleting — because a test that leaves the environment changed makes every
+ *  later test's result depend on the order it ran in. */
+const savedEnv: Record<string, string | undefined> = {};
+const SANDBOXED = ["AUGENTA_AUTH_HOME", "AUGENTA_CONTROL_URL"] as const;
 
 let authHome: string;
 let profileId: string;
 
 beforeEach(async () => {
   authHome = realpathSync(mkdtempSync(join(tmpdir(), "aug-platform-auth-")));
+  for (const key of SANDBOXED) {
+    savedEnv[key] = process.env[key];
+    delete process.env[key];
+  }
   process.env.AUGENTA_AUTH_HOME = authHome;
   ({ profileId } = await saveDeviceProfile(
     { issuer: "https://auth.example.com", clientId: "client_public", gateway: GATEWAY },
@@ -44,15 +54,16 @@ beforeEach(async () => {
 });
 afterEach(() => {
   globalThis.fetch = realFetch;
-  delete process.env.AUGENTA_AUTH_HOME;
-  if (savedControlUrl === undefined) delete process.env.AUGENTA_CONTROL_URL;
-  else process.env.AUGENTA_CONTROL_URL = savedControlUrl;
+  for (const key of SANDBOXED) {
+    if (savedEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedEnv[key];
+  }
   rmSync(authHome, { recursive: true, force: true });
 });
 
 describe("environmentLabel", () => {
   test("production is the default, and an override is reported verbatim", () => {
-    delete process.env.AUGENTA_CONTROL_URL;
+    // beforeEach already cleared the variable, so this is the production default.
     expect(environmentLabel()).toBe("prod");
     expect(environmentLabel("https://augenta.ai")).toBe("prod");
     // A trailing slash is the same environment, not a different one.

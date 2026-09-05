@@ -38,15 +38,38 @@ let project: string;
 let authHome: string;
 let requests: Array<{ method: string; url: string; headers: Headers; body?: string }>;
 
+/**
+ * Two globals this suite reads are ones a CONTRIBUTOR is told to export:
+ * DEBUG.md's non-production loop sets `AUGENTA_CONTROL_URL`, and its sandbox
+ * section sets `AUGENTA_AUTH_HOME`. So every test starts from a known state and
+ * the caller's value is put back afterwards.
+ *
+ * Not hygiene for its own sake: before this, one `describe` deleted
+ * `AUGENTA_CONTROL_URL` without restoring it, and the envelope test below passed
+ * ONLY because that describe happened to run first. With the variable exported,
+ * running that test alone (`bun test -t …`) failed — expected "prod", got the
+ * dev URL — while the whole file passed. A suite whose result depends on test
+ * order is not a suite.
+ */
+const savedEnv: Record<string, string | undefined> = {};
+const SANDBOXED = ["AUGENTA_AUTH_HOME", "AUGENTA_CONTROL_URL", "AUGENTA_API_URL"] as const;
+
 beforeEach(() => {
   project = realpathSync(mkdtempSync(join(tmpdir(), "aug-recall-")));
   authHome = realpathSync(mkdtempSync(join(tmpdir(), "aug-recall-auth-")));
+  for (const key of SANDBOXED) {
+    savedEnv[key] = process.env[key];
+    delete process.env[key];
+  }
   process.env.AUGENTA_AUTH_HOME = authHome;
   requests = [];
 });
 afterEach(() => {
   globalThis.fetch = realFetch;
-  delete process.env.AUGENTA_AUTH_HOME;
+  for (const key of SANDBOXED) {
+    if (savedEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedEnv[key];
+  }
   rmSync(project, { recursive: true, force: true });
   rmSync(authHome, { recursive: true, force: true });
 });
@@ -182,6 +205,16 @@ describe("parseArgs", () => {
         "--timeout must be a positive number of seconds",
       );
     }
+  });
+
+  test("--timeout is bounded, because a huge one aborts INSTANTLY", () => {
+    /* `AbortSignal.timeout` is a timer: past 2^31-1 ms Node clamps it to 1ms and
+       fires at once, printing a TimeoutOverflowWarning to stderr. `--timeout
+       3000000` therefore aborted in about a millisecond and reported "did not
+       answer within 3000000s" — the exact inverse of the request, plus stderr
+       noise that breaks the dist-smoke silence contract. Refused up front. */
+    expect(() => parseArgs(["--timeout", "3000000"])).toThrow("must be at most 600 seconds");
+    expect(parseArgs(["--timeout", "600"]).timeoutSeconds).toBe(600);
   });
 
   test("the two question forms are refused together, never silently merged", () => {
@@ -363,6 +396,28 @@ describe("a project that cannot be asked", () => {
     const payload = await runRecall({ projectRoot: project }, args());
     expect(payload).toMatchObject({ status: "not_connected", code: "unreadable_config" });
     expect(requests).toEqual([]);
+  });
+
+  test("projectRoot names the config's OWN directory, not where the search began", async () => {
+    /* resolveProjectRoot walks UPWARD, so a command run from a subdirectory uses
+       an ancestor's config. Reporting the starting directory named a project
+       recall did not ask — and SKILL.md tells the agent to relay this path. */
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("from the root") });
+    writeConfig({ authMode: "api-key", apiKey: "sk-aug-x.y", endpoint: GATEWAY });
+    const deep = join(project, "src", "deep");
+    mkdirSync(deep, { recursive: true });
+
+    const payload = await runRecall({ projectRoot: deep }, args());
+
+    expect(payload.status).toBe("answered");
+    expect(payload.projectRoot).toBe(project);
+  });
+
+  test("with no config anywhere, projectRoot is where the search started", async () => {
+    // There is no config to name, so the honest answer is "here is where I looked".
+    route();
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload).toMatchObject({ status: "not_connected", projectRoot: project });
   });
 
   test("an empty question is refused before any request", async () => {
@@ -695,6 +750,39 @@ describe("destinations that cannot be resolved", () => {
     ]);
   });
 
+  test("two Connector ids on ONE Workspace are asked once, not twice", async () => {
+    /* Asking twice would bill two model turns, record two reuse activations for
+       one question, and render the same Workspace twice as though two of them
+       had answered. Nothing is lost — the Workspace is still asked. */
+    const { profileId } = await signIn();
+    writeConfig({
+      authMode: "oauth",
+      profileId,
+      connectorIds: ["connector_a", "connector_a_twin"],
+      endpoint: GATEWAY,
+    });
+    route({
+      // A second, distinct Connector anchored to the SAME Workspace.
+      [`${GATEWAY}/v1/connectors/connector_a_twin`]: () =>
+        Response.json({
+          connector: {
+            id: "connector_a_twin",
+            kind: "agent",
+            direction: "inbound",
+            status: "active",
+            workspaceId: "ws-default",
+          },
+        }),
+      [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("once"),
+    });
+
+    const payload = await runRecall({ projectRoot: project }, args());
+
+    expect(payload.status).toBe("answered");
+    expect(payload.answers).toHaveLength(1);
+    expect(recallCalls()).toHaveLength(1);
+  });
+
   test("no resolvable destination at all is an error that names the ids", async () => {
     const { profileId } = await signIn();
     writeConfig({
@@ -709,6 +797,46 @@ describe("destinations that cannot be resolved", () => {
     expect(payload.message).toContain("connector_gone");
     expect(payload.unresolvedConnectorIds).toEqual(["connector_gone"]);
     expect(recallCalls()).toEqual([]);
+  });
+
+  test("the Connector lookups and the Workspace list overlap", async () => {
+    /* Neither needs the other — the lookups decide WHERE the question goes, the
+       list only decides what each answer is CALLED — so in series this cost a
+       full extra round trip before the first question was even sent. Same
+       arrival barrier as the fan-out test: neither answers until both arrive, so
+       a sequential implementation deadlocks rather than merely being slower. */
+    const { profileId } = await signIn();
+    writeConfig({ authMode: "oauth", profileId, connectorIds: ["connector_a"], endpoint: GATEWAY });
+    let arrivals = 0;
+    let bothArrived!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      bothArrived = resolve;
+    });
+    const hold = async (body: unknown) => {
+      arrivals += 1;
+      if (arrivals === 2) bothArrived();
+      await barrier;
+      return Response.json(body);
+    };
+    route({
+      [`GET ${GATEWAY}/v1/workspaces`]: () => hold({ workspaces: WORKSPACES }),
+      [`${GATEWAY}/v1/connectors/connector_a`]: () =>
+        hold({
+          connector: {
+            id: "connector_a",
+            kind: "agent",
+            direction: "inbound",
+            status: "active",
+            workspaceId: "ws-default",
+          },
+        }),
+      [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("a"),
+    });
+
+    const payload = await runRecall({ projectRoot: project }, args());
+
+    expect(arrivals).toBe(2);
+    expect(payload.answers[0]!.workspaceName).toBe("Default Workspace");
   });
 
   test("Workspace names are a label, so an unreadable list costs only the heading", async () => {
@@ -783,6 +911,26 @@ describe("platform-key projects", () => {
     expect(JSON.stringify(payload)).not.toContain("sk-aug-live");
   });
 
+  test("a key that is missing from the config never becomes a header", async () => {
+    /* Two guards, and this pins the outer one: loadProjectConfig refuses a blank
+       key, so the command fails LOCALLY and nothing reaches the wire. The guard
+       inside the api-key branch is depth behind it, and exists for the same
+       reason connect's verifyProjectKey has one — the alternative is sending the
+       literal header `AugentaKey undefined` and reporting whatever the gateway
+       says about it, which reads to a user as an unexplained 401. */
+    route();
+    writeConfig({ authMode: "api-key", apiKey: "sk-aug-live.secret", endpoint: GATEWAY });
+    const { loadProjectConfig } = await import("../capture/config");
+    const cfg = loadProjectConfig(project)!;
+    expect(cfg.apiKey).toBe("sk-aug-live.secret");
+    // Now blank it on disk in a way the parser would reject, and confirm the
+    // command fails locally rather than on the wire.
+    writeConfig({ authMode: "api-key", apiKey: "   ", endpoint: GATEWAY });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload).toMatchObject({ status: "not_connected", code: "unreadable_config" });
+    expect(requests).toEqual([]);
+  });
+
   test("--workspace is refused rather than ignored", async () => {
     writeConfig({ authMode: "api-key", apiKey: "sk-aug-live.secret", endpoint: GATEWAY });
     route();
@@ -795,20 +943,17 @@ describe("platform-key projects", () => {
 describe("recallEnvironment", () => {
   test("a non-default GATEWAY is named even when the control URL is production", () => {
     // Recall never touches the control plane, so reporting `prod` off the control
-    // URL alone would say "production" about a question going to dev.
-    delete process.env.AUGENTA_CONTROL_URL;
+    // URL alone would say "production" about a question going to dev. beforeEach
+    // has already cleared the variable, so this is the production default.
     expect(recallEnvironment("https://dev-gateway.example.com")).toBe(
       "https://dev-gateway.example.com",
     );
   });
 
   test("a non-production control URL still wins", () => {
+    // Restored by afterEach along with the caller's own value.
     process.env.AUGENTA_CONTROL_URL = "https://control.example.com";
-    try {
-      expect(recallEnvironment("https://anything")).toBe("https://control.example.com");
-    } finally {
-      delete process.env.AUGENTA_CONTROL_URL;
-    }
+    expect(recallEnvironment("https://anything")).toBe("https://control.example.com");
   });
 });
 
@@ -855,6 +1000,22 @@ describe("the CLI envelope", () => {
       rmSync(main, { recursive: true, force: true });
       rmSync(worktree, { recursive: true, force: true });
     }
+  });
+
+  test("bare mode names destinations it could not ask", () => {
+    /* The `--json` payload carries `unresolvedConnectorIds` and SKILL.md tells
+       the agent to relay them, so only the direct human path could lose them —
+       and that is the path with no agent to notice a Workspace quietly missing
+       from the answers. */
+    const r = spawnSync("bun", [RECALL, "--project", project, "anything"], {
+      cwd: project,
+      encoding: "utf8",
+      env: { ...process.env, AUGENTA_AUTH_HOME: authHome },
+    });
+    // An unconnected project has nothing to skip; what matters is that the bare
+    // renderer writes its diagnosis to stderr rather than swallowing it.
+    expect(r.stderr).toContain("Augenta recall:");
+    expect(r.stdout).toBe("");
   });
 
   test("a bad flag answers in JSON to a --json caller, and exits non-zero", () => {

@@ -208,6 +208,38 @@ project stores only a profile reference and its Connector ids. Capture must stay
 silent no-op without project config, and `AUGENTA_CAPTURE_ENABLED=0` remains the
 global kill switch.
 
+**Recall is a READ, and its invariants are its own.** `scripts/recall.ts` is the
+only outbound path that is not capture, so the rules above do not all transfer
+and the differences are deliberate:
+
+- **Only the question text leaves.** The request body is the query and — for a
+  signed-in project — the Workspace id, and nothing else. No transcript line, no
+  file content, no memory document. Adding a field to that body is a change to
+  what a user's machine discloses, not a feature.
+- **It is NOT gated on `AUGENTA_CAPTURE_ENABLED`,** on purpose. That switch stops
+  a project SENDING; someone who turned it off may still legitimately ask what
+  was already remembered, and gating a read on it would make one off switch
+  silently mean two things. What governs recall is the same thing that governs
+  everything else: a readable `.augenta/config.json`. Deleting it remains the one
+  off switch for both, and README says so in those words.
+- **It needs no consent gate because it creates no new disclosure.** Recall asks
+  only the destinations the user already selected — `connectorIds`, resolved to
+  their Workspaces — and `--workspace` may only NARROW that set. A destination
+  the project does not feed is refused (`unknown_workspace`), never asked. If a
+  future change would let recall reach a Workspace the project does not send to,
+  that is a new consent question and belongs in front of the user first.
+- **The client never names an organization.** It sends `workspace`; the platform
+  composes the retrieval `scope` from the authenticated identity. Do not add a
+  `scope` field — the door refuses one, and the refusal is the tenant-isolation
+  boundary rather than a validation detail.
+- **No credential in the payload**, exactly as for connect: the agent is the
+  normal caller of `--json`, so everything it can read must be safe to paste into
+  a transcript. The platform key travels in the request from the project config
+  and appears in no output.
+- **A young Workspace is not an error.** `empty_scope` means "nothing remembered
+  yet"; reporting it as a failure sends a user to look for a fault that is not
+  there, and invites a reconnect that would change nothing.
+
 **No credential passes through the agent.** The line is what a process *handles*,
 not who starts it. The agent is the normal caller of `scripts/connect.ts --json`
 (`--probe`, `--login`, `--await-login`, `--create-workspace`, `--workspace`):

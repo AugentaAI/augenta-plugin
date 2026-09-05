@@ -56,6 +56,19 @@ import { resolveProject, type ResolvedProject } from "../capture/project";
  */
 const DEFAULT_TIMEOUT_SECONDS = 75;
 
+/**
+ * The largest `--timeout` this accepts, and why there is a ceiling at all.
+ *
+ * `AbortSignal.timeout` is a timer, so a delay past 2^31-1 ms does not wait
+ * longer — Node clamps it to 1ms and fires AT ONCE, printing a
+ * `TimeoutOverflowWarning` to stderr on the way. The result is the exact
+ * inverse of the request: `--timeout 3000000` aborts in about a millisecond and
+ * then reports "Augenta did not answer within 3000000s", which is false. So the
+ * bound is refused up front rather than silently inverted. Ten minutes is
+ * already an order of magnitude past the platform's own 60s deadline.
+ */
+const MAX_TIMEOUT_SECONDS = 600;
+
 /** Mirrors the door's own `MAX_QUERY_CHARS`. Checked here as well so an
  *  over-long question costs one local error instead of one rejected round trip
  *  per destination. */
@@ -103,6 +116,11 @@ export function parseArgs(argv: string[]): RecallArgs {
       const value = Number(valueFor(flag, i++));
       if (!Number.isFinite(value) || value <= 0) {
         throw new Error("--timeout must be a positive number of seconds");
+      }
+      if (value > MAX_TIMEOUT_SECONDS) {
+        throw new Error(
+          `--timeout must be at most ${MAX_TIMEOUT_SECONDS} seconds; a longer wait does not work (see MAX_TIMEOUT_SECONDS)`,
+        );
       }
       args.timeoutSeconds = value;
     } else if (flag.startsWith("--")) {
@@ -164,6 +182,18 @@ export interface RecallPayload {
   code?: string;
   message?: string;
   environment: string;
+  /**
+   * The directory whose `.augenta/config.json` was used — NOT the directory the
+   * search started from.
+   *
+   * `resolveProjectRoot` walks UPWARD, so running from `~/code/api/src/deep`
+   * uses the config at `~/code/api`. Reporting the starting directory instead
+   * would name a project recall did not ask, and SKILL.md tells the agent to
+   * relay this path to the user. With no config found anywhere there is nothing
+   * to name, so it falls back to where the search began — which is the honest
+   * answer to "where did you look?".
+   */
+  projectRoot: string;
   elapsedMs: number;
 }
 
@@ -298,13 +328,12 @@ export function classifyRecallResponse(parts: RecallResponseParts): Outcome {
     };
   }
   if (status === 429) {
+    const retryAfter = retryAfterSeconds(parts.retryAfter);
     return {
       kind: "failed",
       code: "rate_limited",
       message: say("Augenta is rate limiting recall requests"),
-      ...(retryAfterSeconds(parts.retryAfter) !== undefined
-        ? { retryAfterSeconds: retryAfterSeconds(parts.retryAfter)! }
-        : {}),
+      ...(retryAfter !== undefined ? { retryAfterSeconds: retryAfter } : {}),
     };
   }
   if (status === 400) {
@@ -429,27 +458,6 @@ export function aggregateStatus(payload: {
   return "partially_answered";
 }
 
-function fail(
-  status: string,
-  code: string,
-  message: string,
-  query: string,
-  environment: string,
-  startedAt: number,
-): RecallPayload {
-  return {
-    status,
-    query,
-    answers: [],
-    nothingRemembered: [],
-    failed: [],
-    code,
-    message,
-    environment,
-    elapsedMs: Date.now() - startedAt,
-  };
-}
-
 /**
  * Resolve the project's destinations from its config.
  *
@@ -533,43 +541,62 @@ export async function runRecall(
      as far as a config, so a caller can always say which Augenta it was talking
      about. Re-derived once the gateway is known. */
   let environment = recallEnvironment(DEFAULT_GATEWAY);
+  /* Likewise the project: until a config is found this is where the search
+     STARTED, and afterwards the directory it was found in. See RecallPayload. */
+  let projectRoot = resolved.projectRoot;
+
+  /** Every early return. A closure rather than a six-parameter helper: `query`,
+   *  `environment`, `projectRoot` and `startedAt` are the same at all eight call
+   *  sites, and two same-typed pairs (`status`/`code`, `message`/`query`) were
+   *  one transposition away from a payload that type-checks and lies. */
+  const bail = (
+    status: string,
+    code: string,
+    message: string,
+    extra: Partial<RecallPayload> = {},
+  ): RecallPayload => ({
+    status,
+    query,
+    answers: [],
+    nothingRemembered: [],
+    failed: [],
+    code,
+    message,
+    environment,
+    projectRoot,
+    elapsedMs: Date.now() - startedAt,
+    ...extra,
+  });
+
   if (!query) {
-    return fail("error", "query_required", "ask a question: recall takes the text to look up", query, environment, startedAt);
+    return bail("error", "query_required", "ask a question: recall takes the text to look up");
   }
   if (query.length > MAX_QUERY_CHARS) {
-    return fail(
+    return bail(
       "error",
       "query_too_long",
       `the question is ${query.length} characters; Augenta accepts ${MAX_QUERY_CHARS}`,
-      query,
-      environment,
-      startedAt,
     );
   }
 
-  const projectRoot = resolveProjectRoot(resolved.projectRoot);
-  if (!projectRoot) {
-    return fail(
+  const found = resolveProjectRoot(resolved.projectRoot);
+  if (!found) {
+    return bail(
       "not_connected",
       "not_connected",
       "this project is not connected to Augenta; run the connect skill first",
-      query,
-      environment,
-      startedAt,
     );
   }
+  projectRoot = found;
   const cfg = loadProjectConfig(projectRoot);
   if (!cfg) {
     // resolveProjectRoot only returns a directory whose config file EXISTS, so
     // this branch is a file that is present and unreadable — a different thing to
     // tell the user than "you never connected".
-    return fail(
+    return bail(
       "not_connected",
       "unreadable_config",
       "this project's Augenta config cannot be read; reconnect with the connect skill",
-      query,
-      environment,
-      startedAt,
     );
   }
   const gateway = gatewayBase(cfg);
@@ -588,33 +615,44 @@ export async function runRecall(
   if (cfg.authMode === "oauth") {
     const profileId = cfg.profileId!;
     if (!getAuthProfile(profileId)) {
-      return fail(
+      return bail(
         "need_login",
         "need_login",
         "this project's Augenta sign-in is missing; sign in again with the connect skill",
-        query,
-        environment,
-        startedAt,
       );
     }
-    const resolution = await resolveDestinations(profileId, gateway, cfg.connectorIds ?? []);
+    /* Concurrent, because neither needs the other: the Connector lookups decide
+       WHERE the question goes and the Workspace list only decides what each
+       answer is CALLED. In series this cost a full extra round trip — plus the
+       auth lock's serialization — before the first question was even sent, on a
+       command whose entire budget is a person waiting on a model turn.
+
+       Names are a LABEL, not a routing input, so the list stays best effort: a
+       failed or slow listing costs the answers their human-readable heading,
+       never the answers themselves. */
+    const [resolution, named] = await Promise.all([
+      resolveDestinations(profileId, gateway, cfg.connectorIds ?? []),
+      fetchAllWorkspaces(profileId, gateway).catch(() => [] as Workspace[]),
+    ]);
     if (resolution.needLogin) {
-      return fail(
+      return bail(
         "need_login",
         "need_login",
         "this project's Augenta sign-in has expired; sign in again with the connect skill",
-        query,
-        environment,
-        startedAt,
       );
     }
-    destinations = resolution.destinations;
+    /* One entry per WORKSPACE, not per Connector id. Two ids anchored to the
+       same Workspace are one destination: asking twice would bill two model
+       turns, record two reuse activations for one question, and render the same
+       Workspace twice as though two of them had answered. Nothing is lost — the
+       Workspace is still asked. */
+    destinations = [];
+    for (const destination of resolution.destinations) {
+      if (destinations.some((seen) => seen.workspaceId === destination.workspaceId)) continue;
+      destinations.push(destination);
+    }
     unresolvedConnectorIds = resolution.unresolvedConnectorIds;
     failed.push(...resolution.failed);
-    /* Names are a LABEL, not a routing input — the Workspace id is what gets
-       sent. So the list is best effort: a failed or slow listing costs the
-       answers their human-readable heading, never the answers themselves. */
-    const named = await fetchAllWorkspaces(profileId, gateway).catch(() => [] as Workspace[]);
     for (const destination of destinations) {
       const name = named.find((workspace) => workspace.id === destination.workspaceId)?.name;
       if (name) destination.workspaceName = name;
@@ -625,13 +663,10 @@ export async function runRecall(
         (id) => !destinations.some((destination) => destination.workspaceId === id),
       );
       if (unknown.length > 0) {
-        return fail(
+        return bail(
           "error",
           "unknown_workspace",
           `this project does not feed ${unknown.join(", ")}; recall can only ask the Workspaces it sends to`,
-          query,
-          environment,
-          startedAt,
         );
       }
       destinations = destinations.filter(
@@ -645,33 +680,38 @@ export async function runRecall(
       // exactly one Workspace: the key's assignment IS the route, so there is no
       // set here to narrow. Refused rather than ignored — silently dropping the
       // flag would answer a different question than the one that was asked.
-      return fail(
+      return bail(
         "error",
         "workspace_not_selectable",
         "this project uses a platform key, whose Connector fixes the Workspace; --workspace selects nothing",
-        query,
-        environment,
-        startedAt,
+      );
+    }
+    const apiKey = cfg.apiKey?.trim();
+    if (!apiKey) {
+      /* loadProjectConfig already refuses an empty key, so this is unreachable
+         today — asserted rather than `!`-ed for the same reason connect's
+         verifyProjectKey does it: the alternative is sending the literal header
+         `AugentaKey undefined` and reporting whatever the gateway says about it,
+         which surfaces as an unexplained 401 instead of a local message. */
+      return bail(
+        "error",
+        "unreadable_config",
+        "this project's platform key is missing from its Augenta config; reconnect",
       );
     }
     destinations = [{}];
-    ctx = { url, query, timeoutMs, apiKey: cfg.apiKey };
+    ctx = { url, query, timeoutMs, apiKey };
   }
 
   if (destinations.length === 0 && failed.length === 0) {
-    return {
-      ...fail(
-        "error",
-        "no_destination",
-        unresolvedConnectorIds.length > 0
-          ? `this project lists ${unresolvedConnectorIds.join(", ")}, but ${unresolvedConnectorIds.length === 1 ? "it is" : "they are"} not readable with this sign-in; reconnect`
-          : "this project has no destination to ask; reconnect with the connect skill",
-        query,
-        environment,
-        startedAt,
-      ),
-      ...(unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {}),
-    };
+    return bail(
+      "error",
+      "no_destination",
+      unresolvedConnectorIds.length > 0
+        ? `this project lists ${unresolvedConnectorIds.join(", ")}, but ${unresolvedConnectorIds.length === 1 ? "it is" : "they are"} not readable with this sign-in; reconnect`
+        : "this project has no destination to ask; reconnect with the connect skill",
+      unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {},
+    );
   }
 
   /* Parallel on purpose. Each answer is a full model turn behind the door, so
@@ -706,6 +746,7 @@ export async function runRecall(
     failed,
     ...(unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {}),
     environment,
+    projectRoot,
     elapsedMs: Date.now() - startedAt,
   };
 }
@@ -727,6 +768,16 @@ function printPayload(payload: RecallPayload): void {
     const label = entry.workspaceName ?? entry.workspaceId ?? entry.connectorId ?? "Augenta";
     console.error(`Augenta recall: could not ask ${label}: ${entry.message}`);
   }
+  if (payload.unresolvedConnectorIds?.length) {
+    // The `--json` payload reports these and SKILL.md tells the agent to say so,
+    // so only the direct human path could lose them — and that is the path with
+    // no agent to notice a destination quietly missing from the answers.
+    console.error(
+      `Augenta recall: did not ask ${payload.unresolvedConnectorIds.join(", ")} — ` +
+        `this project lists ${payload.unresolvedConnectorIds.length === 1 ? "that Connector" : "those Connectors"} ` +
+        `but ${payload.unresolvedConnectorIds.length === 1 ? "it is" : "they are"} not readable with this sign-in.`,
+    );
+  }
   if (payload.message && payload.answers.length === 0) {
     console.error(`Augenta recall: ${payload.message}`);
   }
@@ -741,9 +792,11 @@ if (isMain(import.meta.url)) {
     const args = parseArgs(argv);
     const resolved = resolveProject(args, process.cwd());
     const payload = await runRecall(resolved, args);
+    /* `projectRoot` comes from the payload, not from `resolved`: the config is
+       found by walking UPWARD, so the directory recall actually used is often an
+       ancestor of the one the search began in. */
     const envelope = {
       ...payload,
-      projectRoot: resolved.projectRoot,
       ...(resolved.worktreeRedirect ? { worktreeRedirect: resolved.worktreeRedirect } : {}),
     };
     if (args.json) {
