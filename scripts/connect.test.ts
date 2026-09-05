@@ -9,7 +9,7 @@
  *
  * Run: bun test scripts/connect.test.ts
  */
-import { test, expect, describe, beforeEach, afterEach } from "bun:test";
+import { test, expect, describe, beforeEach, afterEach, mock } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdtempSync,
@@ -48,6 +48,25 @@ import {
   saveDeviceProfile,
   savePendingLogin,
 } from "../capture/auth";
+import * as nodeRuntime from "../runtime/node";
+
+// `startLogin` -> `beginDeviceLogin` opens a browser unless the caller passes
+// `openBrowser: false` (capture/auth.ts). `startLogin` takes no such option and
+// should not grow one for a test, so the seam every caller shares is stubbed here
+// instead. Without this, three tests below hand the fixture URL to `open`/`xdg-open`
+// and a full `bun test` puts three real tabs on auth.example.com in the developer's
+// browser. Nothing is sent there -- the HTTP endpoint is routed to a stub and the
+// domain is IANA-reserved -- but a test suite has no business driving the desktop.
+//
+// The real module is spread first: it also exports `readStdin` and `isMain`, and the
+// CLI subprocess tests need both to keep working.
+const browserLaunches: string[][] = [];
+mock.module("../runtime/node", () => ({
+  ...nodeRuntime,
+  openBrowser: (command: string[]) => {
+    browserLaunches.push(command);
+  },
+}));
 
 const CONNECT = join(import.meta.dir, "connect.ts");
 const realFetch = globalThis.fetch;
@@ -1100,6 +1119,32 @@ describe("JSON verbs", () => {
 
     expect(payload.userCode).toBe("FRESH-CODE");
     expect(readPendingLogin()?.deviceCode).toBe("device_secret_fresh");
+  });
+
+  // The stub above is only worth having if it is still in the path. Assert the
+  // launch it captured rather than letting it swallow silently: if `mock.module`
+  // stops resolving to the module `capture/auth` imports, this fails here instead
+  // of quietly putting a tab on the developer's screen again.
+  test("starting a login hands the verification URL to the browser opener, stubbed", async () => {
+    browserLaunches.length = 0;
+    route({
+      [`POST ${ISSUER}/oauth2/device_authorization`]: () =>
+        Response.json({
+          device_code: "device_secret_open",
+          user_code: "OPEN-CODE",
+          verification_uri_complete: `${ISSUER}/device?user_code=OPEN-CODE`,
+          verification_uri: `${ISSUER}/device`,
+          interval: 5,
+          expires_in: 600,
+        }),
+    });
+
+    await startLogin(baseArgs);
+
+    expect(browserLaunches).toHaveLength(1);
+    expect(browserLaunches[0]?.[browserLaunches[0].length - 1]).toBe(
+      `${ISSUER}/device?user_code=OPEN-CODE`,
+    );
   });
 
   test("await-login reports pending while the link is still good", async () => {
