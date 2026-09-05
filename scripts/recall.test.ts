@@ -998,26 +998,45 @@ describe("the CLI envelope", () => {
   test("a linked worktree reports the redirect instead of retargeting silently", () => {
     // capture only walks UPWARD from cwd, so the config lives in the main
     // checkout and the worktree has nothing to ask on its own.
-    const main = realpathSync(mkdtempSync(join(tmpdir(), "aug-recall-main-")));
-    const worktree = realpathSync(mkdtempSync(join(tmpdir(), "aug-recall-wt-")));
+    const scratch = realpathSync(mkdtempSync(join(tmpdir(), "aug-recall-wt-")));
+    const main = join(scratch, "main");
+    // NOT an mkdtemp path: `git worktree add` wants to create this itself, and
+    // whether it tolerates an existing empty directory has varied by git version.
+    const worktree = join(scratch, "linked");
     try {
-      const git = (cwd: string, ...argv: string[]) =>
-        spawnSync("git", argv, { cwd, encoding: "utf8" });
+      /* Identity passed per-invocation rather than assumed. git can usually
+         derive one from the system, but a CI runner's hostname is not a valid
+         email domain, so `git commit` fails there with "unable to auto-detect
+         email address" — which is exactly how this test passed on a laptop and
+         failed on the runner. And every step is CHECKED: without that, a broken
+         setup surfaced as a confusing assertion about a missing field instead of
+         naming the git command that did not run. */
+      const git = (cwd: string, ...argv: string[]) => {
+        const r = spawnSync(
+          "git",
+          ["-c", "user.email=e2e@augenta.invalid", "-c", "user.name=e2e", ...argv],
+          { cwd, encoding: "utf8" },
+        );
+        expect(r.status, `git ${argv.join(" ")} failed: ${r.stderr || r.stdout}`).toBe(0);
+        return r;
+      };
+      mkdirSync(main, { recursive: true });
       git(main, "init", "-q");
       git(main, "commit", "-q", "--allow-empty", "-m", "root");
       git(main, "worktree", "add", "-q", "--detach", worktree);
+
       const r = spawnSync("bun", [RECALL, "--json", "anything"], {
         cwd: worktree,
         encoding: "utf8",
         env: { ...process.env, AUGENTA_AUTH_HOME: authHome },
       });
       const payload = JSON.parse(r.stdout) as { projectRoot: string; worktreeRedirect?: unknown };
-      expect(payload.projectRoot).toBe(main);
-      expect(payload.worktreeRedirect).toEqual({ from: worktree, to: main });
+      const realMain = realpathSync(main);
+      expect(payload.projectRoot).toBe(realMain);
+      expect(payload.worktreeRedirect).toEqual({ from: realpathSync(worktree), to: realMain });
     } finally {
       spawnSync("git", ["worktree", "remove", "--force", worktree], { cwd: main });
-      rmSync(main, { recursive: true, force: true });
-      rmSync(worktree, { recursive: true, force: true });
+      rmSync(scratch, { recursive: true, force: true });
     }
   });
 
