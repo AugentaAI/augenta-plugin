@@ -87,7 +87,9 @@ Every Workspace the project feeds is asked, and each answer is labelled with
 the Workspace it came from. An answer is written by a model over the matching
 memory, so a call can take up to a minute. **Only your question leaves the
 machine** — no file contents and no transcript text. Augenta records that a
-recall happened and stores neither the question nor the answer.
+recall happened; it does not store the answer, and it keeps no copy of your
+question — only a one-way fingerprint of it, used to notice a repeated request
+that asks something different.
 
 A brand-new Workspace has nothing to recall yet; that is normal, not an error.
 Recall is available where Augenta has it deployed, and reports plainly when it
@@ -109,7 +111,12 @@ experiences are landing.
 
 **On request: recall.** A recall sends one thing — the question you asked, or
 the one your agent formed from it — to each Workspace the project feeds. It
-reads; it writes nothing, and Augenta keeps neither the question nor the answer.
+reads back; it adds nothing to what the project has captured. Augenta keeps no
+copy of the question or the answer. It does record that a recall happened,
+against a one-way fingerprint of the question text — enough to tell a retry from
+a new question, and short questions are guessable from a fingerprint by anyone
+who can read that record, so treat the question itself as visible to the
+Workspace's audience.
 
 To stop capture for one project, delete `.augenta/config.json`. To disable
 capture globally, set `AUGENTA_CAPTURE_ENABLED=0`. That variable is the switch

@@ -26,9 +26,10 @@ release a user can read.
   over the matching memory, so a call can take up to a minute.
 
   **Only your question leaves the machine** — no file contents and no transcript
-  text. Augenta records that a recall happened and stores neither the question
-  nor the answer. Recall reads; it changes nothing about what a project sends,
-  and it asks only the destinations you already selected. Signed-in projects and
+  text. Augenta records that a recall happened; it keeps no copy of the question
+  or the answer, only a one-way fingerprint of the question used to tell a retry
+  from a new question. Recall reads; it changes nothing about what a project
+  sends, and it asks only the destinations you already selected. Signed-in projects and
   platform-key projects both work; a platform key's Connector already fixes the
   Workspace, so there is nothing to choose there.
 

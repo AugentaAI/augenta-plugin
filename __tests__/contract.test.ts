@@ -444,7 +444,14 @@ describe("the recall skill drives recall itself", () => {
     // The whole privacy claim of a read door. Without these two sentences the
     // model has no reason not to paste the failing file into the question.
     expect(flat).toMatch(/\*\*Only the question text leaves the machine\.\*\*/);
-    expect(flat).toMatch(/stores neither the question nor the answer/i);
+    /* The claim has to stay TRUE, not just reassuring: the retrieval service
+       persists an unsalted SHA-256 of the question in each activation record, so
+       "stores neither" was an overstatement. Pin the accurate wording AND the
+       caveat that follows from it — a short question is guessable from its
+       digest by anyone who can read that record. */
+    expect(flat).toMatch(/no copy of the question or the answer/i);
+    expect(flat).toMatch(/one-way fingerprint of the question/i);
+    expect(flat).toMatch(/guessable from its fingerprint/i);
     expect(flat).toMatch(/Never send file contents, transcript lines, credentials/i);
   });
 

@@ -16,8 +16,11 @@ An answer is written by a model over the matching memory, so it takes a while â€
 up to a minute per call is normal, and both the question and the answers are
 short text. **Only the question text leaves the machine.** Never send file
 contents, transcript lines, credentials, or anything the user did not ask about.
-Augenta records that a recall happened, and **stores neither the question nor
-the answer**.
+Augenta records that a recall happened. It keeps **no copy of the question or
+the answer** â€” only a one-way fingerprint of the question text, which is enough
+to tell a retry from a new question. Treat the question as visible to that
+Workspace's audience anyway: a short question is guessable from its fingerprint
+by anyone who can read the activation record.
 
 ## The script
 
