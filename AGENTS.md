@@ -22,8 +22,8 @@ Codex plugin-creator validator currently rejects Codex's supported `hooks`
 manifest field, so the Codex release gate is a real marketplace installation
 with `codex plugin marketplace add` followed by `codex plugin add`.
 Also run `claude --plugin-dir . plugin details augenta` and verify it reports
-the manifest version, one `connect` skill, every event in `hooks/hooks.json`
-(currently eight), and no load errors.
+the manifest version, both skills (`connect` and `recall`), every event in
+`hooks/hooks.json` (currently eight), and no load errors.
 
 Codex trust-pins each hook by content hash in `~/.codex/config.toml`
 (`[hooks.state]`), so **any** edit to `hooks/hooks.json` re-prompts every Codex
@@ -50,8 +50,8 @@ selecting a non-production issuer/client/gateway set.
 `DEBUG.md` carries the rest of the contributor levers: pointing a harness at a
 non-production Augenta with `AUGENTA_CONTROL_URL`, running the working tree
 instead of an installed copy, and resetting local sign-in state. It is contributor
-documentation and stays unlinked from `README.md` — the connect skill itself has
-no environment flag, and the reasoning for that is recorded there.
+documentation and stays unlinked from `README.md` — neither skill has an
+environment flag, and the reasoning for that is recorded there.
 
 ## The runtime boundary: Bun builds, Node ships
 
@@ -59,8 +59,8 @@ no environment flag, and the reasoning for that is recorded there.
 role as a compiler — tests, typecheck, and bundling. Nothing that reaches a user
 may depend on it.
 
-What ships is `dist/`: five Node ESM bundles built from the five entrypoints by
-`scripts/build.ts`. `hooks/hooks.json` and `skills/connect/SKILL.md` invoke those
+What ships is `dist/`: six Node ESM bundles built from the six entrypoints by
+`scripts/build.ts`. `hooks/hooks.json` and the two SKILL.md files invoke those
 bundles, never the `.ts` sources, which are not directly Node-runnable anyway
 (`moduleResolution: "bundler"` means extensionless relative imports). `dist/` is
 committed because both marketplaces install a git checkout and run no build step,
@@ -74,7 +74,7 @@ the bundler's output is a build input. Two of them do:
 - **The Bun version**, pinned in `.bun-version`. Bun's bundler codegen changes
   between releases — 1.3.14 emits the `__toESMCache_*` ESM-interop prelude, 1.3.5
   the older `get: () => mod[key]` form, 1.4.1 something else again — so one
-  version off rewrites all five bundles. `scripts/build.ts` reads the same file
+  version off rewrites every bundle. `scripts/build.ts` reads the same file
   CI does and refuses to build on any other Bun, naming the version and how to
   install it. Do not re-type the number into a workflow; a contract test fails
   that. To move the pin, edit `.bun-version` and commit the rebuilt `dist/` with
@@ -207,6 +207,38 @@ OAuth tokens stay in the owner-only global `~/.augenta/auth.json`; a connected
 project stores only a profile reference and its Connector ids. Capture must stay a
 silent no-op without project config, and `AUGENTA_CAPTURE_ENABLED=0` remains the
 global kill switch.
+
+**Recall is a READ, and its invariants are its own.** `scripts/recall.ts` is the
+only outbound path that is not capture, so the rules above do not all transfer
+and the differences are deliberate:
+
+- **Only the question text leaves.** The request body is the query and — for a
+  signed-in project — the Workspace id, and nothing else. No transcript line, no
+  file content, no memory document. Adding a field to that body is a change to
+  what a user's machine discloses, not a feature.
+- **It is NOT gated on `AUGENTA_CAPTURE_ENABLED`,** on purpose. That switch stops
+  a project SENDING; someone who turned it off may still legitimately ask what
+  was already remembered, and gating a read on it would make one off switch
+  silently mean two things. What governs recall is the same thing that governs
+  everything else: a readable `.augenta/config.json`. Deleting it remains the one
+  off switch for both, and README says so in those words.
+- **It needs no consent gate because it creates no new disclosure.** Recall asks
+  only the destinations the user already selected — `connectorIds`, resolved to
+  their Workspaces — and `--workspace` may only NARROW that set. A destination
+  the project does not feed is refused (`unknown_workspace`), never asked. If a
+  future change would let recall reach a Workspace the project does not send to,
+  that is a new consent question and belongs in front of the user first.
+- **The client never names an organization.** It sends `workspace`; the platform
+  composes the retrieval `scope` from the authenticated identity. Do not add a
+  `scope` field — the door refuses one, and the refusal is the tenant-isolation
+  boundary rather than a validation detail.
+- **No credential in the payload**, exactly as for connect: the agent is the
+  normal caller of `--json`, so everything it can read must be safe to paste into
+  a transcript. The platform key travels in the request from the project config
+  and appears in no output.
+- **A young Workspace is not an error.** `empty_scope` means "nothing remembered
+  yet"; reporting it as a failure sends a user to look for a fault that is not
+  there, and invites a reconnect that would change nothing.
 
 **No credential passes through the agent.** The line is what a process *handles*,
 not who starts it. The agent is the normal caller of `scripts/connect.ts --json`

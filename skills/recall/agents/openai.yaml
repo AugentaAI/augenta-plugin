@@ -1,0 +1,6 @@
+interface:
+  display_name: "Recall from Augenta"
+  short_description: "Ask what your Workspaces remember"
+  default_prompt: "Use $augenta:recall to ask Augenta what it remembers about this."
+policy:
+  allow_implicit_invocation: true

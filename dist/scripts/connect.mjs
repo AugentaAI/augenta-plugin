@@ -34,9 +34,8 @@ var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, 
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // scripts/connect.ts
-import { execFileSync } from "node:child_process";
-import { chmodSync as chmodSync3, existsSync as existsSync5, writeFileSync as writeFileSync4 } from "node:fs";
-import { basename, dirname as dirname2, join as join5, resolve as resolve2 } from "node:path";
+import { chmodSync as chmodSync3, existsSync as existsSync6, writeFileSync as writeFileSync4 } from "node:fs";
+import { basename, join as join5 } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
@@ -84,7 +83,7 @@ function isHttpsUrl(value) {
 }
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.9.3";
+var PLUGIN_VERSION = "0.10.0";
 
 // capture/augenta-dir.ts
 import { join } from "node:path";
@@ -781,6 +780,9 @@ async function saveDeviceProfile(config, tokens, identity) {
     return { profileId, profile };
   });
 }
+function getAuthProfile(profileId) {
+  return readAuthStore().profiles[profileId];
+}
 function reusableProfiles(config) {
   return Object.entries(readAuthStore().profiles).filter(([, profile]) => profile.issuer.replace(/\/+$/, "") === config.issuer.replace(/\/+$/, "") && profile.clientId === config.clientId && profile.gateway.replace(/\/+$/, "") === config.gateway.replace(/\/+$/, "")).map(([profileId, profile]) => ({ profileId, profile })).sort((a, b) => b.profile.updatedAt.localeCompare(a.profile.updatedAt));
 }
@@ -850,10 +852,7 @@ function takeAuthNotice(projectRoot) {
   return found;
 }
 
-// scripts/connect.ts
-var DEFAULT_WAIT_SECONDS = 90;
-var DEFAULT_WORKSPACE_NAME = "Default Workspace";
-
+// capture/platform.ts
 class AugentaRequestError extends Error {
   status;
   constructor(status, message) {
@@ -862,6 +861,104 @@ class AugentaRequestError extends Error {
     this.name = "AugentaRequestError";
   }
 }
+async function bearerJson(profileId, url, init = {}) {
+  const response = await fetchWithProfile(profileId, url, init);
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new AugentaRequestError(response.status, `Augenta request failed (${response.status})${detail ? `: ${detail}` : ""}`);
+  }
+  return await response.json();
+}
+var WORKSPACE_LIST_PAGE_SIZE = 200;
+var WORKSPACE_LIST_MAX_PAGES = 10;
+async function fetchAllWorkspaces(profileId, gateway) {
+  const workspaces = [];
+  let cursor;
+  for (let page = 0;page < WORKSPACE_LIST_MAX_PAGES; page++) {
+    const query = new URLSearchParams({ limit: String(WORKSPACE_LIST_PAGE_SIZE) });
+    if (cursor)
+      query.set("cursor", cursor);
+    const body = await bearerJson(profileId, `${gateway}/v1/workspaces?${query.toString()}`);
+    workspaces.push(...body.workspaces ?? []);
+    if (!body.nextCursor)
+      return workspaces;
+    if (body.nextCursor === cursor) {
+      throw new Error("the Workspace list did not advance — the API returned the same page cursor twice");
+    }
+    cursor = body.nextCursor;
+  }
+  throw new Error(`the Workspace list did not finish within ${WORKSPACE_LIST_MAX_PAGES} pages of ` + `${WORKSPACE_LIST_PAGE_SIZE} — refusing to offer a partial list of destinations`);
+}
+async function currentConnector(profileId, gateway, id) {
+  if (!id)
+    return;
+  const response = await fetchWithProfile(profileId, `${gateway}/v1/connectors/${encodeURIComponent(id)}`);
+  if (response.status === 403 || response.status === 404)
+    return;
+  if (!response.ok) {
+    throw new Error(`could not inspect the existing Connector (${response.status})`);
+  }
+  return (await response.json()).connector;
+}
+function environmentLabel(controlUrl) {
+  const url = (controlUrl?.trim() || process.env.AUGENTA_CONTROL_URL || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
+  return url === DEFAULT_CONTROL_URL ? "prod" : url;
+}
+function describeError(error) {
+  const message = error?.message ?? String(error);
+  if (message !== "fetch failed")
+    return message;
+  const cause = error.cause;
+  const code = cause?.code;
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+    return "cannot reach Augenta: the host name did not resolve. Check your network or DNS.";
+  }
+  if (code === "ECONNREFUSED") {
+    return "cannot reach Augenta: the connection was refused. Check the URL, and any proxy or firewall.";
+  }
+  if (code === "CERT_HAS_EXPIRED" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {
+    return "cannot reach Augenta: the TLS certificate could not be verified. Check for a TLS-intercepting proxy.";
+  }
+  const detail = cause?.message ?? code;
+  return detail ? `cannot reach Augenta: ${detail}` : "cannot reach Augenta: the network request failed. Check your connection.";
+}
+
+// capture/project.ts
+import { execFileSync } from "node:child_process";
+import { existsSync as existsSync5 } from "node:fs";
+import { dirname as dirname2, resolve as resolve2 } from "node:path";
+function gitRevParse(cwd, arg) {
+  try {
+    const value = execFileSync("git", ["rev-parse", arg], {
+      cwd,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).toString().trim();
+    return value || undefined;
+  } catch {
+    return;
+  }
+}
+function resolveProject(args, cwd) {
+  if (args.project)
+    return { projectRoot: resolve2(cwd, args.project) };
+  const top = gitRevParse(cwd, "--show-toplevel");
+  if (!top)
+    return { projectRoot: cwd };
+  const commonDir = gitRevParse(cwd, "--git-common-dir");
+  if (commonDir) {
+    const mainRoot = dirname2(resolve2(cwd, commonDir));
+    if (mainRoot !== top && existsSync5(mainRoot)) {
+      return { projectRoot: mainRoot, worktreeRedirect: { from: top, to: mainRoot } };
+    }
+  }
+  return { projectRoot: top };
+}
+function resolveTargetProject(args, cwd) {
+  return resolveProject(args, cwd).projectRoot;
+}
+// scripts/connect.ts
+var DEFAULT_WAIT_SECONDS = 90;
+var DEFAULT_WORKSPACE_NAME = "Default Workspace";
 function parseArgs(argv) {
   const args = {};
   const valueFor = (flag, i) => {
@@ -912,35 +1009,6 @@ function parseArgs(argv) {
     }
   }
   return args;
-}
-function gitRevParse(cwd, arg) {
-  try {
-    const value = execFileSync("git", ["rev-parse", arg], {
-      cwd,
-      stdio: ["ignore", "pipe", "ignore"]
-    }).toString().trim();
-    return value || undefined;
-  } catch {
-    return;
-  }
-}
-function resolveProject(args, cwd) {
-  if (args.project)
-    return { projectRoot: resolve2(cwd, args.project) };
-  const top = gitRevParse(cwd, "--show-toplevel");
-  if (!top)
-    return { projectRoot: cwd };
-  const commonDir = gitRevParse(cwd, "--git-common-dir");
-  if (commonDir) {
-    const mainRoot = dirname2(resolve2(cwd, commonDir));
-    if (mainRoot !== top && existsSync5(mainRoot)) {
-      return { projectRoot: mainRoot, worktreeRedirect: { from: top, to: mainRoot } };
-    }
-  }
-  return { projectRoot: top };
-}
-function resolveTargetProject(args, cwd) {
-  return resolveProject(args, cwd).projectRoot;
 }
 function writeApiKeyConfig(projectRoot, apiKey, endpoint2) {
   const dir = ensureAugentaDir(projectRoot);
@@ -1034,14 +1102,6 @@ async function chooseMany(prompt, values, label, opts = {}) {
     rl.close();
   }
 }
-async function bearerJson(profileId, url, init = {}) {
-  const response = await fetchWithProfile(profileId, url, init);
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new AugentaRequestError(response.status, `Augenta request failed (${response.status})${detail ? `: ${detail}` : ""}`);
-  }
-  return await response.json();
-}
 async function verifyFreshLogin(oauth, accessToken) {
   const response = await fetch(`${oauth.gateway}/v1/me`, {
     headers: { authorization: `Bearer ${accessToken}` },
@@ -1090,26 +1150,6 @@ async function selectOrCreateProfile(oauth, preferredProfileId) {
     return choose("Choose the Augenta organization:", usable, (item) => `${item.me.org.name} (${item.me.org.id})`);
   }
   return saveVerifiedLogin(oauth, await deviceLogin(oauth));
-}
-var WORKSPACE_LIST_PAGE_SIZE = 200;
-var WORKSPACE_LIST_MAX_PAGES = 10;
-async function fetchAllWorkspaces(profileId, gateway) {
-  const workspaces = [];
-  let cursor;
-  for (let page = 0;page < WORKSPACE_LIST_MAX_PAGES; page++) {
-    const query = new URLSearchParams({ limit: String(WORKSPACE_LIST_PAGE_SIZE) });
-    if (cursor)
-      query.set("cursor", cursor);
-    const body = await bearerJson(profileId, `${gateway}/v1/workspaces?${query.toString()}`);
-    workspaces.push(...body.workspaces ?? []);
-    if (!body.nextCursor)
-      return workspaces;
-    if (body.nextCursor === cursor) {
-      throw new Error("the Workspace list did not advance — the API returned the same page cursor twice");
-    }
-    cursor = body.nextCursor;
-  }
-  throw new Error(`the Workspace list did not finish within ${WORKSPACE_LIST_MAX_PAGES} pages of ` + `${WORKSPACE_LIST_PAGE_SIZE} — refusing to offer a partial list of destinations`);
 }
 async function listWorkspaces(profileId, gateway) {
   const workspaces = await fetchAllWorkspaces(profileId, gateway);
@@ -1175,17 +1215,6 @@ async function selectedWorkspaces(profileId, gateway, organizationName, preselec
     choices = await listWorkspaces(profileId, gateway);
   }
 }
-async function currentConnector(profileId, gateway, id) {
-  if (!id)
-    return;
-  const response = await fetchWithProfile(profileId, `${gateway}/v1/connectors/${encodeURIComponent(id)}`);
-  if (response.status === 403 || response.status === 404)
-    return;
-  if (!response.ok) {
-    throw new Error(`could not inspect the existing Connector (${response.status})`);
-  }
-  return (await response.json()).connector;
-}
 async function priorLinks(profileId, gateway, ids) {
   const links = [];
   for (const id of ids) {
@@ -1231,7 +1260,7 @@ async function resolveOAuth(args) {
   return { oauth: { ...discovered, gateway }, gateway };
 }
 function priorConnection(projectRoot) {
-  if (!existsSync5(join5(projectRoot, ".augenta", "config.json")))
+  if (!existsSync6(join5(projectRoot, ".augenta", "config.json")))
     return;
   try {
     const existing = loadProjectConfig(projectRoot);
@@ -1296,7 +1325,7 @@ async function connectProject(projectRoot, args) {
   const priorIds = prior?.connectorIds ?? [];
   const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds);
   const available = await listWorkspaces(selected.profileId, gateway);
-  const environment = environmentLabel(args);
+  const environment = environmentLabel(args.controlUrl);
   console.log("Every Workspace you select receives the FULL record — this project's agent activity, its raw transcript lines (structurally sanitized, but NOT secret-scrubbed), and its project memory, complete, in each.");
   console.log("So anyone with access to ANY Workspace you select can read this project's captured activity: the audience is the union of all of them.");
   if (environment !== "prod") {
@@ -1328,10 +1357,6 @@ async function connectProject(projectRoot, args) {
       console.log(`Dropped ${unresolvedConnectorIds.join(", ")}: this project listed ${unresolvedConnectorIds.length === 1 ? "that Connector" : "those Connectors"} but ${unresolvedConnectorIds.length === 1 ? "it is" : "they are"} no longer readable with this sign-in.`);
     }
   }
-}
-function environmentLabel(args) {
-  const url = (args.controlUrl?.trim() || process.env.AUGENTA_CONTROL_URL || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
-  return url === DEFAULT_CONTROL_URL ? "prod" : url;
 }
 function secondsUntil(timestamp) {
   return Math.max(0, Math.round((timestamp - Date.now()) / 1000));
@@ -1650,24 +1675,6 @@ async function connectWithApiKey(projectRoot, apiKey, endpoint2) {
     connector
   };
 }
-function describeError(error) {
-  const message = error?.message ?? String(error);
-  if (message !== "fetch failed")
-    return message;
-  const cause = error.cause;
-  const code = cause?.code;
-  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
-    return "cannot reach Augenta: the host name did not resolve. Check your network or DNS.";
-  }
-  if (code === "ECONNREFUSED") {
-    return "cannot reach Augenta: the connection was refused. Check the URL, and any proxy or firewall.";
-  }
-  if (code === "CERT_HAS_EXPIRED" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {
-    return "cannot reach Augenta: the TLS certificate could not be verified. Check for a TLS-intercepting proxy.";
-  }
-  const detail = cause?.message ?? code;
-  return detail ? `cannot reach Augenta: ${detail}` : "cannot reach Augenta: the network request failed. Check your connection.";
-}
 if (isMain(import.meta.url)) {
   const argv = process.argv.slice(2);
   const wantsJson = argv.includes("--json");
@@ -1682,7 +1689,7 @@ if (isMain(import.meta.url)) {
       const payload = await runJsonVerb(resolved, args);
       console.log(JSON.stringify({
         ...payload,
-        environment: environmentLabel(args),
+        environment: environmentLabel(args.controlUrl),
         projectRoot,
         ...resolved.worktreeRedirect ? { worktreeRedirect: resolved.worktreeRedirect } : {}
       }, null, 2));
@@ -1695,7 +1702,7 @@ if (isMain(import.meta.url)) {
       const { connector, gateway } = await verifyProjectKey(projectRoot, args.endpoint);
       console.log(`The platform key in .augenta/config.json is accepted by ${gateway} and resolves to Connector ${connector.id} (${connector.status}, ${connector.direction}). Nothing was written.`);
     } else if (args.apiKey?.trim()) {
-      const existed = existsSync5(join5(projectRoot, ".augenta", "config.json"));
+      const existed = existsSync6(join5(projectRoot, ".augenta", "config.json"));
       const { path, connector } = await connectWithApiKey(projectRoot, args.apiKey.trim(), args.endpoint);
       console.log(`${existed ? "Updated" : "Wrote"} ${path} (0600). Platform-key capture is enabled through Connector ${connector.id}.`);
       console.log("Off switch: delete .augenta/config.json, or set AUGENTA_CAPTURE_ENABLED=0.");

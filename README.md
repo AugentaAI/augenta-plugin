@@ -3,7 +3,8 @@
 Your coding agents learn useful things every day, but most of that context
 disappears when a session ends. The Augenta plugin captures activity and
 project memory from projects you explicitly connect, then sends it to the
-Augenta Workspaces you choose so it can become shared memory and skills.
+Augenta Workspaces you choose so it can become shared memory and skills — and
+lets your agent ask those Workspaces what they remember.
 
 ## Quick start
 
@@ -70,6 +71,30 @@ required, and you can choose more than one.
 That selection is the consent boundary. The effective audience is the
 **union** of everyone with access to any selected Workspace.
 
+## Recall what Augenta remembers
+
+Once a project is connected, ask its Workspaces what they already know:
+
+```text
+/augenta:recall what did we decide about the landing path
+```
+
+On Codex, use `$augenta:recall`, or just ask what Augenta remembers about
+something. Your agent also reaches for it on its own when you ask what was
+decided, tried, or learned before.
+
+Every Workspace the project feeds is asked, and each answer is labelled with
+the Workspace it came from. An answer is written by a model over the matching
+memory, so a call can take up to a minute. **Only your question leaves the
+machine** — no file contents and no transcript text. Augenta records that a
+recall happened; it does not store the answer, and it keeps no copy of your
+question — only a one-way fingerprint of it, used to notice a repeated request
+that asks something different.
+
+A brand-new Workspace has nothing to recall yet; that is normal, not an error.
+Recall is available where Augenta has it deployed, and reports plainly when it
+is not.
+
 ## What gets captured
 
 Every selected Workspace receives the **full record**: the same normalized
@@ -84,8 +109,19 @@ After connecting, work in the project for a few minutes, then return to
 [Getting Started](https://augenta.ai/dashboard/getting-started) to confirm that
 experiences are landing.
 
+**On request: recall.** A recall sends one thing — the question you asked, or
+the one your agent formed from it — to each Workspace the project feeds. It
+reads back; it adds nothing to what the project has captured. Augenta keeps no
+copy of the question or the answer. It does record that a recall happened,
+against a one-way fingerprint of the question text — enough to tell a retry from
+a new question, and short questions are guessable from a fingerprint by anyone
+who can read that record, so treat the question itself as visible to the
+Workspace's audience.
+
 To stop capture for one project, delete `.augenta/config.json`. To disable
-capture globally, set `AUGENTA_CAPTURE_ENABLED=0`.
+capture globally, set `AUGENTA_CAPTURE_ENABLED=0`. That variable is the switch
+for **capture** only: recall is a read, so it keeps working while the project
+has a config. Deleting `.augenta/config.json` turns off both.
 
 ## Links
 

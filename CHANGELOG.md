@@ -11,7 +11,35 @@ release a user can read.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-09-05
+
 ### Added
+
+- **`/augenta:recall` — ask your Workspaces what they remember.** A connected
+  project can now read back what it has been feeding Augenta. Run
+  `/augenta:recall what did we decide about the landing path` in Claude Code, or
+  `$augenta:recall` in Codex; your agent also reaches for it on its own when you
+  ask what was decided, tried, or learned before.
+
+  Every Workspace the project feeds is asked, in parallel, and each answer comes
+  back labelled with the Workspace it came from. An answer is written by a model
+  over the matching memory, so a call can take up to a minute.
+
+  **Only your question leaves the machine** — no file contents and no transcript
+  text. Augenta records that a recall happened; it keeps no copy of the question
+  or the answer, only a one-way fingerprint of the question used to tell a retry
+  from a new question. Recall reads; it changes nothing about what a project
+  sends, and it asks only the destinations you already selected. Signed-in projects and
+  platform-key projects both work; a platform key's Connector already fixes the
+  Workspace, so there is nothing to choose there.
+
+  A Workspace nobody has fed yet has nothing to recall — that is a normal
+  answer, not an error. Recall is available where Augenta has it deployed and
+  says so plainly where it is not.
+
+  No reconnection is required: recall reads the `.augenta/config.json` you
+  already have. `hooks/hooks.json` is unchanged, so Codex does not re-prompt for
+  hook trust.
 
 - `SECURITY.md` — what the plugin touches, how to report a vulnerability
   privately, and what is out of scope.
@@ -20,11 +48,14 @@ release a user can read.
 
 ### Changed
 
+- `AUGENTA_CAPTURE_ENABLED=0` is documented as the switch for **capture** only.
+  Recall is a read, so it keeps working while a project has a config; deleting
+  `.augenta/config.json` remains the one off switch for both.
 - Both marketplace listings show `support@augenta.ai` as the owner contact,
   replacing a personal address.
-- `README.md` gained a Troubleshooting section covering the failure modes users
-  actually hit, and lost the contributor and deployment notes that belonged in
-  `CONTRIBUTING.md` and `AGENTS.md`.
+- `README.md` was reorganized around what a user does — install, connect,
+  recall, and what leaves the machine — and lost the contributor and deployment
+  notes that belonged in `CONTRIBUTING.md` and `AGENTS.md`.
 
 ## [0.9.3] — 2026-09-04
 
@@ -264,5 +295,6 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
-[Unreleased]: https://github.com/AugentaAI/augenta-plugin/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.10.0
 [0.9.3]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.9.3

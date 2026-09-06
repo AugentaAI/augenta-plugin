@@ -122,12 +122,36 @@ jobs:
           # the harness failed to discover.
           version="$(jq -r .version package.json)"
           hook_count="$(jq '.hooks | keys | length' hooks/hooks.json)"
+          # Same reasoning as the version and the hook count: a hardcoded skill
+          # count masks a skill the harness failed to discover, and a hardcoded
+          # NAME masks a second skill that never loaded. Both come from the tree.
+          skill_count="$(find skills -name SKILL.md | wc -l | tr -d ' ')"
+          skill_names="$(find skills -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)"
           claude plugin marketplace add ./
           claude plugin install augenta@augenta
           claude plugin details augenta@augenta | tee claude-plugin-details.txt
           grep -Fq "augenta $version" claude-plugin-details.txt
-          grep -Eq 'Skills [(]1[)].*connect' claude-plugin-details.txt
           grep -Fq "Hooks ($hook_count)" claude-plugin-details.txt
+
+          # The inventory line reads "Skills (2)  connect, recall". Compare the
+          # LISTED NAMES as a set against the tree, not as substrings of the whole
+          # line: `grep -Fq "call"` matches the `recall` entry, so a substring
+          # check passes for a skill the harness never loaded — the exact failure
+          # this is here to catch. The count is asserted too, since a set match
+          # alone would not notice the harness reporting a wrong total.
+          skills_line="$(grep -E '^ *Skills \(' claude-plugin-details.txt)"
+          test -n "$skills_line"
+          echo "$skills_line" | grep -Fq "Skills ($skill_count)"
+          listed="$(
+            sed -E 's/^ *Skills \([0-9]+\)[[:space:]]*//' <<<"$skills_line" \
+              | tr ',' '\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' | sort
+          )"
+          if [[ "$listed" != "$skill_names" ]]; then
+            echo "Claude loaded a different skill set than the tree declares:"
+            echo "  declared: $(tr '\n' ' ' <<<"$skill_names")"
+            echo "  loaded:   $(tr '\n' ' ' <<<"$listed")"
+            exit 1
+          fi
 
           # Everything above inspects manifests. The rest of this step checks the
           # thing only a real install can: that dist/ is actually COPIED by the
@@ -144,7 +168,17 @@ jobs:
           while read -r rel; do
             test -s "$claude_root/$rel" || { echo "missing shipped bundle: $rel"; exit 1; }
           done < shipped-bundles.txt
-          test -s "$claude_root/dist/scripts/connect.mjs"   # skill target, not a hook
+
+          # The CLI bundles are invoked by a SKILL.md rather than by hooks.json,
+          # so the list above cannot see them. Derive them the same way — per
+          # INSTALLED skill, which also proves the marketplace copied the skills.
+          for skill in "$claude_root"/skills/*/SKILL.md; do
+            grep -oh 'dist/scripts/[A-Za-z0-9_-]*\.mjs' "$skill" | sort -u > skill-bundles.txt
+            test -s skill-bundles.txt || { echo "skill invokes no bundle: $skill"; exit 1; }
+            while read -r rel; do
+              test -s "$claude_root/$rel" || { echo "missing skill bundle: $rel ($skill)"; exit 1; }
+            done < skill-bundles.txt
+          done
 
           # The hook commands are not `node <bundle>` — they go through a shell
           # runner that lives OUTSIDE dist/, so the marketplace has to copy it too.
@@ -164,6 +198,15 @@ jobs:
             | sh -c "$session_start_command" | tee hook-out.json
           jq -e '.hookSpecificOutput.initialUserMessage == "/augenta:connect"' hook-out.json
 
+          # Fire the READ door too, from the installed tree, on a project that
+          # never opted in. It needs no network: with no config there is nothing
+          # to ask and nowhere to ask it, which is exactly the invariant worth
+          # proving on the shipped bytes.
+          node "$claude_root/dist/scripts/recall.mjs" --json --project "$project" "smoke" \
+            | tee recall-out.json
+          jq -e '.status == "not_connected"' recall-out.json
+          test ! -d "$project/.augenta"
+
           # And the privacy invariant on the real artifact: a project that never
           # opted in gets no output and no state on disk.
           stop_command="$(jq -r '.hooks.Stop[0].hooks[0].command' "$claude_root/hooks/hooks.json")"
@@ -179,6 +222,11 @@ jobs:
         run: |
           version="$(jq -r .version package.json)"
           hook_count="$(jq '.hooks | keys | length' hooks/hooks.json)"
+          skill_count="$(find skills -name SKILL.md | wc -l | tr -d ' ')"
+          skill_names="$(find skills -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)"
+          # A JSON array of the skill ids Codex should report, derived from the
+          # tree and sorted so the comparison below is order-independent.
+          skill_ids="$(printf '%s\n' $skill_names | jq -R . | jq -s 'map("augenta:" + .)')"
           codex plugin marketplace add .
           codex plugin add augenta@augenta --json | tee codex-install.json
           codex plugin list --json | tee codex-plugins.json
@@ -188,19 +236,20 @@ jobs:
             .enabled == true
           )' codex-plugins.json
           codex_plugin_root="$(jq -r '.installedPath' codex-install.json)"
-          test -f "$codex_plugin_root/skills/connect/SKILL.md"
-          test "$(find "$codex_plugin_root/skills" -name SKILL.md | wc -l)" -eq 1
+          for name in $skill_names; do
+            test -f "$codex_plugin_root/skills/$name/SKILL.md" \
+              || { echo "the Codex install is missing the $name skill"; exit 1; }
+          done
+          test "$(find "$codex_plugin_root/skills" -name SKILL.md | wc -l | tr -d ' ')" -eq "$skill_count"
           test "$(jq -r '.hooks' "$codex_plugin_root/.codex-plugin/plugin.json")" = './hooks/hooks.json'
           test "$(jq '.hooks | keys | length' "$codex_plugin_root/hooks/hooks.json")" -eq "$hook_count"
           node .github/scripts/read-codex-plugin.mjs "$PWD/.agents/plugins/marketplace.json" augenta \
             | tee codex-plugin-read.json
-          jq -e --arg v "$version" --argjson hooks "$hook_count" '
+          jq -e --arg v "$version" --argjson hooks "$hook_count" --argjson ids "$skill_ids" '
             .summary.localVersion == $v and
-            (.skills | length == 1) and
-            .skills[0].name == "augenta:connect" and
-            .skills[0].enabled == true and
-            .skills[0].interface != null and
-            .skills[0].interface.shortDescription != null and
+            ([.skills[].name] | sort) == $ids and
+            all(.skills[]; .enabled == true) and
+            all(.skills[]; .interface != null and .interface.shortDescription != null) and
             (.hooks | length == $hooks)
           ' codex-plugin-read.json
 
@@ -212,7 +261,16 @@ jobs:
           while read -r rel; do
             test -s "$codex_plugin_root/$rel" || { echo "missing shipped bundle: $rel"; exit 1; }
           done < codex-bundles.txt
-          test -s "$codex_plugin_root/dist/scripts/connect.mjs"
+
+          # .codexignore prunes the bundle, so the skill-invoked CLIs need the
+          # same derived check the Claude leg makes.
+          for skill in "$codex_plugin_root"/skills/*/SKILL.md; do
+            grep -oh 'dist/scripts/[A-Za-z0-9_-]*\.mjs' "$skill" | sort -u > codex-skill-bundles.txt
+            test -s codex-skill-bundles.txt || { echo "skill invokes no bundle: $skill"; exit 1; }
+            while read -r rel; do
+              test -s "$codex_plugin_root/$rel" || { echo "missing skill bundle: $rel ($skill)"; exit 1; }
+            done < codex-skill-bundles.txt
+          done
 
           # The harness split is chosen from the transcript path shape, so this
           # exercises a different branch of the same bundle than the Claude fire.

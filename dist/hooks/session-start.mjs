@@ -1274,6 +1274,9 @@ async function saveDeviceProfile(config, tokens, identity) {
     return { profileId, profile };
   });
 }
+function getAuthProfile(profileId) {
+  return readAuthStore().profiles[profileId];
+}
 function reusableProfiles(config) {
   return Object.entries(readAuthStore().profiles).filter(([, profile]) => profile.issuer.replace(/\/+$/, "") === config.issuer.replace(/\/+$/, "") && profile.clientId === config.clientId && profile.gateway.replace(/\/+$/, "") === config.gateway.replace(/\/+$/, "")).map(([profileId, profile]) => ({ profileId, profile })).sort((a, b) => b.profile.updatedAt.localeCompare(a.profile.updatedAt));
 }

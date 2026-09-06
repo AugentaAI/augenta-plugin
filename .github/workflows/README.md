@@ -29,7 +29,7 @@ Two jobs, `contents: read` only, superseded runs cancelled:
 1. **`typecheck + test`** — `bun install --frozen-lockfile` (fails on lockfile drift),
    `bun run typecheck`, `bun test`.
 2. **`Claude + Codex marketplace install smoke test`** — installs the plugin into the real
-   `claude` and `codex` CLIs and asserts the reported version, exactly one `connect` skill,
+   `claude` and `codex` CLIs and asserts the reported version, every skill in `skills/`,
    and the hook count. Every expected value is *derived* from `package.json` /
    `hooks/hooks.json`, never hardcoded — a hardcoded version silently rotted through a
    release once already.
@@ -163,6 +163,7 @@ claude --plugin-dir . plugin details augenta
 ```
 
 The plugin surface must be unchanged by anything in this directory: the manifest version,
-one `connect` skill, every event in `hooks/hooks.json`, and no load errors. The repo's dev
+both skills, every event in `hooks/hooks.json`, and no load errors. The repo's dev
 skills live under `.claude/skills/` precisely so they stay out of that surface —
-`skills/` at the repo root is asserted to hold exactly one skill.
+`skills/` at the repo root is asserted to hold exactly the plugin's product skills
+(`connect` and `recall`).
