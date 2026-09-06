@@ -295,5 +295,6 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
-[Unreleased]: https://github.com/AugentaAI/augenta-plugin/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.10.0
 [0.9.3]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.9.3

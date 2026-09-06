@@ -895,6 +895,57 @@ describe("--workspace narrows the fan-out", () => {
     expect(JSON.parse(String(recallCalls()[0]!.body)).workspace).toBe("ws-scratch");
   });
 
+  test("an unresolvable destination makes the answer UNKNOWN, not 'not a destination'", async () => {
+    /* Both outcomes fail closed, which is right. What differs is the sentence:
+       with a Connector unresolved, the run never learned which Workspace it
+       points at, so "this project does not feed X" states a consent conclusion
+       it never reached — and the evidence for why must not be dropped. */
+    const { profileId } = await signIn();
+    writeConfig({
+      authMode: "oauth",
+      profileId,
+      connectorIds: ["connector_a", "connector_b"],
+      endpoint: GATEWAY,
+    });
+    route({
+      [`${GATEWAY}/v1/connectors/connector_b`]: () => new Response("boom", { status: 500 }),
+      [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("nope"),
+    });
+
+    const payload = await runRecall({ projectRoot: project }, args({ workspaces: ["ws-scratch"] }));
+
+    expect(payload).toMatchObject({ status: "error", code: "workspace_unverifiable" });
+    expect(payload.message).toContain("ws-scratch");
+    // The evidence survives the bail rather than being discarded with it.
+    expect(payload.failed).toEqual([
+      {
+        connectorId: "connector_b",
+        code: "network",
+        message: "could not inspect the existing Connector (500)",
+      },
+    ]);
+    expect(recallCalls()).toEqual([]);
+  });
+
+  test("an unreadable prior Connector is reported the same way", async () => {
+    // 403/404 is the other half: this sign-in cannot SEE the link, so it equally
+    // cannot say the requested Workspace is not one of this project's.
+    const { profileId } = await signIn();
+    writeConfig({
+      authMode: "oauth",
+      profileId,
+      connectorIds: ["connector_a", "connector_gone"],
+      endpoint: GATEWAY,
+    });
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("nope") });
+
+    const payload = await runRecall({ projectRoot: project }, args({ workspaces: ["ws-scratch"] }));
+
+    expect(payload).toMatchObject({ status: "error", code: "workspace_unverifiable" });
+    expect(payload.unresolvedConnectorIds).toEqual(["connector_gone"]);
+    expect(recallCalls()).toEqual([]);
+  });
+
   test("a Workspace this project does not feed fails closed, asking nothing", async () => {
     // Recall can only ask where the project sends. Silently ignoring the flag
     // would answer a different question than the one that was asked.

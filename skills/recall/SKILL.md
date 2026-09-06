@@ -113,7 +113,9 @@ config lives there, so the worktree has nothing to ask on its own.
   `not_entitled` means this sign-in cannot read that Workspace, `recall_timeout`
   means the answer took too long (a narrower question may help),
   `unknown_workspace` means `--workspace` named something this project does not
-  feed, `workspace_archived` means that Workspace has been closed in Augenta, and
+  feed, `workspace_unverifiable` means a destination could not be resolved so
+  that could not be confirmed either way (the `failed` entries say why),
+  `workspace_archived` means that Workspace has been closed in Augenta, and
   `workspace_not_selectable` means the project uses a platform key whose
   Connector already fixes the Workspace.
 

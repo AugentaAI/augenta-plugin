@@ -33,7 +33,7 @@ touches the control plane: it posts to the GATEWAY in the project's own
 that environment. So a project connected against dev asks dev, whatever
 `AUGENTA_CONTROL_URL` says. To aim recall somewhere else, either reconnect the
 project or set `AUGENTA_API_URL`, which `gatewayBase` reads first. This is also
-why `recallEnvironment` (`scripts/recall.ts:520`) consults BOTH coordinates — the
+why `recallEnvironment` (`scripts/recall.ts:541`) consults BOTH coordinates — the
 control URL alone would report `prod` about a question going to dev.
 
 **Neither skill has an environment flag, on purpose.** `SKILL.md` stays

@@ -996,7 +996,11 @@ async function runRecall(resolved, args) {
       const requested = new Set(args.workspaces);
       const unknown = args.workspaces.filter((id) => !destinations.some((destination) => destination.workspaceId === id));
       if (unknown.length > 0) {
-        return bail("error", "unknown_workspace", `this project does not feed ${unknown.join(", ")}; recall can only ask the Workspaces it sends to`);
+        const unverifiable = failed.length > 0 || unresolvedConnectorIds.length > 0;
+        return bail("error", unverifiable ? "workspace_unverifiable" : "unknown_workspace", unverifiable ? `could not resolve every destination this project feeds, so ${unknown.join(", ")} cannot be confirmed as one; nothing was asked` : `this project does not feed ${unknown.join(", ")}; recall can only ask the Workspaces it sends to`, {
+          ...failed.length > 0 ? { failed: [...failed] } : {},
+          ...unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {}
+        });
       }
       destinations = destinations.filter((destination) => destination.workspaceId && requested.has(destination.workspaceId));
     }

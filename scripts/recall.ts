@@ -676,10 +676,27 @@ export async function runRecall(
         (id) => !destinations.some((destination) => destination.workspaceId === id),
       );
       if (unknown.length > 0) {
+        /* Failing closed is right either way — never ask a Workspace this
+           project's config cannot be shown to feed. But WHY it is closed is a
+           different sentence, and the wrong one is worse than vague.
+
+           With every Connector resolved, "this project does not feed X" is a
+           fact about the project. With one unresolved — a 403/404, or a lookup
+           that threw — the run never learned which Workspace that Connector
+           points at, so X might well be a destination. Reporting that as "does
+           not feed" states a CONSENT conclusion the run never reached, and the
+           bail below would otherwise drop the network evidence that explains it. */
+        const unverifiable = failed.length > 0 || unresolvedConnectorIds.length > 0;
         return bail(
           "error",
-          "unknown_workspace",
-          `this project does not feed ${unknown.join(", ")}; recall can only ask the Workspaces it sends to`,
+          unverifiable ? "workspace_unverifiable" : "unknown_workspace",
+          unverifiable
+            ? `could not resolve every destination this project feeds, so ${unknown.join(", ")} cannot be confirmed as one; nothing was asked`
+            : `this project does not feed ${unknown.join(", ")}; recall can only ask the Workspaces it sends to`,
+          {
+            ...(failed.length > 0 ? { failed: [...failed] } : {}),
+            ...(unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {}),
+          },
         );
       }
       destinations = destinations.filter(
@@ -817,9 +834,12 @@ if (isMain(import.meta.url)) {
     } else {
       printPayload(payload);
     }
-    // Only a genuine error is a failed exit. `nothing_remembered` is a young
-    // Workspace and `not_connected` is a project that never opted in; making
-    // either non-zero would turn a normal answer into a broken command.
+    // Only a genuine error is a failed exit. EVERY other status is a true answer
+    // about a real project — a young Workspace (`nothing_remembered`), one that
+    // never opted in (`not_connected`), a sign-in to redo (`need_login`), an
+    // environment without recall (`recall_unavailable`), or a partial result —
+    // and making any of them non-zero would turn a normal answer into a broken
+    // command for anyone who scripts this.
     if (payload.status === "error") process.exitCode = 1;
   } catch (error) {
     const message = describeError(error);

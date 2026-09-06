@@ -476,6 +476,7 @@ describe("the recall skill drives recall itself", () => {
       "not_entitled",
       "recall_timeout",
       "unknown_workspace",
+      "workspace_unverifiable",
       "workspace_archived",
       "workspace_not_selectable",
       "unreadable_config",
@@ -973,6 +974,25 @@ describe("manifests — cross-harness packaging and one version", () => {
     expect(ci, "install-smoke bypasses the declared hook command").not.toMatch(
       /\|\s*node "\$claude_root/,
     );
+  });
+
+  test("every versioned CHANGELOG heading has a link definition", () => {
+    /* `## [0.10.0] — …` is reference-style Markdown: with no matching
+       definition it renders as the LITERAL text `[0.10.0]` on GitHub, directly
+       above a `[0.9.3]` that renders as a link. AGENTS.md calls this file "the
+       only account of a release a user can read", and nothing else checks the
+       ref list — a released version quietly losing its link is exactly the kind
+       of rot that survives review. */
+    const changelog = readFileSync(join(PLUGIN_ROOT, "CHANGELOG.md"), "utf8");
+    const referenced = [...changelog.matchAll(/^## \[([^\]]+)\]/gm)].map((m) => m[1]!);
+    const defined = new Set(
+      [...changelog.matchAll(/^\[([^\]]+)\]:\s*\S+/gm)].map((m) => m[1]!),
+    );
+    // Non-vacuity: a file with no bracketed headings would pass silently.
+    expect(referenced).toContain(RELEASE_VERSION);
+    for (const version of referenced) {
+      expect(defined, `CHANGELOG.md has no link definition for [${version}]`).toContain(version);
+    }
   });
 
   test("the versioned marketplace descriptions track the release", () => {
