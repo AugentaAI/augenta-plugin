@@ -127,6 +127,51 @@ an API key instead. A person can use a key too, but signing in is simpler.
 Never paste a key into an agent conversation, and never type it at a shell —
 both are recorded.
 
+## Configuration
+
+Everything about one project's connection lives in a single file inside that
+project: `.augenta/config.json`. `/augenta:connect` writes it for you; you write
+it yourself only for CI or a service, as above. There is no global settings file
+and nothing to tune — the file is a consent record, not a preferences file, and
+that is the whole reason it exists:
+
+- **Capture is opt-in per project, and the file is the opt-in.** Its presence in
+  a project root is what connects that project. No file, no capture. That is
+  also why disconnecting one project is `rm .augenta/config.json` and not a
+  command — there is no other state to get out of step with it.
+- **It records which Workspaces you consented to.** `connectorIds` holds one
+  Connector per Workspace you selected, so the destination set belongs to the
+  project rather than to you or your machine. One laptop can feed this repo to
+  your private Default Workspace and the repo next door to a shared one. A
+  global file could not express that.
+- **On the API-key path it is also the credential.** Signing in keeps your token
+  in `~/.augenta/auth.json`, globally and reusable, and the project file holds
+  only a reference to that profile. A browserless client has no profile to
+  reference, so for it the file carries the key itself.
+
+```json
+{
+  "authMode": "oauth",
+  "profileId": "profile_…",
+  "connectorIds": ["connector_…", "connector_…"]
+}
+```
+
+`authMode` names the credential kind, which decides both what else the file must
+contain and which authorization header the plugin sends. `connectorIds` is an
+array and the only routing key read — no scalar is accepted beside it, because a
+file offering both would let a reader take the scalar, ship to that one
+destination, and go quietly single-destination with nobody told. `endpoint` is
+accepted for pointing a client at a non-default environment.
+
+What the file deliberately never carries: no OAuth token, no organization id and
+no Workspace id. Augenta derives every coordinate server-side from the Connector
+or key it authenticated, and refuses coordinates supplied by a client.
+
+A config this plugin cannot parse is not migrated — it prompts you to reconnect
+instead. Reusing stale routing would trade one clear reconnect for an
+unexplained 401 later.
+
 ## Recall what Augenta remembers
 
 Once a project is connected, ask its Workspaces what they already know:
