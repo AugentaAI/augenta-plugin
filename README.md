@@ -88,10 +88,10 @@ shows the current set pre-selected, and that set has to be re-affirmed.
 That selection is the consent boundary. The effective audience is the **union**
 of everyone with access to any selected Workspace.
 
-Then work in the project for a few minutes and open
-[Getting started](https://augenta.ai/dashboard/getting-started) → **Confirm it's
-working**. Capture is buffered locally and ships in the background, so a short
-wait there is normal rather than a failure.
+Then work in the project for a few minutes and open the Workspace you selected
+in the console — its **Experiences** screen is where captured turns arrive.
+Capture is buffered locally and ships in the background, so a short wait before
+the first one shows up is normal rather than a failure.
 
 ## Connecting CI or a service
 
