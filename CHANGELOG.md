@@ -9,13 +9,14 @@ requires reconnecting, the entry says so.
 Both marketplaces install from `main`, so this file is the only account of a
 release a user can read.
 
+## [Unreleased]
+
 ## [0.10.1] — 2026-09-08
 
 Claude captures now distinguish tools the harness denied from tools that ran and failed.
-Injected skill instructions, aborted assistant fragments, and interruption notices no longer
-become memory events; their raw records remain available. No reconnect is required.
-
-## [Unreleased]
+Recognized skill-instruction injections, aborted assistant fragments, and standalone user
+interruption notices no longer become memory events; their raw records remain available.
+Command output and interrupted running-tool results remain captured. No reconnect is required.
 
 ## [0.10.0] — 2026-09-05
 
@@ -302,7 +303,6 @@ authentication failure.
   memory for Claude Code and Codex.
 
 [Unreleased]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.10.1
 [0.10.0]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.10.0
 [0.9.3]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.9.3
-
-[0.10.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.0...v0.10.1

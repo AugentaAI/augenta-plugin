@@ -170,6 +170,11 @@ function hasToolUse(content) {
 function hasToolResult(content) {
   return Array.isArray(content) && content.some((b) => b && b.type === "tool_result");
 }
+function toolStatus(line) {
+  if (typeof line.toolDenialKind === "string" && line.toolDenialKind.trim() !== "")
+    return "denied";
+  return hasToolError(line.message?.content) ? "error" : "ok";
+}
 function classify(line) {
   const etype = line.type;
   const content = line.message?.content;
@@ -182,7 +187,7 @@ function classify(line) {
   }
   if (etype === "user") {
     if (hasToolResult(content)) {
-      return { kind: "tool", role: "tool", tool_status: line.toolDenialKind ? "denied" : hasToolError(content) ? "error" : "ok" };
+      return { kind: "tool", role: "tool", tool_status: toolStatus(line) };
     }
     return { kind: "msg", role: "user" };
   }
@@ -192,7 +197,7 @@ function classify(line) {
   if (etype === "tool_use")
     return { kind: "tool", role: "assistant", tool_name: firstToolName(content) };
   if (etype === "tool_result") {
-    return { kind: "tool", role: "tool", tool_status: line.toolDenialKind ? "denied" : hasToolError(content) ? "error" : "ok" };
+    return { kind: "tool", role: "tool", tool_status: toolStatus(line) };
   }
   if (msgRole === "assistant" || msgRole === "user" || msgRole === "system") {
     return { kind: "msg", role: msgRole };
@@ -200,12 +205,16 @@ function classify(line) {
   return null;
 }
 function normalizeLine(line, ctx, seq, off, scrub) {
-  if (line.isMeta === true || line.isAbortedMidStream === true)
+  if (line.isAbortedMidStream === true)
     return null;
   const cls = classify(line);
   if (!cls)
     return null;
   const rawText = extractText(line.message?.content);
+  const content = line.message?.content;
+  const textOnly = typeof content === "string" || Array.isArray(content) && content.every((block) => block && block.type === "text");
+  if (line.isMeta === true && cls.role === "user" && textOnly && rawText.startsWith("Base directory for this skill: "))
+    return null;
   if (cls.role === "user" && /^\[Request interrupted by user(?: for tool use)?\]$/.test(rawText.trim()))
     return null;
   const text = scrub(rawText).trim();
