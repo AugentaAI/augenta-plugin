@@ -18,4 +18,4 @@
  * and both marketplace metadata and plugin entries (AGENTS.md → Releases). The
  * contract test asserts all of them agree.
  */
-export const PLUGIN_VERSION = "0.10.0";
+export const PLUGIN_VERSION = "0.10.1";

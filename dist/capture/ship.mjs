@@ -15364,7 +15364,7 @@ function isHttpsUrl(value) {
 }
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.10.0";
+var PLUGIN_VERSION = "0.10.1";
 
 // capture/ship.ts
 import { join as join5, dirname as dirname2 } from "node:path";

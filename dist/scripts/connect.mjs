@@ -83,7 +83,7 @@ function isHttpsUrl(value) {
 }
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.10.0";
+var PLUGIN_VERSION = "0.10.1";
 
 // capture/augenta-dir.ts
 import { join } from "node:path";

@@ -29,6 +29,10 @@ interface ContentBlock {
 }
 
 interface TranscriptLine {
+  /** Claude Code line flags; these are not fields on the normalized event. */
+  isMeta?: boolean;
+  isAbortedMidStream?: boolean;
+  toolDenialKind?: unknown;
   type?: string;
   sessionId?: string;
   timestamp?: string;
@@ -121,6 +125,12 @@ function hasToolResult(content: unknown): boolean {
   return Array.isArray(content) && (content as ContentBlock[]).some((b) => b && b.type === "tool_result");
 }
 
+/** Harness denials take precedence over is_error; malformed flags cannot establish a denial. */
+function toolStatus(line: TranscriptLine): ToolStatus {
+  if (typeof line.toolDenialKind === "string" && line.toolDenialKind.trim() !== "") return "denied";
+  return hasToolError(line.message?.content) ? "error" : "ok";
+}
+
 /** Classify a transcript line into a canonical (kind, role) + optional tool fields. */
 function classify(line: TranscriptLine): {
   kind: EventKind;
@@ -140,7 +150,7 @@ function classify(line: TranscriptLine): {
   }
   if (etype === "user") {
     if (hasToolResult(content)) {
-      return { kind: "tool", role: "tool", tool_status: hasToolError(content) ? "error" : "ok" };
+      return { kind: "tool", role: "tool", tool_status: toolStatus(line) };
     }
     return { kind: "msg", role: "user" };
   }
@@ -150,7 +160,7 @@ function classify(line: TranscriptLine): {
   // Defensive: some transcripts surface top-level tool_use / tool_result lines.
   if (etype === "tool_use") return { kind: "tool", role: "assistant", tool_name: firstToolName(content) };
   if (etype === "tool_result") {
-    return { kind: "tool", role: "tool", tool_status: hasToolError(content) ? "error" : "ok" };
+    return { kind: "tool", role: "tool", tool_status: toolStatus(line) };
   }
   // Unknown top-level type — keep it as a system note rather than dropping signal,
   // but only if we can reconcile a role. Otherwise skip.
@@ -162,10 +172,23 @@ function classify(line: TranscriptLine): {
 
 /** One parsed transcript line → at most one {@link CaptureEvent}. */
 function normalizeLine(line: TranscriptLine, ctx: NormalizeCtx, seq: number, off: number, scrub: Scrubber): CaptureEvent | null {
+  // Discard unfinished assistant fragments from events only. tailToEvents retains the
+  // sanitized raw record and advances the byte cursor for every valid transcript line.
+  if (line.isAbortedMidStream === true) return null;
   const cls = classify(line);
   if (!cls) return null;
 
   const rawText = extractText(line.message?.content);
+  // isMeta also covers command expansions and command output: preserve those and unknown
+  // meta records. Only the known, text-only skill-instruction injection is noise here.
+  const content = line.message?.content;
+  const textOnly = typeof content === "string" || (Array.isArray(content) &&
+    content.every((block) => block && block.type === "text"));
+  if (line.isMeta === true && cls.role === "user" && textOnly &&
+    rawText.startsWith("Base directory for this skill: ")) return null;
+  // Match a whole user notice, never a message quoting it. An interrupted tool result
+  // remains an error: the tool may already have run and produced effects, unlike a denial.
+  if (cls.role === "user" && /^\[Request interrupted by user(?: for tool use)?\]$/.test(rawText.trim())) return null;
   // Empty-content lines (e.g. a bare summary marker) carry no signal — skip them
   // rather than emit blank events that only cost bytes downstream. Scrub runs
   // CLIENT-SIDE here and covers EVENT TEXT ONLY — the envelope's raw `data`

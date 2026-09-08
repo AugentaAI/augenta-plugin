@@ -82,6 +82,78 @@ describe("extractText", () => {
 });
 
 describe("normalizeClaudeTranscript", () => {
+  for (const type of ["user", "tool_result"]) {
+    for (const isError of [true, false, undefined]) {
+      test(`${type}: harness denial takes precedence over is_error=${isError}`, () => {
+        const line = lineFor({ type, toolDenialKind: "auto-mode",
+          message: { content: [{ type: "tool_result", is_error: isError, content: "Permission denied" }] } });
+        const result = normalizeClaudeTranscript({ lines: [line], ctx, startSeq: 0, startOffset: 0 });
+        expect(result.events[0]!.tool_status).toBe("denied");
+      });
+    }
+    for (const [name, value] of [
+      ["object", { unexpected: true }], ["array", []], ["boolean", true],
+      ["number", 1], ["null", null], ["empty", ""], ["whitespace", "  "],
+    ] as const) {
+      test(`${type}: ${name} denial flag preserves the recorded tool status`, () => {
+        const lines = [false, true].map((isError) => lineFor({ type, toolDenialKind: value,
+          message: { content: [{ type: "tool_result", is_error: isError, content: "Recorded result" }] } }));
+        const result = normalizeClaudeTranscript({ lines, ctx, startSeq: 0, startOffset: 0 });
+        expect(result.events.map((event) => event.tool_status)).toEqual(["ok", "error"]);
+      });
+    }
+  }
+
+  for (const [name, extra] of [
+    ["skill instructions", { type: "user", isMeta: true, message: { content: "Base directory for this skill: /skill" } }],
+    ["skill text blocks", { type: "user", isMeta: true, message: { content: [{ type: "text", text: "Base directory for this skill: /skill\nInstructions" }] } }],
+    ["aborted fragment", { type: "assistant", isAbortedMidStream: true, message: { content: "The" } }],
+    ["user interruption", { type: "user", message: { content: "[Request interrupted by user]" } }],
+    ["tool-use interruption notice", { type: "user", message: { content: "[Request interrupted by user for tool use]" } }],
+  ] as const) {
+    test(`${name} is omitted from events with raw and cursor preserved`, () => {
+      const raw = lineFor(extra);
+      const result = normalizeClaudeTranscript({ lines: [raw], ctx, startSeq: 8, startOffset: 12 });
+      expect(result.events).toEqual([]);
+      expect(result.raws).toHaveLength(1);
+      expect(JSON.parse(result.raws[0]!.raw)).toEqual(extra);
+      expect(result.nextOffset).toBe(12 + Buffer.byteLength(raw) + 1);
+      expect(result.nextSeq).toBe(8);
+    });
+  }
+
+  for (const [name, extra] of [
+    ["local command output", { type: "user", isMeta: true, message: { content: "<local-command-stdout>3 tests failed</local-command-stdout>" } }],
+    ["command expansion", { type: "user", isMeta: true, message: { content: "<command-name>/review</command-name>Review auth.py" } }],
+    ["bash output", { type: "user", isMeta: true, message: { content: "<bash-stdout>3 tests passed</bash-stdout>" } }],
+    ["unknown metadata", { type: "user", isMeta: true, message: { content: "A new harness observation" } }],
+    ["user-authored skill header", { type: "user", message: { content: "Base directory for this skill: /skill" } }],
+    ["quoted interruption", { type: "user", message: { content: "The log says [Request interrupted by user]. Investigate." } }],
+    ["skill header with an image", { type: "user", isMeta: true, message: { content: [{ type: "text", text: "Base directory for this skill: /skill" }, { type: "image" }] } }],
+    ["skill header with a tool result", { type: "user", isMeta: true, message: { content: [{ type: "text", text: "Base directory for this skill: /skill" }, { type: "tool_result", content: "File changed" }] } }],
+  ] as const) {
+    test(`${name} remains an event with raw and cursor preserved`, () => {
+      const raw = lineFor(extra);
+      const result = normalizeClaudeTranscript({ lines: [raw], ctx, startSeq: 8, startOffset: 12 });
+      expect(result.events).toHaveLength(1);
+      expect(result.events[0]!.text).toBe(extractText(extra.message.content));
+      expect(result.events[0]!.seq).toBe(8);
+      expect(result.events[0]!.ref?.off).toBe(12);
+      expect(JSON.parse(result.raws[0]!.raw)).toEqual(extra);
+      expect(result.nextOffset).toBe(12 + Buffer.byteLength(raw) + 1);
+      expect(result.nextSeq).toBe(9);
+    });
+  }
+
+  test("an interrupted running tool retains its unsuccessful result", () => {
+    const record = { type: "user", message: { content: [{ type: "tool_result",
+      is_error: true, content: "[Request interrupted by user]" }] } };
+    const result = normalizeClaudeTranscript({ lines: [lineFor(record)], ctx, startSeq: 0, startOffset: 0 });
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]!.tool_status).toBe("error");
+    expect(result.events[0]!.text).toBe("[tool_result] [Request interrupted by user]");
+    expect(JSON.parse(result.raws[0]!.raw)).toEqual(record);
+  });
   test("assistant text → msg(assistant) event with token counts", () => {
     const lines = [
       lineFor({
