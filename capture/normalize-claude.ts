@@ -29,6 +29,9 @@ interface ContentBlock {
 }
 
 interface TranscriptLine {
+  isMeta?: boolean;
+  isAbortedMidStream?: boolean;
+  toolDenialKind?: string;
   type?: string;
   sessionId?: string;
   timestamp?: string;
@@ -140,7 +143,7 @@ function classify(line: TranscriptLine): {
   }
   if (etype === "user") {
     if (hasToolResult(content)) {
-      return { kind: "tool", role: "tool", tool_status: hasToolError(content) ? "error" : "ok" };
+      return { kind: "tool", role: "tool", tool_status: line.toolDenialKind ? "denied" : hasToolError(content) ? "error" : "ok" };
     }
     return { kind: "msg", role: "user" };
   }
@@ -150,7 +153,7 @@ function classify(line: TranscriptLine): {
   // Defensive: some transcripts surface top-level tool_use / tool_result lines.
   if (etype === "tool_use") return { kind: "tool", role: "assistant", tool_name: firstToolName(content) };
   if (etype === "tool_result") {
-    return { kind: "tool", role: "tool", tool_status: hasToolError(content) ? "error" : "ok" };
+    return { kind: "tool", role: "tool", tool_status: line.toolDenialKind ? "denied" : hasToolError(content) ? "error" : "ok" };
   }
   // Unknown top-level type — keep it as a system note rather than dropping signal,
   // but only if we can reconcile a role. Otherwise skip.
@@ -162,10 +165,12 @@ function classify(line: TranscriptLine): {
 
 /** One parsed transcript line → at most one {@link CaptureEvent}. */
 function normalizeLine(line: TranscriptLine, ctx: NormalizeCtx, seq: number, off: number, scrub: Scrubber): CaptureEvent | null {
+  if (line.isMeta === true || line.isAbortedMidStream === true) return null;
   const cls = classify(line);
   if (!cls) return null;
 
   const rawText = extractText(line.message?.content);
+  if (cls.role === "user" && /^\[Request interrupted by user(?: for tool use)?\]$/.test(rawText.trim())) return null;
   // Empty-content lines (e.g. a bare summary marker) carry no signal — skip them
   // rather than emit blank events that only cost bytes downstream. Scrub runs
   // CLIENT-SIDE here and covers EVENT TEXT ONLY — the envelope's raw `data`

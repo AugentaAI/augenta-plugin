@@ -82,6 +82,27 @@ describe("extractText", () => {
 });
 
 describe("normalizeClaudeTranscript", () => {
+  test("harness denial is a distinct wire status", () => {
+    const line = lineFor({type: "user", toolDenialKind: "auto-mode",
+      message: {content: [{type: "tool_result", is_error: true, content: "Permission denied"}]}});
+    const result = normalizeClaudeTranscript({lines: [line], ctx, startSeq: 0, startOffset: 0});
+    expect(result.events[0]!.tool_status).toBe("denied");
+  });
+  for (const extra of [
+    {type: "user", isMeta: true, message: {content: "Base directory for this skill: /skill"}},
+    {type: "assistant", isAbortedMidStream: true, message: {content: "The"}},
+    {type: "user", message: {content: "[Request interrupted by user]"}},
+    {type: "user", message: {content: "[Request interrupted by user for tool use]"}},
+  ]) {
+    test(`chrome is dropped but raw kept: ${JSON.stringify(extra)}`, () => {
+      const raw = lineFor(extra);
+      const result = normalizeClaudeTranscript({lines: [raw], ctx, startSeq: 0, startOffset: 0});
+      expect(result.events).toEqual([]);
+      expect(result.raws).toHaveLength(1);
+      expect(JSON.parse(result.raws[0]!.raw)).toEqual(extra);
+      expect(result.nextOffset).toBe(Buffer.byteLength(raw) + 1);
+    });
+  }
   test("assistant text → msg(assistant) event with token counts", () => {
     const lines = [
       lineFor({

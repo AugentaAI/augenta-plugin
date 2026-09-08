@@ -34,7 +34,7 @@ export type EventKind = "tool" | "msg" | "error" | "outcome" | "session";
 /** Who/what produced the step. */
 export type EventRole = "user" | "assistant" | "tool" | "system";
 /** Outcome of a tool call (only meaningful when `kind === "tool"`). */
-export type ToolStatus = "ok" | "error";
+export type ToolStatus = "ok" | "error" | "denied";
 
 /**
  * One neutral capture event — one STEP of a trajectory experience's `events`.

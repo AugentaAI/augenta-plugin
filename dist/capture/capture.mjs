@@ -182,7 +182,7 @@ function classify(line) {
   }
   if (etype === "user") {
     if (hasToolResult(content)) {
-      return { kind: "tool", role: "tool", tool_status: hasToolError(content) ? "error" : "ok" };
+      return { kind: "tool", role: "tool", tool_status: line.toolDenialKind ? "denied" : hasToolError(content) ? "error" : "ok" };
     }
     return { kind: "msg", role: "user" };
   }
@@ -192,7 +192,7 @@ function classify(line) {
   if (etype === "tool_use")
     return { kind: "tool", role: "assistant", tool_name: firstToolName(content) };
   if (etype === "tool_result") {
-    return { kind: "tool", role: "tool", tool_status: hasToolError(content) ? "error" : "ok" };
+    return { kind: "tool", role: "tool", tool_status: line.toolDenialKind ? "denied" : hasToolError(content) ? "error" : "ok" };
   }
   if (msgRole === "assistant" || msgRole === "user" || msgRole === "system") {
     return { kind: "msg", role: msgRole };
@@ -200,10 +200,14 @@ function classify(line) {
   return null;
 }
 function normalizeLine(line, ctx, seq, off, scrub) {
+  if (line.isMeta === true || line.isAbortedMidStream === true)
+    return null;
   const cls = classify(line);
   if (!cls)
     return null;
   const rawText = extractText(line.message?.content);
+  if (cls.role === "user" && /^\[Request interrupted by user(?: for tool use)?\]$/.test(rawText.trim()))
+    return null;
   const text = scrub(rawText).trim();
   if (!text)
     return null;
