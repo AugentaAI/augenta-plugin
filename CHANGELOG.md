@@ -11,6 +11,12 @@ release a user can read.
 
 ## [Unreleased]
 
+### Changed
+
+- Simplified setup, recall, and privacy guidance. Added separate guides for
+  connection settings and how the plugin works. Plugin behavior is unchanged;
+  no reconnect is required.
+
 ## [0.10.1] — 2026-09-08
 
 Claude captures now distinguish tools the harness denied from tools that ran and failed.

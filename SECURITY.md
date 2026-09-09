@@ -1,72 +1,62 @@
 # Security policy
 
-## Scope
+## Report a problem privately
 
-This repository is the Augenta plugin: eight lifecycle hooks, a connect script,
-and a recall script, all of which run **on the user's own machine** under Claude
-Code or Codex. What that code touches is the useful boundary for a report:
+Use this repository's
+[private security advisory form](https://github.com/AugentaAI/augenta-plugin/security/advisories/new).
+Please do not post a suspected security flaw as a public issue.
 
-- **`~/.augenta/auth.json`** — the global, owner-only sign-in file. Rotating
-  OAuth access and refresh tokens live here and nowhere else, mode `0600` inside
-  a `0700` directory.
-- **`<project>/.augenta/config.json`** — a connected project's routing decision:
-  a profile reference and its Connector ids, or a platform key. No token. The
-  plugin narrows the directory to `0700` on every write it makes under it and
-  adds a self-ignoring `.gitignore`.
-- **What leaves the machine, and to where** — README's
-  [What gets captured](README.md#what-gets-captured) is the authoritative
-  description. Three channels: normalized events scrubbed client-side for common
-  credential patterns; raw transcript records that are structurally sanitized
-  but **not** secret-scrubbed; and, only when a user or their agent asks for it,
-  a recall question — the query text alone, sent to the Workspaces the project
-  already feeds, with no transcript or file content attached.
+Include:
 
-Anything that breaks one of those — a token reaching a place it should not, a
-file created wider than stated, capture running for a project that never opted
-in, a record routed to a destination the user did not select — is in scope
-regardless of how it is triggered.
+- The plugin version, from `claude plugin details augenta` or `codex plugin list`.
+- Your coding app, its version, Node version, and operating system.
+- Whether the project was connected through browser sign-in or an API key.
+- Steps to repeat the problem and what you saw.
 
-## Reporting
+**Do not attach transcripts, keys, tokens, `config.json`, or `auth.json`.**
+Use examples with private values removed. A file permission, a redacted path,
+or an HTTP status code is often enough to explain the issue.
 
-Open a **private security advisory** on this repository's
-[Security tab](https://github.com/AugentaAI/augenta-plugin/security/advisories/new).
-Please do not open a public issue for a suspected vulnerability.
+## What this policy covers
 
-Useful in a report:
+This plugin runs on your machine through Claude Code or Codex. It uses eight
+hook events and the connect and recall scripts. Reports can cover:
 
-- the plugin version — `claude plugin details augenta` or `codex plugin list`
-- which harness, and its version
-- whether the project was connected, and in which mode (`oauth` or `api-key`)
-- Node version and OS
-- what you did and what you observed, in enough detail to reproduce
+| Area | What should be protected |
+| --- | --- |
+| Saved sign-in | Tokens stay in `~/.augenta/auth.json`, with file mode `0600` inside a `0700` directory |
+| Project config | Browser connections store a profile reference and Connector ids; API-key connections store the key |
+| Local records | The plugin sets `.augenta/` to `0700` on its writes and adds a self-ignoring `.gitignore` |
+| Capture | Only connected projects send records, and only to the selected Workspaces |
+| Recall | Only the question text is sent as content, with no attached files or transcript, to Workspaces the project already feeds |
 
-**Do not attach transcripts, tokens, or the contents of `config.json` or
-`auth.json`.** Describe the shape of what you saw instead — a redacted path, a
-file mode, an HTTP status. A report is not worth creating a second copy of the
-thing it is about.
+Report any breach of these rules. Examples include a leaked sign-in token,
+a plugin-created file with wider access than stated, or records sent to an
+unselected Workspace.
+
+[What gets captured](README.md#what-gets-captured) explains the data sent.
+Activity and project notes have common secret patterns removed. Raw transcript
+records have some internal fields removed, but their text is **not
+secret-scrubbed** and can contain secrets.
 
 ## What to expect
 
-We will acknowledge the report, tell you whether we consider it in scope, and
-say what we intend to do. A fix ships as a normal release and is named in
-[`CHANGELOG.md`](CHANGELOG.md); tell us if you would rather not be credited.
+We will acknowledge the report, say whether it is in scope, and explain our
+next step. Fixes appear in [CHANGELOG.md](CHANGELOG.md). Tell us if you do not
+want to be credited.
 
-There is no service-level agreement here and no bug bounty. This is a small
-project and the honest answer is that response time depends on the week.
+There is no promised response time or bug bounty.
 
-## Out of scope
+## Reports outside this plugin
 
-- **The hosted Augenta platform** — the API, the web app, the gateway. Use the
-  same advisory form; we will route it rather than turn you away.
-- **Third-party dependencies** with no path through this plugin. If you can
-  reach one *through* the plugin, that is in scope and worth reporting.
-- **Permissions a user widened themselves.** The plugin narrows `.augenta/` to
-  `0700` on every write it makes under it, whoever created the directory — that
-  mode is the real barrier, since reading the config needs search permission on
-  the directory. It cannot chmod a config *file* it did not write; that file's
-  permissions remain the responsibility of whoever created it.
-- **Bugs in Claude Code or Codex themselves.** Those belong to their own
-  projects; report them there.
-- **Findings from scanning `dist/`.** Those bundles inline their whole import
-  graph, so one source line becomes one finding per bundle. Report the source
-  location — a bundle copy of a real issue is welcome, a duplicate set is noise.
+- **Hosted Augenta API or web app:** use the same private form. We will route
+  the report to the right place.
+- **Third-party code:** it is in scope if the flaw can be reached through
+  this plugin. An unrelated dependency finding is outside this policy.
+- **Permissions changed by the user:** the plugin sets `.augenta/` to `0700`
+  when it writes there. It cannot fix the permissions of a config file it did
+  not write. Whoever creates that file must set its permissions.
+- **Claude Code or Codex bugs:** report these to the app's own project.
+- **Repeated findings in `dist/`:** bundles can contain copies of the same
+  source code. Report the source location when you can, or one bundle
+  location if you cannot. There is no need to report each copy separately.

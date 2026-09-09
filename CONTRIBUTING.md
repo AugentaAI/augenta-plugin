@@ -1,19 +1,16 @@
 # Contributing
 
-`AGENTS.md` is the contributor guide and the authority on every invariant this
-repository holds itself to. This file is the short version: what to install, what
-to run, and what a pull request is expected to carry. Where the two appear to
-disagree, `AGENTS.md` is right.
+Start with [how the plugin works](docs/architecture.md). The steps below cover
+local checks and pull requests. [AGENTS.md](AGENTS.md) has the full rules;
+follow it if anything here differs.
 
-## Prerequisites
+## Set up and check your change
 
-- **[Bun](https://bun.sh)** — the development toolchain: tests, typecheck, and
-  bundling. Pinned in `.bun-version`.
-- **Node 20+** — what the plugin actually runs on.
+Install [Bun](https://bun.sh) at the version in [.bun-version](.bun-version)
+and Node 20 or newer. Bun builds and tests the code. Node runs the plugin
+that users install.
 
-## Verify
-
-Every change runs the same five commands:
+Run these commands in this checkout, in order:
 
 ```bash
 bun install --frozen-lockfile
@@ -23,17 +20,27 @@ bun test
 git diff --check
 ```
 
-For a change to the plugin manifests, skills, or hooks, also run the harness
-checks:
+The build needs the pinned Bun version and dependencies installed in this
+checkout. If either is wrong, it stops and tells you how to fix it.
+
+The six files in `dist/` are the ready-to-run plugin. Both marketplaces
+install them without building the source. When you change runtime code,
+rebuild and include the changed bundles in your commit. CI checks that a
+fresh build matches them. The pinned build works on macOS and Linux.
+
+## Check the plugin in each app
+
+For changes to manifests, skills, or hooks, also run:
 
 ```bash
 claude plugin validate . --strict
 claude --plugin-dir . plugin details augenta
 ```
 
-`plugin details` must report the manifest version, both skills (`connect` and
-`recall`), every event in `hooks/hooks.json`, and no load errors. To exercise an installed copy,
-add the checkout as a marketplace:
+Check that the details show the right version, both skills (`connect` and
+`recall`), all eight events in `hooks/hooks.json`, and no load errors.
+
+For an installed-copy check, use the checkout as a marketplace:
 
 ```bash
 # Claude Code
@@ -45,59 +52,35 @@ codex plugin marketplace add ./path/to/augenta-plugin
 codex plugin add augenta@augenta
 ```
 
-## Bun builds, Node ships
+Codex release checks require a real marketplace install. The bundled Codex
+validator rejects the supported `hooks` field, so it cannot serve as that
+check. Use a disposable project for connection tests. See
+[DEBUG.md](DEBUG.md) for local testing and the hosted dev flow.
 
-Bun is a build-time tool here, in the same role as a compiler; nothing that
-reaches a user may depend on it. What ships is `dist/` — six Node ESM bundles,
-**committed**, because both marketplaces install a git checkout and run no build
-step. Run `bun run build` and commit the result whenever a shipped source
-changes; CI fails a pull request whose `dist/` has drifted.
+## Keep these rules in mind
 
-The asymmetry worth internalizing: contributors exercise *sources under Bun*
-while users exercise *bundles under Node*, so a Bun-only API can enter runtime
-code and fail only in the field. `AGENTS.md` → "The runtime boundary" explains
-the three gates that close that, and the entrypoint rule that goes with it.
+- **Use Node in shipped code.** Bun is only for development. Tests run each
+  bundle under Node and check for Bun-only APIs.
+- **Keep shared code in shared modules.** One entrypoint must never import
+  another. After bundling, that can run the wrong hook.
+- **Batch hook changes.** Any edit to `hooks/hooks.json` makes Codex users
+  approve trust again. Save related edits for one release.
+- **Check hook timeouts in both apps.** Use the lower limit they allow.
+  Only an installed Codex check catches a timeout declared too high.
+- **Keep privacy rules intact.** Changes to what is captured, what is sent,
+  or how people choose Workspaces need an explicit product decision. See
+  [Privacy invariants](AGENTS.md#privacy-invariants).
 
-Use the Bun version in `.bun-version`: the committed bundles are byte-compared in
-CI, and Bun's bundler output changes between releases, so `bun run build` refuses
-to run on any other version and prints the install command. Run `bun install` in
-the checkout you build from — where dependencies resolve from is baked into the
-bundles too. Any platform works; the pinned Bun produces the same bytes on macOS
-and Linux.
+## Open a pull request
 
-## Where things live
+Explain what changed, why it helps, and which checks passed.
 
-- `hooks/` — lifecycle entrypoints for the supported coding agents
-- `capture/` — normalization, scrubbing, durable buffering, and delivery
-- `runtime/` — the Node shims and `PLUGIN_VERSION`
-- `scripts/connect.ts` — sign-in, destination selection, project config, and the
-  agent-driven `--json` verbs
-- `scripts/recall.ts` — the read door: one question, fanned out to every
-  Workspace the project feeds
-- `skills/connect/` — the guided connection flow
-- `skills/recall/` — asking those Workspaces what they remember
-- `__tests__/contract.test.ts` — the structural invariants, including the ones
-  that live in prose
-
-## Editing `hooks/hooks.json` costs every Codex user a prompt
-
-Codex trust-pins each hook by content hash, so **any** edit to that file
-re-prompts every Codex user for trust. Batch hook changes into a single
-deliberate release; never ship them incrementally. A declared timeout must also
-be the *minimum* the two harnesses allow, because one manifest serves both — and
-only a real Codex install can catch an over-declared one.
-
-## Pull requests
-
-- `dist/` rebuilt and committed if any shipped source changed.
-- A version change is **atomic** across all eight values `AGENTS.md` → Releases
-  lists, plus the `CHANGELOG.md` entry and `RELEASE_VERSION` in the contract
-  test. Partial bumps are the failure mode that gate exists for.
-- `hooks/hooks.json` untouched, or the change deliberately batched.
-- **No references to private repositories** in commits or the description. This
-  repository is public; describe the platform-side change in words.
-- Telemetry APIs, payloads, consent semantics, and capture behavior do not change
-  without an explicit product decision. `AGENTS.md` → "Privacy invariants" is the
-  list, and it is written as invariants because that is what they are.
-- CI must be green — `typecheck + test` and the marketplace install smoke test —
-  and `main` requires one approving review and a squash merge.
+- Include rebuilt `dist/` files when runtime code changes.
+- For a release, update all eight version values, marketplace descriptions,
+  `RELEASE_VERSION` in the contract test, and the changelog together. See
+  [Releases](AGENTS.md#releases) for the exact files.
+- Write release notes for users. Say whether they need to reconnect.
+- Keep private repository names, issue numbers, and PR links out of public
+  commits and PR descriptions. Describe the related change in words.
+- Wait for CI to pass, including the marketplace install test. Merging to
+  `main` requires one approving review and a squash merge.
