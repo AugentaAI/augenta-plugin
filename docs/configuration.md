@@ -106,6 +106,7 @@ a Workspace from the selected set also leaves its existing records in place.
 
 | What you see | What to check |
 | --- | --- |
+| “Node.js 20 or newer was not found” | Install or repair Node 20 or newer, then restart your coding app |
 | No records in Experiences yet | Finish a turn, allow a short wait, and check the Workspace you chose |
 | A request to sign in again | Run connect again and choose the full set of Workspaces |
 | A refused API key | Check the key and whether its Connector is enabled; browser connect would replace the key setup |

@@ -79,8 +79,8 @@ model response.
 
 The [background sender](../capture/ship.ts) groups records into requests and
 sends them to `POST /v1/experiences`. It keeps a separate delivery position
-for each Connector, so one Workspace can retry without blocking the others
-from receiving their records.
+for each Connector, so one Workspace can retry while others receive their
+records. They share the same local queue and its limits.
 
 Pending records can survive a restart. Sending is retried at later turn or
 session boundaries. This queue is temporary and has limits:
@@ -128,6 +128,7 @@ Deleting the config turns off both paths.
 | [`scripts/recall.ts`](../scripts/recall.ts) | Ask the selected Workspaces a question |
 | [`runtime/`](../runtime/) | Shared Node helpers and plugin version |
 | [`dist/`](../dist/) | Six ready-to-run Node bundles installed by both apps |
+| [`__tests__/contract.test.ts`](../__tests__/contract.test.ts) | Checks the plugin's rules, including key privacy and setup wording |
 
 Contributors use Bun to build and test. Users need Node 20 or newer. Both
 marketplaces install the committed bundles without a build step. The build
