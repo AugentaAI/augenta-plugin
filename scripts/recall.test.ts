@@ -142,13 +142,85 @@ function route(
   }) as typeof fetch;
 }
 
-/** The recall POSTs the client made, in the order the stub saw them. */
-const recallCalls = () => requests.filter((r) => r.url === `${GATEWAY}/v1/recall`);
+/** The recall POSTs the client made, in the order the stub saw them. Matched on the PATH: the
+ *  answer mode is a query parameter, so an exact-url filter would silently see none of those
+ *  calls and every assertion counting them would pass vacuously. */
+const recallCalls = () =>
+  requests.filter((r) => r.url.split("?")[0] === `${GATEWAY}/v1/recall`);
+/** The `mode` parameter each recall call carried, `undefined` where it sent none. */
+const recallModes = () =>
+  recallCalls().map((r) => new URL(r.url).searchParams.get("mode") ?? undefined);
 
+/**
+ * What the door returns in the DEFAULT mode: the response envelope, model-free.
+ *
+ * `text` becomes the engram block's summary and `notes` the note blocks, so a test can say
+ * exactly what the client should render and what it should drop. No renderer or model header,
+ * because no prompt was rendered and no provider was called — asserting their ABSENCE is part
+ * of the contract.
+ */
+const memoryResponse = (text: string, notes: string[] = [], extra: object = {}) =>
+  Response.json(
+    {
+      scope: "org_1:ws-default",
+      mode: "context",
+      reference_date: "2026-09-03",
+      note_count: notes.length,
+      notes_truncated: false,
+      content: [
+        {
+          type: "engram",
+          text,
+          engram_id: "e001",
+          memory_class: "procedural",
+          born_t: "2026-09-01T00:00:00Z",
+          contradiction: false,
+          quality_verdict: "good",
+        },
+        ...notes.map((note, index) => ({
+          type: "note",
+          text: note,
+          timestamp: `2026-09-0${index + 1}T00:00:00Z`,
+          question: false,
+          frame: { class: "procedural" },
+          metadata: { src: "codex", turn: index + 1 },
+        })),
+        {
+          type: "lineage",
+          text: "BORN (0->2 members)",
+          t: "2026-09-01T00:00:00Z",
+          kind: "born",
+          members_before: 0,
+          members_after: 2,
+        },
+      ],
+      ...extra,
+    },
+    { headers: { "X-Augenta-Content": "content-v1" } },
+  );
+
+/** What the door returns for `?mode=answer`: the same envelope with the model's prose first. */
 const answerResponse = (answer: string) =>
   Response.json(
-    { scope: "org_1:ws-default", answer },
-    { headers: { "X-Augenta-Renderer": "prose-v1", "X-Augenta-Model": "some-model" } },
+    {
+      scope: "org_1:ws-default",
+      mode: "answer",
+      reference_date: "2026-09-03",
+      note_count: 1,
+      notes_truncated: false,
+      content: [
+        { type: "answer", text: answer },
+        { type: "engram", text: "how this project deploys", engram_id: "e001" },
+        { type: "note", text: "deployed with the chart", timestamp: "2026-09-01T00:00:00Z" },
+      ],
+    },
+    {
+      headers: {
+        "X-Augenta-Renderer": "prose-v1",
+        "X-Augenta-Model": "some-model",
+        "X-Augenta-Content": "content-v1",
+      },
+    },
   );
 
 /** The upstream retrieval service's typed error shape, passed through verbatim. */
@@ -174,6 +246,11 @@ describe("parseArgs", () => {
       project: "/p",
       timeoutSeconds: 30,
     });
+    // `--answer` is the opt-in to the model path. Absent means the default,
+    // model-free mode — the flag's absence is the request, so it must not be
+    // defaultable to anything else.
+    expect(parseArgs(["--answer"])).toEqual({ words: [], answer: true });
+    expect(parseArgs(["--json"]).answer).toBeUndefined();
   });
 
   test("bare words become the question", () => {
@@ -229,26 +306,129 @@ describe("parseArgs", () => {
 describe("classifyRecallResponse", () => {
   const parts = (status: number, body?: unknown, text = "") => ({ status, body, text });
 
-  test("200 with an answer is an answer", () => {
+  const envelope = (mode: string, content: unknown[], extra: object = {}) => ({
+    scope: "org_1:ws-default",
+    mode,
+    reference_date: "2026-09-03",
+    note_count: 1,
+    notes_truncated: false,
+    content,
+    ...extra,
+  });
+
+  test("an answer-mode 200 reports the answer block, and only it", () => {
     expect(
       classifyRecallResponse({
-        ...parts(200, { scope: "org_1:ws-default", answer: "we chose /app" }),
+        ...parts(
+          200,
+          envelope("answer", [
+            { type: "answer", text: "we chose /app" },
+            { type: "engram", text: "how the landing path was chosen" },
+            { type: "note", text: "moved the landing path to /app" },
+          ]),
+        ),
         model: "m",
         renderer: "r",
       }),
     ).toEqual({
       kind: "answered",
       answer: "we chose /app",
+      mode: "answer",
       scope: "org_1:ws-default",
       model: "m",
       renderer: "r",
     });
   });
 
-  test("200 with no answer is a failure, not an empty answer", () => {
-    // Presenting "" as an answer would put silence in front of the user as
-    // though the Workspace had spoken.
-    for (const body of [{}, { answer: "" }, { answer: "   " }, { answer: 42 }]) {
+  test("a context 200 renders the memory itself: the summary, then each note", () => {
+    /* THE default path. What the client publishes is the smallest useful form —
+       every other field on those blocks (ids, timestamps, frame, metadata) and
+       the lineage blocks entirely are dropped, because each one is paid for in
+       the reading agent's own context window on every recall. */
+    const outcome = classifyRecallResponse(
+      parts(
+        200,
+        envelope("context", [
+          { type: "engram", text: "the landing path is /app", engram_id: "e001" },
+          { type: "note", text: "moved the landing path to /app", timestamp: "2026-09-01" },
+          { type: "note", text: "the old /home route now redirects", metadata: { turn: 4 } },
+          { type: "lineage", text: "BORN (0->2 members)", kind: "born" },
+        ]),
+      ),
+    );
+    expect(outcome).toEqual({
+      kind: "answered",
+      mode: "context",
+      answer:
+        "the landing path is /app\n\n" +
+        "moved the landing path to /app\n\n" +
+        "the old /home route now redirects",
+      scope: "org_1:ws-default",
+    });
+    const rendered = (outcome as { answer: string }).answer;
+    for (const dropped of ["e001", "2026-09-01", "BORN", "lineage", "turn"]) {
+      expect(rendered).not.toContain(dropped);
+    }
+  });
+
+  test("an unknown block type is ignored rather than failing the read", () => {
+    // Block kinds are additive upstream, and a client that treated a new one as
+    // a parse error would break on a server-side addition it does not need.
+    expect(
+      classifyRecallResponse(
+        parts(
+          200,
+          envelope("context", [
+            { type: "citation", text: "something new" },
+            { type: "engram", text: "the landing path is /app" },
+          ]),
+        ),
+      ),
+    ).toMatchObject({ kind: "answered", mode: "context", answer: "the landing path is /app" });
+  });
+
+  test("truncation is surfaced, so an agent does not imply it saw everything", () => {
+    expect(
+      classifyRecallResponse(
+        parts(
+          200,
+          envelope("context", [{ type: "engram", text: "a big engram" }], {
+            note_count: 162,
+            notes_truncated: true,
+          }),
+        ),
+      ),
+    ).toMatchObject({ notesTruncated: true });
+    // Absent, not `false`, when nothing was left out.
+    expect(
+      classifyRecallResponse(parts(200, envelope("context", [{ type: "engram", text: "small" }]))),
+    ).not.toHaveProperty("notesTruncated");
+  });
+
+  test("a pre-envelope deployment's `{scope, answer}` still reads as an answer", () => {
+    /* Plugin installs and API rollouts are not in lockstep — dev rolls on every
+       merge, staging and prod on a dispatch — so an installed client meets an
+       older door routinely. Reported as `answer` mode because that is what
+       happened: a model wrote it, whichever mode was asked for. */
+    expect(
+      classifyRecallResponse(parts(200, { scope: "org_1:ws-default", answer: "we chose /app" })),
+    ).toMatchObject({ kind: "answered", mode: "answer", answer: "we chose /app" });
+  });
+
+  test("200 with nothing to read is a failure, not an empty answer", () => {
+    // Presenting "" as a recall would put silence in front of the user as though
+    // the Workspace had spoken — and in context mode it would also impersonate a
+    // young Workspace, which has its own honest answer (`nothing_remembered`).
+    for (const body of [
+      {},
+      { answer: "" },
+      { answer: "   " },
+      { answer: 42 },
+      envelope("answer", [{ type: "answer", text: "  " }]),
+      envelope("context", []),
+      envelope("context", [{ type: "engram", text: "" }, { type: "lineage", text: "BORN" }]),
+      envelope("context", { not: "an array" } as unknown as unknown[]),
+    ]) {
       expect(classifyRecallResponse(parts(200, body))).toMatchObject({
         kind: "failed",
         code: "invalid_response",
@@ -421,7 +601,7 @@ describe("a project that cannot be asked", () => {
     /* resolveProjectRoot walks UPWARD, so a command run from a subdirectory uses
        an ancestor's config. Reporting the starting directory named a project
        recall did not ask — and SKILL.md tells the agent to relay this path. */
-    route({ [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("from the root") });
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("from the root") });
     writeConfig({ authMode: "api-key", apiKey: "sk-aug-x.y", endpoint: GATEWAY });
     const deep = join(project, "src", "deep");
     mkdirSync(deep, { recursive: true });
@@ -481,7 +661,7 @@ describe("the fan-out", () => {
     route({
       [`POST ${GATEWAY}/v1/recall`]: (init) => {
         const body = JSON.parse(String(init.body)) as { workspace: string };
-        return answerResponse(`remembered in ${body.workspace}`);
+        return memoryResponse(`remembered in ${body.workspace}`);
       },
     });
 
@@ -495,8 +675,7 @@ describe("the fan-out", () => {
         workspaceName: "Default Workspace",
         scope: "org_1:ws-default",
         answer: "remembered in ws-default",
-        model: "some-model",
-        renderer: "prose-v1",
+        mode: "context",
       },
       {
         connectorId: "connector_b",
@@ -504,10 +683,12 @@ describe("the fan-out", () => {
         workspaceName: "Scratch",
         scope: "org_1:ws-default",
         answer: "remembered in ws-scratch",
-        model: "some-model",
-        renderer: "prose-v1",
+        mode: "context",
       },
     ]);
+    // No renderer and no model: the default mode ran neither, and reporting one
+    // would name work that did not happen.
+    expect(recallModes()).toEqual([undefined, undefined]);
 
     const calls = recallCalls();
     expect(calls).toHaveLength(2);
@@ -525,11 +706,48 @@ describe("the fan-out", () => {
     ]);
   });
 
+  test("the default asks for no mode and renders the memory; --answer asks for the model", async () => {
+    /* The one wire fact that separates the modes. The default sends NO `mode`
+       parameter — the door's own default decides, so there is one default rather
+       than two that can drift — and `--answer` is the explicit opt-in. */
+    await connectedProject(["connector_a"]);
+    route({
+      [`POST ${GATEWAY}/v1/recall`]: (_init, url) =>
+        url.searchParams.get("mode") === "answer"
+          ? answerResponse("we deploy with the chart")
+          : memoryResponse("how this project deploys", ["deployed with the chart"]),
+    });
+
+    const remembered = await runRecall({ projectRoot: project }, args());
+    expect(recallModes()).toEqual([undefined]);
+    expect(remembered.status).toBe("answered");
+    expect(remembered.answers[0]).toMatchObject({
+      mode: "context",
+      answer: "how this project deploys\n\ndeployed with the chart",
+    });
+    // Nothing about a renderer or a model, because neither ran.
+    expect(remembered.answers[0]).not.toHaveProperty("model");
+    expect(remembered.answers[0]).not.toHaveProperty("renderer");
+
+    const answered = await runRecall({ projectRoot: project }, args({ answer: true }));
+    expect(recallModes()).toEqual([undefined, "answer"]);
+    expect(answered.answers[0]).toMatchObject({
+      mode: "answer",
+      answer: "we deploy with the chart",
+      model: "some-model",
+      renderer: "prose-v1",
+    });
+    // Same body in both modes, which is why the mode is a query parameter: the
+    // door forbids unknown body fields, so every existing request stays valid.
+    const bodies = recallCalls().map((call) => JSON.parse(String(call.body)));
+    expect(bodies[0]).toEqual(bodies[1]);
+  });
+
   test("every idempotency key is a fresh UUID, per destination and per call", async () => {
     // The door namespaces an activation by (principal, key), so a key reused
     // across destinations is a 409 on a perfectly valid second question.
     await connectedProject();
-    route({ [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("a") });
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a") });
 
     await runRecall({ projectRoot: project }, args());
     await runRecall({ projectRoot: project }, args({ query: "a different question" }));
@@ -562,7 +780,7 @@ describe("the fan-out", () => {
         arrivals += 1;
         if (arrivals === 2) bothArrived();
         await barrier;
-        return answerResponse("a");
+        return memoryResponse("a");
       },
     });
 
@@ -578,7 +796,7 @@ describe("the fan-out", () => {
       [`POST ${GATEWAY}/v1/recall`]: (init) => {
         const body = JSON.parse(String(init.body)) as { workspace: string };
         return body.workspace === "ws-default"
-          ? answerResponse("we chose /app")
+          ? memoryResponse("we chose /app")
           : typedError(404, "empty_scope", "no engram in this scope");
       },
     });
@@ -609,7 +827,7 @@ describe("the fan-out", () => {
       [`POST ${GATEWAY}/v1/recall`]: (init) => {
         const body = JSON.parse(String(init.body)) as { workspace: string };
         return body.workspace === "ws-default"
-          ? answerResponse("we chose /app")
+          ? memoryResponse("we chose /app")
           : Response.json({ error: "you are not entitled" }, { status: 403 });
       },
     });
@@ -695,7 +913,7 @@ describe("the fan-out", () => {
           setTimeout(resolve, 5_000);
           init.signal?.addEventListener("abort", () => reject(init.signal!.reason));
         });
-        return answerResponse("never");
+        return memoryResponse("never");
       },
     });
 
@@ -713,7 +931,7 @@ describe("the fan-out", () => {
     route({
       [`POST ${GATEWAY}/v1/recall`]: (init) => {
         sawSignal = init.signal instanceof AbortSignal;
-        return answerResponse("a");
+        return memoryResponse("a");
       },
     });
     await runRecall({ projectRoot: project }, args());
@@ -732,7 +950,7 @@ describe("destinations that cannot be resolved", () => {
       connectorIds: ["connector_a", "connector_gone"],
       endpoint: GATEWAY,
     });
-    route({ [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("a") });
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a") });
 
     const payload = await runRecall({ projectRoot: project }, args());
 
@@ -753,7 +971,7 @@ describe("destinations that cannot be resolved", () => {
     });
     route({
       [`${GATEWAY}/v1/connectors/connector_b`]: () => new Response("boom", { status: 500 }),
-      [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("a"),
+      [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a"),
     });
 
     const payload = await runRecall({ projectRoot: project }, args());
@@ -792,7 +1010,7 @@ describe("destinations that cannot be resolved", () => {
             workspaceId: "ws-default",
           },
         }),
-      [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("once"),
+      [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("once"),
     });
 
     const payload = await runRecall({ projectRoot: project }, args());
@@ -849,7 +1067,7 @@ describe("destinations that cannot be resolved", () => {
             workspaceId: "ws-default",
           },
         }),
-      [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("a"),
+      [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a"),
     });
 
     const payload = await runRecall({ projectRoot: project }, args());
@@ -863,7 +1081,7 @@ describe("destinations that cannot be resolved", () => {
     writeConfig({ authMode: "oauth", profileId, connectorIds: ["connector_a"], endpoint: GATEWAY });
     route({
       [`GET ${GATEWAY}/v1/workspaces`]: () => new Response("boom", { status: 500 }),
-      [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("still answered"),
+      [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("still answered"),
     });
 
     const payload = await runRecall({ projectRoot: project }, args());
@@ -886,7 +1104,7 @@ describe("--workspace narrows the fan-out", () => {
       connectorIds: ["connector_a", "connector_b"],
       endpoint: GATEWAY,
     });
-    route({ [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("scoped") });
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("scoped") });
 
     const payload = await runRecall({ projectRoot: project }, args({ workspaces: ["ws-scratch"] }));
 
@@ -909,7 +1127,7 @@ describe("--workspace narrows the fan-out", () => {
     });
     route({
       [`${GATEWAY}/v1/connectors/connector_b`]: () => new Response("boom", { status: 500 }),
-      [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("nope"),
+      [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("nope"),
     });
 
     const payload = await runRecall({ projectRoot: project }, args({ workspaces: ["ws-scratch"] }));
@@ -937,7 +1155,7 @@ describe("--workspace narrows the fan-out", () => {
       connectorIds: ["connector_a", "connector_gone"],
       endpoint: GATEWAY,
     });
-    route({ [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("nope") });
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("nope") });
 
     const payload = await runRecall({ projectRoot: project }, args({ workspaces: ["ws-scratch"] }));
 
@@ -951,7 +1169,7 @@ describe("--workspace narrows the fan-out", () => {
     // would answer a different question than the one that was asked.
     const { profileId } = await signIn();
     writeConfig({ authMode: "oauth", profileId, connectorIds: ["connector_a"], endpoint: GATEWAY });
-    route({ [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("nope") });
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("nope") });
 
     const payload = await runRecall({ projectRoot: project }, args({ workspaces: ["ws-other"] }));
 
@@ -966,12 +1184,12 @@ describe("platform-key projects", () => {
     // The key's Connector assignment IS the route, exactly as the shipper treats
     // it — so the body is the question alone.
     writeConfig({ authMode: "api-key", apiKey: "sk-aug-live.secret", endpoint: GATEWAY });
-    route({ [`POST ${GATEWAY}/v1/recall`]: () => answerResponse("from the keyed Workspace") });
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("from the keyed Workspace") });
 
     const payload = await runRecall({ projectRoot: project }, args());
 
     expect(payload.status).toBe("answered");
-    expect(payload.answers[0]).toEqual({ scope: "org_1:ws-default", answer: "from the keyed Workspace", model: "some-model", renderer: "prose-v1" });
+    expect(payload.answers[0]).toEqual({ scope: "org_1:ws-default", answer: "from the keyed Workspace", mode: "context" });
     const call = recallCalls()[0]!;
     expect(JSON.parse(String(call.body))).toEqual({ query: "what did we decide" });
     expect(call.headers.get("authorization")).toBe("AugentaKey sk-aug-live.secret");

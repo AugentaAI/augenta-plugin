@@ -24,6 +24,22 @@
  * `fetchWithProfile` from `~/.augenta/auth.json`, and a platform key from the
  * project config, exactly as the shipper does it. The agent is the normal caller
  * of `--json`, so everything it can read has to be safe to paste into a chat.
+ *
+ * TWO MODES, AND THE DEFAULT RUNS NO MODEL. `POST /v1/recall` returns the
+ * matched engram and the notes it was built from as typed content blocks; the
+ * agent reading this payload is already a model, so it answers the question
+ * itself from that memory. That call is fast (no model turn on Augenta's side),
+ * costs the user nothing per call, and sends their memory to no third-party
+ * provider. `--answer` is the opt-in that asks Augenta's own model to write the
+ * answer instead, which is one full model turn and can take most of a minute.
+ *
+ * TOKEN MINIMISATION IS THIS CLIENT'S JOB, deliberately. The door hands back a
+ * flat, ordered block list and makes trimming trivial (`type` + `text` on every
+ * block, `text` first); it does not decide how small the rendering should be,
+ * because that depends on whose context window it is about to enter. So
+ * `renderContext` below keeps the engram summary and each note's text and drops
+ * everything else — ids, timestamps, frames, metadata, lineage. Anything added
+ * back is paid for in the user's own context window on every recall.
  */
 import { randomUUID } from "node:crypto";
 import { isMain } from "../runtime/node";
@@ -45,16 +61,31 @@ import {
 import { resolveProject, type ResolvedProject } from "../capture/project";
 
 /**
- * The wait this side of the hop, in seconds.
+ * The wait for the DEFAULT mode, in seconds.
  *
- * Deliberately LONGER than the platform's own 60s deadline on the retrieval
- * service. An answer is one full model turn, so the platform is the component
- * that should decide a call took too long — it can say `recall_timeout` and mean
- * it. If this bound were the tighter one, every slow answer would surface as a
- * local abort with nothing to report, and the distinction between "too slow" and
- * "unreachable" would be lost on the way out.
+ * Deliberately LONGER than the platform's own 15s deadline on the model-free
+ * path, for the same reason the answer wait below clears its 60s: the platform
+ * is the component that should decide a call took too long — it can say
+ * `recall_timeout` and mean it. If this bound were the tighter one, every slow
+ * call would surface as a local abort with nothing to report, and the
+ * distinction between "too slow" and "unreachable" would be lost on the way out.
+ *
+ * 20s is generous for a path whose measured work is one local embed, one
+ * indexed search and a few point reads. It is short enough to matter: this is
+ * the mode an agent calls mid-task, and a 75s ceiling on it would mean a
+ * degraded deployment stalls the user's turn for over a minute before saying so.
  */
-const DEFAULT_TIMEOUT_SECONDS = 75;
+const DEFAULT_TIMEOUT_SECONDS = 20;
+
+/**
+ * The wait for `--answer`, in seconds. Clears the platform's own 60s deadline on
+ * that mode by the same margin, and for the same reason.
+ *
+ * The two are separate constants rather than one because the modes are bounded
+ * by different things: this one waits on a provider's model turn (itself capped
+ * at 30s upstream), the other on a database read.
+ */
+const ANSWER_TIMEOUT_SECONDS = 75;
 
 /**
  * The largest `--timeout` this accepts, and why there is a ceiling at all.
@@ -83,6 +114,17 @@ export interface RecallArgs {
   workspaces?: string[];
   timeoutSeconds?: number;
   project?: string;
+  /**
+   * Ask Augenta's own model to write the answer (`?mode=answer`) instead of
+   * returning the memory for this agent to read.
+   *
+   * A flag rather than the default because the default is the cheap, private,
+   * fast path and a caller who has not thought about modes should get it. Worth
+   * reaching for when the user explicitly wants Augenta's own synthesis, or when
+   * the matched memory is large enough that a summary is the smaller thing to
+   * put in the conversation.
+   */
+  answer?: boolean;
 }
 
 /**
@@ -106,6 +148,8 @@ export function parseArgs(argv: string[]): RecallArgs {
     const flag = argv[i]!;
     if (flag === "--json") {
       args.json = true;
+    } else if (flag === "--answer") {
+      args.answer = true;
     } else if (flag === "--query") {
       args.query = valueFor(flag, i++);
     } else if (flag === "--workspace") {
@@ -156,7 +200,24 @@ export interface RecallAnswer extends Destination {
   /** The retrieval service's own scope string, reported verbatim for an audit
    *  trail. Never composed here — this client does not know the org id. */
   scope?: string;
+  /**
+   * What this Workspace returned, as text to read.
+   *
+   * In `answer` mode it is prose a model wrote. In the default `context` mode it
+   * is the MEMORY ITSELF — the matched engram's summary followed by each
+   * supporting note — and the agent reading this payload is what turns it into
+   * an answer. `mode` says which, and SKILL.md branches its wording on it: a
+   * recalled note presented as though Augenta had answered would attribute a
+   * claim to a summariser that never ran.
+   */
   answer: string;
+  /** Which mode produced `answer`. Read off the door's own `mode` field, not
+   *  assumed from the flag that was passed. */
+  mode: "context" | "answer";
+  /** Present and `true` only when the door capped the notes it sent, so an agent
+   *  answering from this memory can say it is working from part of it rather
+   *  than implying it saw everything. */
+  notesTruncated?: boolean;
   model?: string;
   renderer?: string;
 }
@@ -225,9 +286,59 @@ export interface RecallResponseParts {
 }
 
 export type Outcome =
-  | { kind: "answered"; answer: string; scope?: string; model?: string; renderer?: string }
+  | {
+      kind: "answered";
+      answer: string;
+      mode: "context" | "answer";
+      notesTruncated?: boolean;
+      scope?: string;
+      model?: string;
+      renderer?: string;
+    }
   | { kind: "nothing_remembered" }
   | { kind: "failed"; code: string; message: string; retryAfterSeconds?: number };
+
+/** One content block off the door's `content[]`. Read structurally rather than
+ *  typed: block kinds are additive upstream and an unknown `type` must be
+ *  IGNORED, never a parse failure. */
+type ContentBlock = { type?: unknown; text?: unknown };
+
+function blocksOf(body: unknown, type: string): ContentBlock[] {
+  const content = (body as { content?: unknown } | undefined)?.content;
+  if (!Array.isArray(content)) return [];
+  return content.filter(
+    (block): block is ContentBlock =>
+      !!block && typeof block === "object" && (block as ContentBlock).type === type,
+  );
+}
+
+function textOf(block: ContentBlock | undefined): string {
+  return typeof block?.text === "string" ? block.text : "";
+}
+
+/**
+ * The smallest useful rendering of a context response: the engram's summary,
+ * then each supporting note, and nothing else.
+ *
+ * Everything dropped here is dropped on purpose, and each has a reason beyond
+ * "fewer tokens": the engram id and node ids are handles this client has nothing
+ * to do with, `frame`/`metadata` describe what KIND of observation a note was
+ * rather than what it says, and the lineage blocks are the engram's own history
+ * — interesting to a console, noise inside a question's answer. Timestamps are
+ * the one real loss (a temporal question is harder to answer without them) and
+ * are the first thing to add back if that proves to matter; the door sends them
+ * on every note and a `reference_date` beside them.
+ *
+ * Blank-line separated so the summary reads as a claim and the notes as the
+ * evidence under it, with no invented labels asserting more structure than that.
+ */
+export function renderContext(body: unknown): string {
+  const parts = [
+    ...blocksOf(body, "engram").map(textOf),
+    ...blocksOf(body, "note").map(textOf),
+  ].filter((text) => text.trim());
+  return parts.join("\n\n");
+}
 
 function errorFields(
   body: unknown,
@@ -273,23 +384,54 @@ function retryAfterSeconds(raw: string | null | undefined): number | undefined {
 export function classifyRecallResponse(parts: RecallResponseParts): Outcome {
   const { status, body, text } = parts;
   if (status === 200) {
-    const answer =
-      typeof (body as { answer?: unknown })?.answer === "string"
-        ? ((body as { answer: string }).answer)
+    /* The MODE is read off the response, never assumed from the flag that was
+       passed: the door decides, and a client that assumed would mislabel a
+       payload the moment the two disagreed. `mode` absent is a pre-envelope
+       deployment (see the legacy arm below) or a proxy that dropped the field;
+       an `answer` block present is then the honest reading. */
+    const declared = (body as { mode?: unknown } | undefined)?.mode;
+    const answerBlock = textOf(blocksOf(body, "answer")[0]);
+    const legacyAnswer =
+      typeof (body as { answer?: unknown } | undefined)?.answer === "string"
+        ? (body as { answer: string }).answer
         : "";
+    const mode: "context" | "answer" =
+      declared === "context"
+        ? "context"
+        : declared === "answer" || answerBlock || legacyAnswer
+          ? "answer"
+          : "context";
+    /* An older API — one deployed before the content envelope — answers
+       `{scope, answer}` and ignores the `mode` parameter entirely. Plugin
+       installs and API rollouts are not in lockstep (dev rolls on every merge,
+       staging and prod on a dispatch), so a client that only understood the new
+       shape would report `invalid_response` for a perfectly good answer from an
+       environment that has not rolled yet. Reported as `answer` mode because
+       that is what happened: a model wrote it, whichever mode was asked for. */
+    const answer = mode === "answer" ? answerBlock || legacyAnswer : renderContext(body);
     if (!answer.trim()) {
-      // A 200 with no answer is not an answer. Reporting it as one would put an
-      // empty string in front of the user as though the Workspace had spoken.
+      /* A 200 with nothing to read is not a recall. Reporting it as one would
+         put an empty string in front of the user as though the Workspace had
+         spoken — and in context mode it would also look like a young Workspace,
+         which has its own honest answer (`404 empty_scope`, reported as
+         `nothing_remembered`) that this must not be confused with. */
       return {
         kind: "failed",
         code: "invalid_response",
-        message: "Augenta answered without an answer",
+        message:
+          mode === "answer"
+            ? "Augenta answered without an answer"
+            : "Augenta returned no memory to read",
       };
     }
     const scope = (body as { scope?: unknown }).scope;
     return {
       kind: "answered",
       answer,
+      mode,
+      ...((body as { notes_truncated?: unknown }).notes_truncated === true
+        ? { notesTruncated: true }
+        : {}),
       ...(typeof scope === "string" ? { scope } : {}),
       ...(parts.model ? { model: parts.model } : {}),
       ...(parts.renderer ? { renderer: parts.renderer } : {}),
@@ -388,6 +530,9 @@ async function askDestination(
   },
   destination: Destination,
 ): Promise<Outcome> {
+  /* `ctx.url` already carries `?mode=answer` when that was asked for. The
+     default sends NO mode parameter, so the door's own default decides — one
+     default, upstream, rather than a second one here that could drift. */
   const headers: Record<string, string> = {
     "content-type": "application/json",
     /* Fresh per destination AND per call. The door namespaces an activation by
@@ -622,8 +767,10 @@ export async function runRecall(
   let destinations: Destination[] = [];
   let ctx: { url: string; query: string; timeoutMs: number; profileId?: string; apiKey?: string };
 
-  const timeoutMs = (args.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS) * 1000;
-  const url = `${gateway}/v1/recall`;
+  const timeoutMs =
+    (args.timeoutSeconds ?? (args.answer ? ANSWER_TIMEOUT_SECONDS : DEFAULT_TIMEOUT_SECONDS)) *
+    1000;
+  const url = `${gateway}/v1/recall${args.answer ? "?mode=answer" : ""}`;
 
   if (cfg.authMode === "oauth") {
     const profileId = cfg.profileId!;

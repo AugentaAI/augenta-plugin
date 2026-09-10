@@ -13,6 +13,19 @@ release a user can read.
 
 ### Changed
 
+- **Recall no longer waits for a model by default.** `/augenta:recall` now asks
+  for the matching memory itself — the consolidated summary and the notes behind
+  it — and your own agent answers from it. Calls that used to take most of a
+  minute return in well under a second, cost nothing on Augenta's side, and send
+  your memory to no third-party model. Add `--answer` when you want Augenta's own
+  model to write the answer instead; that path behaves exactly as recall did
+  before, including the up-to-a-minute wait.
+
+  No reconnect is required. **This release pairs with a platform change** (the
+  `/v1/recall` response is now an ordered list of typed content blocks): against
+  an environment that has not rolled it yet, this client reads the older
+  `{scope, answer}` response as before, so recall keeps working either way.
+
 - Simplified setup, recall, and privacy guidance. Added separate guides for
   connection settings and how the plugin works. Plugin behavior is unchanged;
   no reconnect is required.
