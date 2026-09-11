@@ -14,6 +14,7 @@
  */
 import { join, dirname } from "node:path";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { validNativeTurns, type NativeTurns } from "./native-turns";
 import { ensureAugentaDir } from "./augenta-dir";
 
 export interface CaptureCursor {
@@ -36,6 +37,7 @@ export interface CaptureCursor {
    * whose tail no longer contains that line needs the value carried forward.
    */
   model?: string;
+  nativeTurns?: NativeTurns;
 }
 
 const ZERO: CaptureCursor = { offset: 0, seq: 0 };
@@ -76,6 +78,7 @@ export class CaptureState {
       return { ...ZERO };
     }
     return {
+      ...(validNativeTurns(c.nativeTurns) ? { nativeTurns: c.nativeTurns } : {}),
       offset: c.offset,
       seq: c.seq,
       ...(c.rebaseline === true ? { rebaseline: true } : {}),

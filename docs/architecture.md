@@ -57,7 +57,22 @@ does not gain capture just because the main checkout is connected. See
 ## 2. Save work locally
 
 The [capture hook](../capture/capture.ts) reads new transcript lines and tracks
-where it stopped. It writes three types of records to a queue on disk:
+where it stopped. For Codex, native `task_started`, `turn_context` and
+`task_complete` records determine each logical turn. Their IDs and parser state
+are saved with the byte cursor, so a delayed read can contain several turns
+without merging them. Records without a known native boundary carry
+`turn_source: "unknown"`; messages are never guessed to be turn boundaries.
+Claude Code retains its prompt-hook ordinal.
+
+New connections store a `captureSince` timestamp. Codex excludes turns already
+in progress at that time, including the connection turn and older history.
+Existing configs without that field retain their existing capture scope; they
+are not silently rewritten. Reconnecting establishes a new timestamp. This does
+not expand project-memory capture or grant consent to a historical import.
+
+A short project lock serializes capture/append/cursor commits across processes.
+A contender waits at most 750 ms, then reports `retry` without changing the cursor;
+a later lifecycle event retries. It writes three types of records to a queue on disk:
 
 - Activity in a common format for Claude Code and Codex.
 - Raw transcript records, with some internal fields removed.

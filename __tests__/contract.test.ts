@@ -63,7 +63,7 @@ const CODEX_UI: Record<string, string[]> = {
 };
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.10.1";
+const RELEASE_VERSION = "0.10.2";
 /** How many values the release must set. AGENTS.md → Releases lists them, and a
  *  test below asserts its count is this one. */
 const RELEASE_SURFACES = 8;
@@ -990,8 +990,8 @@ describe("manifests — cross-harness packaging and one version", () => {
   });
 
   test("every versioned CHANGELOG heading has a link definition", () => {
-    /* `## [0.10.1] — …` is reference-style Markdown: with no matching
-       definition it renders as the LITERAL text `[0.10.1]` on GitHub, directly
+    /* `## [0.10.2] — …` is reference-style Markdown: with no matching
+       definition it renders as the LITERAL text `[0.10.2]` on GitHub, directly
        above a `[0.9.3]` that renders as a link. AGENTS.md calls this file "the
        only account of a release a user can read", and nothing else checks the
        ref list — a released version quietly losing its link is exactly the kind

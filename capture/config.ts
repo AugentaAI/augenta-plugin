@@ -32,6 +32,7 @@ export type AuthMode = "oauth" | "api-key";
 
 export interface ProjectConfig {
   authMode: AuthMode;
+  captureSince?: string;
   profileId?: string;
   /**
    * Every destination this project feeds, in the order connect wrote them. One
@@ -89,11 +90,15 @@ export function loadProjectConfig(
   try {
     const value = JSON.parse(readFileSync(configPath(projectRoot), "utf8")) as {
       authMode?: unknown;
+      captureSince?: unknown;
       profileId?: unknown;
       connectorIds?: unknown;
       apiKey?: unknown;
       endpoint?: unknown;
     };
+    if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince)))) return undefined;
+    const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince))
+      ? new Date(value.captureSince).toISOString() : undefined;
     const endpoint =
       typeof value.endpoint === "string" && value.endpoint.trim()
         ? value.endpoint.trim()
@@ -105,6 +110,7 @@ export function loadProjectConfig(
       if (!profileId || connectorIds.length === 0) return undefined;
       return {
         authMode: "oauth",
+        ...(captureSince ? { captureSince } : {}),
         profileId,
         connectorIds,
         ...(endpoint ? { endpoint } : {}),
@@ -117,6 +123,7 @@ export function loadProjectConfig(
       if (!apiKey) return undefined;
       return {
         authMode: "api-key",
+        ...(captureSince ? { captureSince } : {}),
         apiKey,
         ...(endpoint ? { endpoint } : {}),
         projectRoot,

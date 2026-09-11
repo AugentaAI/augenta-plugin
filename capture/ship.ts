@@ -42,6 +42,7 @@
  * together). Pure Node builtins so it runs from the installed plugin
  * location.
  */
+import { recordHealth } from "./health";
 import { isMain } from "../runtime/node";
 import { PLUGIN_VERSION } from "../runtime/version";
 import { join, dirname } from "node:path";
@@ -571,9 +572,11 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
         );
         lastStatus = res.status;
         if (lastStatus >= 200 && lastStatus < 300) {
+          recordHealth(opts.projectRoot, "delivery", "accepted", body.length);
           batches += 1;
           continue;
         }
+        recordHealth(opts.projectRoot, "delivery", PERMANENT_STATUSES.has(lastStatus) ? "rejected" : "retry");
         if (PERMANENT_STATUSES.has(lastStatus)) {
           // Deterministic rejection — quarantine this body and keep going
           // within the slice; committed only if the whole slice clears below.
@@ -597,6 +600,7 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
       // reported as the drain's outcome, so the caller's 401-refresh check and
       // its user-facing notice would both read a success. With N destinations
       // aggregating on it, that stale read would mask a whole broken route.
+      recordHealth(opts.projectRoot, "delivery", "retry");
       lastStatus = 0;
       break;
     }
@@ -909,6 +913,7 @@ if (isMain(import.meta.url)) {
       );
       if (notice) markAuthNotice(cfg.projectRoot, notice);
     } catch (error) {
+      recordHealth(cfg.projectRoot, "delivery", "retry");
       // The outbox cursor was not advanced. Surface a single actionable notice
       // at the next SessionStart instead of losing queued records or spamming hooks.
       if (error instanceof ReLoginRequiredError) {
