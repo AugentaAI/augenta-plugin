@@ -1,5 +1,11 @@
 # Debugging and non-production testing
 
+Recall sends `?mode=answer` by default. Pass `--context` to inspect model-free memory,
+or `--answer` to spell the default explicitly; combining them is an error. A 503
+`answerer_unavailable` or `consent_required` causes one context retry. Inspect each
+entry's `fallback: {requested: "answer", reason: ...}` and returned `mode`; other
+errors do not trigger this fallback. The retry gets a fresh idempotency key.
+
 Contributor notes. Nothing here is user-facing, and `README.md` deliberately does
 not link this file: every lever below either points a real project at a
 non-production Augenta or rewrites local sign-in state, which is contributor work

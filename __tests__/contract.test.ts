@@ -183,7 +183,10 @@ describe("skill frontmatter", () => {
       });
 
       test("uses exactly the portable frontmatter keys", () => {
-        expect(new Set(Object.keys(fm!.fields))).toEqual(PORTABLE_SKILL_FRONTMATTER_KEYS);
+        for (const key of PORTABLE_SKILL_FRONTMATTER_KEYS) expect(fm!.fields).toHaveProperty(key);
+        for (const key of Object.keys(fm!.fields)) {
+          expect(PORTABLE_SKILL_FRONTMATTER_KEYS.has(key) || key === "argument-hint").toBe(true);
+        }
       });
 
       test("name is the exact skill directory name", () => {
@@ -420,7 +423,7 @@ describe("the recall skill drives recall itself", () => {
   test("drives every flag the CLI exposes, and none it does not", () => {
     // Word-boundary, not substring: a renamed `--workspaces` would satisfy
     // `toContain("--workspace")` VACUOUSLY while the CLI flag no longer exists.
-    const flags = ["--json", "--query", "--workspace", "--timeout", "--project", "--answer"];
+    const flags = ["--json", "--query", "--workspace", "--timeout", "--project", "--answer", "--context"];
     for (const flag of flags) {
       expect(skill).toMatch(new RegExp(`${flag}(?![\\w-])`));
     }
@@ -431,17 +434,17 @@ describe("the recall skill drives recall itself", () => {
   });
 
   test("says which mode wrote the text, because the two need different wording", () => {
-    /* The default mode returns the MEMORY and this agent answers from it; the
-       `--answer` mode returns prose a model on Augenta's side wrote. Relaying
+    /* Context mode returns the MEMORY and this agent answers from it; the
+       default answer mode returns prose a model on Augenta's side wrote. Relaying
        remembered notes as though Augenta had answered attributes a claim to a
        summariser that never ran, so the skill has to branch on `mode` — a rule
        that lives only in the script would constrain nothing the model generates. */
     expect(flat).toMatch(/Check `mode` on each entry before you present it/i);
     expect(flat).toMatch(/answer the user's question yourself from that memory/i);
     expect(flat).toMatch(/notesTruncated/);
-    // And the default is presented as the default, not as an optimization the
-    // agent may skip: it is faster and costs the user no model turn.
-    expect(flat).toMatch(/By default nothing writes an answer for you/i);
+    expect(flat).toMatch(/fallback/);
+    // The skill exposes the default and the fallback explicitly.
+    expect(flat).toMatch(/By default Augenta's model writes the answer/i);
   });
 
   test("resolves the script from the skill's own directory, never from $CLAUDE_PLUGIN_ROOT", () => {

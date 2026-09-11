@@ -25,13 +25,10 @@
  * project config, exactly as the shipper does it. The agent is the normal caller
  * of `--json`, so everything it can read has to be safe to paste into a chat.
  *
- * TWO MODES, AND THE DEFAULT RUNS NO MODEL. `POST /v1/recall` returns the
- * matched engram and the notes it was built from as typed content blocks; the
- * agent reading this payload is already a model, so it answers the question
- * itself from that memory. That call is fast (no model turn on Augenta's side),
- * costs the user nothing per call, and sends their memory to no third-party
- * provider. `--answer` is the opt-in that asks Augenta's own model to write the
- * answer instead, which is one full model turn and can take most of a minute.
+ * TWO MODES, WITH ANSWER AS THE DEFAULT. The client explicitly requests
+ * `?mode=answer`; `--context` requests matched memory without a model turn.
+ * If answer mode returns 503 answerer_unavailable or consent_required, retry
+ * once as context and mark the outcome so the caller can explain the fallback.
  *
  * TOKEN MINIMISATION IS THIS CLIENT'S JOB, deliberately. The door hands back a
  * flat, ordered block list and makes trimming trivial (`type` + `text` on every
@@ -62,14 +59,9 @@ import {
 import { resolveProject, type ResolvedProject } from "../capture/project";
 
 /**
- * The wait for the DEFAULT mode, in seconds.
- *
- * Keep the legacy answer deadline during rollout: an older platform still
- * runs a model for the default request and can take up to 60s. A 20s client
- * timeout would abort before the legacy response reader could handle it.
- * The new platform enforces its own 15s context deadline, so this ceiling
- * does not delay healthy context responses or their upstream timeout errors.
- * Tighten it only after every supported environment has the context default.
+ * The context-mode wait, in seconds. Retains the rollout ceiling for older
+ * platforms that ignore the explicit mode and still run a model. The current
+ * platform enforces its own 15s context deadline.
  */
 const DEFAULT_TIMEOUT_SECONDS = 75;
 
@@ -110,17 +102,8 @@ export interface RecallArgs {
   workspaces?: string[];
   timeoutSeconds?: number;
   project?: string;
-  /**
-   * Ask Augenta's own model to write the answer (`?mode=answer`) instead of
-   * returning the memory for this agent to read.
-   *
-   * A flag rather than the default because the default is the cheap, private,
-   * fast path and a caller who has not thought about modes should get it. Worth
-   * reaching for when the user explicitly wants Augenta's own synthesis, or when
-   * the matched memory is large enough that a summary is the smaller thing to
-   * put in the conversation.
-   */
   answer?: boolean;
+  context?: boolean;
 }
 
 /**
@@ -146,6 +129,8 @@ export function parseArgs(argv: string[]): RecallArgs {
       args.json = true;
     } else if (flag === "--answer") {
       args.answer = true;
+    } else if (flag === "--context") {
+      args.context = true;
     } else if (flag === "--query") {
       args.query = valueFor(flag, i++);
     } else if (flag === "--workspace") {
@@ -169,6 +154,7 @@ export function parseArgs(argv: string[]): RecallArgs {
       args.words.push(flag);
     }
   }
+  if (args.answer && args.context) throw new Error("--answer and --context cannot be used together");
   return args;
 }
 
@@ -192,14 +178,20 @@ interface Destination {
   workspaceName?: string;
 }
 
+export interface RecallFallback {
+  requested: "answer";
+  reason: "answerer_unavailable" | "consent_required";
+}
+
 export interface RecallAnswer extends Destination {
+  fallback?: RecallFallback;
   /** The retrieval service's own scope string, reported verbatim for an audit
    *  trail. Never composed here — the recorded org id is for display only. */
   scope?: string;
   /**
    * What this Workspace returned, as text to read.
    *
-   * In `answer` mode it is prose a model wrote. In the default `context` mode it
+   * In default `answer` mode it is prose a model wrote. In `context` mode it
    * is the MEMORY ITSELF — the matched engram's summary followed by each
    * supporting note — and the agent reading this payload is what turns it into
    * an answer. `mode` says which, and SKILL.md branches its wording on it: a
@@ -218,9 +210,10 @@ export interface RecallAnswer extends Destination {
   renderer?: string;
 }
 
-export type NothingRemembered = Destination;
+export type NothingRemembered = Destination & { fallback?: RecallFallback };
 
 export interface RecallFailure extends Destination {
+  fallback?: RecallFallback;
   code: string;
   message: string;
   retryAfterSeconds?: number;
@@ -281,7 +274,7 @@ export interface RecallResponseParts {
   retryAfter?: string | null;
 }
 
-export type Outcome =
+export type Outcome = (
   | {
       kind: "answered";
       answer: string;
@@ -292,7 +285,8 @@ export type Outcome =
       renderer?: string;
     }
   | { kind: "nothing_remembered" }
-  | { kind: "failed"; code: string; message: string; retryAfterSeconds?: number };
+  | { kind: "failed"; code: string; message: string; retryAfterSeconds?: number }
+) & { fallback?: RecallFallback };
 
 /** One content block off the door's `content[]`. Read structurally rather than
  *  typed: block kinds are additive upstream and an unknown `type` must be
@@ -521,14 +515,13 @@ async function askDestination(
     url: string;
     query: string;
     timeoutMs: number;
+    contextTimeoutMs: number;
     profileId?: string;
     apiKey?: string;
   },
   destination: Destination,
 ): Promise<Outcome> {
-  /* `ctx.url` already carries `?mode=answer` when that was asked for. The
-     default sends NO mode parameter, so the door's own default decides — one
-     default, upstream, rather than a second one here that could drift. */
+  /* The client owns its contract: every URL carries an explicit mode. */
   const headers: Record<string, string> = {
     "content-type": "application/json",
     /* Fresh per destination AND per call. The door namespaces an activation by
@@ -560,7 +553,7 @@ async function askDestination(
     } catch {
       parsed = undefined;
     }
-    return classifyRecallResponse({
+    const outcome = classifyRecallResponse({
       status: response.status,
       body: parsed,
       text,
@@ -568,6 +561,17 @@ async function askDestination(
       renderer: response.headers.get("x-augenta-renderer") ?? undefined,
       retryAfter: response.headers.get("retry-after"),
     });
+    const url = new URL(ctx.url);
+    if (response.status === 503 && url.searchParams.get("mode") === "answer" &&
+        outcome.kind === "failed" &&
+        (outcome.code === "answerer_unavailable" || outcome.code === "consent_required")) {
+      url.searchParams.set("mode", "context");
+      const fallback = await askDestination(
+        { ...ctx, url: url.toString(), timeoutMs: ctx.contextTimeoutMs }, destination,
+      );
+      return { ...fallback, fallback: { requested: "answer", reason: outcome.code } };
+    }
+    return outcome;
   } catch (error) {
     if (error instanceof ReLoginRequiredError) {
       return { kind: "failed", code: "need_login", message: error.message };
@@ -710,12 +714,13 @@ export async function runRecall(
   const unresolvedConnectorIds: string[] = [];
   let names: Promise<Workspace[]> = Promise.resolve([]);
   let destinations: Destination[] = [];
-  let ctx: { url: string; query: string; timeoutMs: number; profileId?: string; apiKey?: string };
+  let ctx: Parameters<typeof askDestination>[0];
 
-  const timeoutMs =
-    (args.timeoutSeconds ?? (args.answer ? ANSWER_TIMEOUT_SECONDS : DEFAULT_TIMEOUT_SECONDS)) *
-    1000;
-  const url = `${gateway}/v1/recall${args.answer ? "?mode=answer" : ""}`;
+  if (args.answer && args.context) throw new Error("--answer and --context cannot be used together");
+  const mode = args.context ? "context" : "answer";
+  const contextTimeoutMs = (args.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS) * 1000;
+  const timeoutMs = mode === "context" ? contextTimeoutMs : (args.timeoutSeconds ?? ANSWER_TIMEOUT_SECONDS) * 1000;
+  const url = `${gateway}/v1/recall?mode=${mode}`;
 
   if (cfg.authMode === "oauth") {
     const profileId = cfg.profileId!;
@@ -773,7 +778,7 @@ export async function runRecall(
       // link checks pass, then overlap it with recall instead of waiting on it.
       names = fetchAllWorkspaces(profileId, gateway).catch(() => [] as Workspace[]);
     }
-    ctx = { url, query, timeoutMs, profileId };
+    ctx = { url, query, timeoutMs, contextTimeoutMs, profileId };
   } else {
     if (args.workspaces?.length) {
       // A platform key is assigned to exactly one Connector, which is anchored to
@@ -800,7 +805,7 @@ export async function runRecall(
       );
     }
     destinations = [{}];
-    ctx = { url, query, timeoutMs, apiKey };
+    ctx = { url, query, timeoutMs, contextTimeoutMs, apiKey };
   }
 
   if (destinations.length === 0 && failed.length === 0) {
@@ -846,7 +851,8 @@ export async function runRecall(
       const { kind: _answered, ...fields } = outcome;
       answers.push({ ...destination, ...fields });
     } else if (outcome.kind === "nothing_remembered") {
-      nothingRemembered.push({ ...destination });
+      const { kind: _nothing, ...fields } = outcome;
+      nothingRemembered.push({ ...destination, ...fields });
     } else {
       const { kind: _failed, ...fields } = outcome;
       failed.push({ ...destination, ...fields });
@@ -871,6 +877,12 @@ export async function runRecall(
 /** The bare (non-`--json`) rendering. A person reading a terminal wants the
  *  answers, with enough heading to tell which Workspace each came from. */
 function printPayload(payload: RecallPayload): void {
+  for (const entry of [...payload.answers, ...payload.nothingRemembered, ...payload.failed]) {
+    if (entry.fallback) {
+      const label = entry.workspaceName ?? entry.workspaceId ?? "Augenta";
+      console.log(`Augenta's model was unavailable in ${label} (${entry.fallback.reason}); requested memory instead.`);
+    }
+  }
   for (const answer of payload.answers) {
     const label = answer.workspaceName ?? answer.workspaceId ?? "Augenta";
     console.log(`— ${label} —`);

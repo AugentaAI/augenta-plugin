@@ -116,12 +116,13 @@ In Codex:
 $augenta:recall what did we decide about sign-in?
 ```
 
+Usage: `/augenta:recall [answer | context] <question>` (or `$augenta:recall` in Codex).
 Your agent can also use recall when a task needs past context. Each connected
-Workspace is asked, and each result shows where it came from. Recall hands your
-agent the saved memory and your agent answers from it, without an Augenta
-answer-model call. Your agent can pass `--answer` when
-you want Augenta's own AI to write the answer instead; that takes up to a
-minute.
+Workspace is asked, and each result shows where it came from. **Augenta's model
+writes the answer by default**, taking up to a minute. Say `context` before the
+question to get the saved memory for your agent to answer from without an Augenta
+answer-model call. If the model is unavailable, the plugin tries context once and
+your agent explains that it is answering from memory.
 
 A new Workspace may have nothing to recall yet. If recall is not available,
 the plugin will say so.

@@ -2,7 +2,7 @@
 
 The plugin has three jobs: connect a project, save its activity, and ask about
 past work. It runs on your machine. Augenta stores the memory and returns
-matching context; `--answer` optionally asks its model to write an answer.
+a model-written answer by default; `--context` asks for matching memory instead.
 
 ## The two paths
 
@@ -130,8 +130,10 @@ id. No transcript or file content is attached. The API decides the allowed
 organization and memory scope from the signed-in identity. An API key already
 fixes the Workspace, so that request needs only the question.
 
-By default the script returns the matched summary and supporting notes for
-your agent to answer from. `--answer` requests model-written prose instead.
+By default the script explicitly requests `?mode=answer` for model-written prose.
+`--context` requests `?mode=context` for the matched summary and supporting notes.
+A 503 `answerer_unavailable` or `consent_required` triggers one context retry
+with the same question and destination, a fresh idempotency key, and a `fallback` marker.
 It reports results, empty Workspaces, and failures separately. An
 empty Workspace is a normal result. A failure in one is not presented as a
 successful answer from all of them.
