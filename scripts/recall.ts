@@ -63,19 +63,14 @@ import { resolveProject, type ResolvedProject } from "../capture/project";
 /**
  * The wait for the DEFAULT mode, in seconds.
  *
- * Deliberately LONGER than the platform's own 15s deadline on the model-free
- * path, for the same reason the answer wait below clears its 60s: the platform
- * is the component that should decide a call took too long — it can say
- * `recall_timeout` and mean it. If this bound were the tighter one, every slow
- * call would surface as a local abort with nothing to report, and the
- * distinction between "too slow" and "unreachable" would be lost on the way out.
- *
- * 20s is generous for a path whose measured work is one local embed, one
- * indexed search and a few point reads. It is short enough to matter: this is
- * the mode an agent calls mid-task, and a 75s ceiling on it would mean a
- * degraded deployment stalls the user's turn for over a minute before saying so.
+ * Keep the legacy answer deadline during rollout: an older platform still
+ * runs a model for the default request and can take up to 60s. A 20s client
+ * timeout would abort before the legacy response reader could handle it.
+ * The new platform enforces its own 15s context deadline, so this ceiling
+ * does not delay healthy context responses or their upstream timeout errors.
+ * Tighten it only after every supported environment has the context default.
  */
-const DEFAULT_TIMEOUT_SECONDS = 20;
+const DEFAULT_TIMEOUT_SECONDS = 75;
 
 /**
  * The wait for `--answer`, in seconds. Clears the platform's own 60s deadline on
@@ -83,7 +78,7 @@ const DEFAULT_TIMEOUT_SECONDS = 20;
  *
  * The two are separate constants rather than one because the modes are bounded
  * by different things: this one waits on a provider's model turn (itself capped
- * at 30s upstream), the other on a database read.
+ * at 30s upstream), the other may still reach a legacy answer-only platform.
  */
 const ANSWER_TIMEOUT_SECONDS = 75;
 

@@ -526,16 +526,8 @@ describe("the recall skill drives recall itself", () => {
   });
 
   test("gives each mode a Bash timeout the script's own wait fits inside", () => {
-    /* Two waits, because the modes are bounded by different things: the default
-       waits on a database read (20s, clearing the platform's 15s deadline) and
-       `--answer` on a provider's model turn (75s, clearing its 60s). A Bash call
-       that gives up first would report a timeout the platform never saw; one that
-       waits 90s on the fast mode would stall the user's turn for over a minute on
-       a degraded deployment. Both numbers are pinned against the source so the
-       skill and the script cannot drift apart. */
     const source = readFileSync(join(PLUGIN_ROOT, "scripts", "recall.ts"), "utf8");
-    expect(flat).toMatch(/at least 30 seconds/i);
-    expect(source).toContain("const DEFAULT_TIMEOUT_SECONDS = 20");
+    expect(source).toContain("const DEFAULT_TIMEOUT_SECONDS = 75");
     expect(flat).toMatch(/at least 90 seconds/i);
     expect(source).toContain("const ANSWER_TIMEOUT_SECONDS = 75");
   });

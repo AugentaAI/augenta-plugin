@@ -656,7 +656,7 @@ function resolveTargetProject(args, cwd) {
 }
 
 // scripts/recall.ts
-var DEFAULT_TIMEOUT_SECONDS = 20;
+var DEFAULT_TIMEOUT_SECONDS = 75;
 var ANSWER_TIMEOUT_SECONDS = 75;
 var MAX_TIMEOUT_SECONDS = 600;
 var MAX_QUERY_CHARS = 4096;

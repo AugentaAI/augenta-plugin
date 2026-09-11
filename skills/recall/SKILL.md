@@ -74,8 +74,9 @@ the user marked private.
 ## 2. Ask
 
 Say one line before you run it: that you are asking the Augenta Workspaces this
-project feeds. Then run it with a Bash timeout of **at least 30 seconds**,
-because the script itself waits 20:
+project feeds. Then run it with a Bash timeout of **at least 90 seconds**.
+The script retains a 75-second ceiling for older answer-only environments
+during rollout; context responses return as soon as they are available:
 
 ```bash
 node "$RECALL" --json --query "<question>"

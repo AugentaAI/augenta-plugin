@@ -11,7 +11,7 @@
  *
  * Run: bun test scripts/recall.test.ts
  */
-import { test, expect, describe, beforeEach, afterEach } from "bun:test";
+import { test, expect, describe, beforeEach, afterEach, spyOn } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -741,6 +741,23 @@ describe("the fan-out", () => {
     // door forbids unknown body fields, so every existing request stays valid.
     const bodies = recallCalls().map((call) => JSON.parse(String(call.body)));
     expect(bodies[0]).toEqual(bodies[1]);
+  });
+
+  test("default recall gives legacy answer servers their full deadline during rollout", async () => {
+    await connectedProject();
+    route({
+      [`POST ${GATEWAY}/v1/recall`]: () =>
+        Response.json({ scope: "org:workspace", answer: "legacy answer" }),
+    });
+    const timeout = spyOn(AbortSignal, "timeout");
+    try {
+      const payload = await runRecall({ projectRoot: project }, args());
+      expect(payload.status).toBe("answered");
+      expect(payload.answers.every((answer) => answer.mode === "answer")).toBe(true);
+      expect(timeout).toHaveBeenCalledWith(75_000);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   test("every idempotency key is a fresh UUID, per destination and per call", async () => {
