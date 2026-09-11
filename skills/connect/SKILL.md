@@ -112,6 +112,11 @@ which Workspaces this project feeds — continue, do not stop.
 `organization`, and `destinations` (including saved names). Use it for context;
 the live top-level `destinations` and Workspace list win when choosing the set.
 
+If `current.authMode` is `api-key`, state before the destination question that
+browser connection will replace this project's platform-key configuration with
+the selected sign-in and Workspaces. The saved key is never shown or copied.
+`alreadyConnected: true` does not mean this is already a browser connection.
+
 `destinations` lists the Workspaces the project feeds right now; use it to
 pre-select in step 3. Two cases there need saying out loud rather than quietly
 dropping, because the project is still shipping to them and the answer in step 3

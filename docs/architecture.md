@@ -141,6 +141,12 @@ not used for recall. A failed Connector check also prevents its question from
 being sent, but is reported as a failure rather than a disabled link. Multiple
 active links to one Workspace produce only one recall request.
 
+A Workspace refusal after a successful link check retains its code and message
+in `failed` alongside the affected unresolved ids. This distinguishes entitlement
+denials and archived Workspaces from disabled links. Workspace names are fetched
+best-effort after link checks, concurrently with recall, so an all-disabled set
+does not trigger a name lookup and name listing never gates the recall POSTs.
+
 Recall uses the saved project config even when `AUGENTA_CAPTURE_ENABLED=0`.
 Deleting the config turns off both paths.
 

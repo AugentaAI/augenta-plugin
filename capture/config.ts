@@ -56,6 +56,7 @@ export interface ProjectConfig {
   ingestUrl?: string;
   apiKey?: string;
   endpoint?: string;
+  discoveredGateway?: string;
   projectRoot: string;
 }
 
@@ -113,6 +114,7 @@ export function loadProjectConfig(
       destinations?: unknown;
       apiKey?: unknown;
       endpoint?: unknown;
+      discoveredGateway?: unknown;
       controlUrl?: unknown;
       ingestUrl?: unknown;
       org?: { id?: unknown; name?: unknown };
@@ -121,7 +123,7 @@ export function loadProjectConfig(
     const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince))
       ? new Date(value.captureSince).toISOString() : undefined;
     const settings: Partial<ProjectConfig> = {};
-    for (const key of ["endpoint", "controlUrl", "ingestUrl"] as const) {
+    for (const key of ["endpoint", "controlUrl", "ingestUrl", "discoveredGateway"] as const) {
       const raw = value[key];
       if (raw !== undefined && typeof raw !== "string") return undefined;
       if (typeof raw === "string" && raw.trim()) {

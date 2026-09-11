@@ -21,6 +21,9 @@ release a user can read.
   while refreshing names for display. An older
   cached Codex plugin cannot read the new shape and will ask to reconnect;
   update that install before reconnecting. Two-key API-key configs still work.
+  Reconnect refreshes discovery-derived gateways while preserving explicit
+  overrides. Recall retains actionable Workspace refusal details, and a
+  malformed platform-key assignment fails before replacing the project config.
 
 - **Recall no longer waits for a model by default.** `/augenta:recall` now asks
   for the matching memory itself — the consolidated summary and the notes behind

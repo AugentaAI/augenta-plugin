@@ -87,7 +87,7 @@ function loadProjectConfig(projectRoot) {
       return;
     const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
     const settings = {};
-    for (const key of ["endpoint", "controlUrl", "ingestUrl"]) {
+    for (const key of ["endpoint", "controlUrl", "ingestUrl", "discoveredGateway"]) {
       const raw = value[key];
       if (raw !== undefined && typeof raw !== "string")
         return;
@@ -1112,7 +1112,10 @@ function writeApiKeyConfig(projectRoot, apiKey, endpoint2, details = {}) {
     authMode: "api-key",
     captureSince: new Date().toISOString(),
     apiKey,
-    ...details,
+    org: details.org ? { id: details.org.id, name: details.org.name } : undefined,
+    destinations: details.destinations?.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+    controlUrl: details.controlUrl,
+    ingestUrl: details.ingestUrl,
     ...endpoint2 ? { endpoint: endpoint2 } : {}
   }, null, 2)}
 `, { mode: 384 });
@@ -1128,7 +1131,13 @@ function writeOAuthConfig(projectRoot, connection) {
   writeFileSync5(path, `${JSON.stringify({
     authMode: "oauth",
     captureSince: new Date().toISOString(),
-    ...connection
+    profileId: connection.profileId,
+    controlUrl: connection.controlUrl,
+    endpoint: connection.endpoint,
+    discoveredGateway: connection.discoveredGateway,
+    org: { id: connection.org.id, name: connection.org.name },
+    destinations: connection.destinations.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+    ingestUrl: connection.ingestUrl
   }, null, 2)}
 `, { mode: 384 });
   chmodSync3(path, 384);
@@ -1354,9 +1363,10 @@ async function resolveOAuth(args, projectRoot = args.project ?? process.cwd()) {
   const prior = loadProjectConfig(projectRoot);
   const control = controlUrl(prior, args.controlUrl);
   const discovered = await augentaOAuthConfig(control);
-  const savedEndpoint = control === (prior?.controlUrl ?? DEFAULT_CONTROL_URL) ? prior?.endpoint : undefined;
+  const savedEndpoint = control === (prior?.controlUrl ?? DEFAULT_CONTROL_URL) && prior?.endpoint !== prior?.discoveredGateway ? prior?.endpoint : undefined;
   const gateway = gatewayBase({ endpoint: savedEndpoint || discovered.gateway }, args.endpoint);
-  return { oauth: { ...discovered, gateway }, gateway, control };
+  const discoveredGateway = args.endpoint?.trim() || process.env.AUGENTA_API_URL?.trim() || savedEndpoint ? undefined : discovered.gateway;
+  return { oauth: { ...discovered, gateway }, gateway, control, discoveredGateway };
 }
 function priorConnection(projectRoot) {
   if (!existsSync6(join6(projectRoot, ".augenta", "config.json")))
@@ -1423,7 +1433,7 @@ async function establishConnectors(projectRoot, args, profileId, gateway, connec
   return { results, removed, unresolvedConnectorIds, configPath: configPath2 };
 }
 async function connectProject(projectRoot, args) {
-  const { oauth, gateway, control } = await resolveOAuth(args, projectRoot);
+  const { oauth, gateway, control, discoveredGateway } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
   const selected = await selectOrCreateProfile(oauth, prior?.profileId);
   console.log(`Signed in as ${selected.me.user.name || selected.me.user.email} to ${selected.me.org.name} (${selected.me.org.id}).`);
@@ -1443,7 +1453,7 @@ async function connectProject(projectRoot, args) {
   if (workspaces.length === 0) {
     throw new Error("choose at least one Workspace");
   }
-  const { results, removed, unresolvedConnectorIds, configPath: written } = await establishConnectors(projectRoot, args, selected.profileId, gateway, { controlUrl: control, org: selected.me.org }, workspaces, priorIds, available, resolvedPrior);
+  const { results, removed, unresolvedConnectorIds, configPath: written } = await establishConnectors(projectRoot, args, selected.profileId, gateway, { controlUrl: control, org: selected.me.org, discoveredGateway }, workspaces, priorIds, available, resolvedPrior);
   const live = results.filter((result) => result.connectorId);
   const failed = results.filter((result) => !result.connectorId);
   if (live.length > 0) {
@@ -1638,7 +1648,7 @@ async function createWorkspaceForSelection(resolved, args) {
   }
 }
 async function connectToWorkspaces(resolved, args) {
-  const { oauth, gateway, control } = await resolveOAuth(args, resolved.projectRoot);
+  const { oauth, gateway, control, discoveredGateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
   const usable = await usableProfiles(oauth, args.profile ?? prior?.profileId);
   if (usable.length === 0) {
@@ -1682,7 +1692,7 @@ async function connectToWorkspaces(resolved, args) {
     };
   }
   const workspaces = available.filter((item) => requested.includes(item.id));
-  const { results, removed, unresolvedConnectorIds, configPath: configPath2 } = await establishConnectors(resolved.projectRoot, args, picked.profileId, gateway, { controlUrl: control, org: picked.me.org }, workspaces, prior?.connectorIds ?? [], available);
+  const { results, removed, unresolvedConnectorIds, configPath: configPath2 } = await establishConnectors(resolved.projectRoot, args, picked.profileId, gateway, { controlUrl: control, org: picked.me.org, discoveredGateway }, workspaces, prior?.connectorIds ?? [], available);
   const destinations = results.filter((result) => result.connectorId);
   const failed = results.filter((result) => !result.connectorId);
   if (destinations.length === 0) {
@@ -1719,6 +1729,7 @@ function savedConnection(cfg) {
   if (!cfg)
     return;
   return {
+    authMode: cfg.authMode,
     environment: environmentLabel(cfg.controlUrl),
     organization: cfg.org?.name ?? cfg.org?.id,
     destinations: cfg.destinations ?? []
@@ -1784,6 +1795,9 @@ async function verifyApiKeyConnection(apiKey, gateway) {
     throw new Error(`Augenta rejected the platform key (${response.status})${detail ? `: ${detail}` : ""}`);
   }
   const connectors = (await response.json()).connectors ?? [];
+  if (!Array.isArray(connectors)) {
+    throw new Error("Augenta returned an invalid Connector assignment");
+  }
   if (connectors.length === 0) {
     throw new Error("the platform key is not assigned to a Connector");
   }
@@ -1791,6 +1805,12 @@ async function verifyApiKeyConnection(apiKey, gateway) {
     throw new Error(`the platform key is assigned to ${connectors.length} Connectors; capture requires exactly one`);
   }
   const connector = connectors[0];
+  if (!connector || ["id", "orgId", "workspaceId"].some((field) => {
+    const value = connector[field];
+    return typeof value !== "string" || !value.trim();
+  })) {
+    throw new Error("the assigned Connector must have non-empty id, orgId, and workspaceId fields");
+  }
   if (connector.status !== "active" || connector.direction !== "inbound" && connector.direction !== "bidirectional") {
     throw new Error("the platform key requires an active inbound Connector");
   }

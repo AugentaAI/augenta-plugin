@@ -585,6 +585,12 @@ describe("aggregateStatus", () => {
       aggregateStatus({ answers: [], nothingRemembered: [1], failed: [f("rate_limited")] }),
     ).toBe("partially_answered");
   });
+
+  for (const code of ["need_login", "recall_unavailable", "recall_timeout"]) {
+    test(`uniform ${code} remains actionable alongside an unresolved link`, () => {
+      expect(aggregateStatus({ answers: [], nothingRemembered: [], failed: [f(code)], unresolvedConnectorIds: ["disabled"] })).toBe(code);
+    });
+  }
 });
 
 describe("a project that cannot be asked", () => {
@@ -860,7 +866,7 @@ describe("the fan-out", () => {
 
     expect(payload.status).toBe("partially_answered");
     expect(payload.answers).toHaveLength(1);
-    expect(payload.failed).toEqual([]);
+    expect(payload.failed).toMatchObject([{ connectorId: "connector_b", code: "not_entitled", message: "you are not entitled" }]);
     expect(payload.unresolvedConnectorIds).toEqual(["connector_b"]);
   });
 
@@ -1137,7 +1143,7 @@ describe("recorded destinations and live recall", () => {
       const payload = await runRecall({ projectRoot: project }, args());
       expect(payload.status).toBe("partially_answered");
       expect(payload.answers).toHaveLength(1);
-      expect(payload.failed).toEqual([]);
+      expect(payload.failed).toMatchObject([{ connectorId: "connector_b", code: status === 403 ? "not_entitled" : code, message: "not accessible" }]);
       expect(payload.unresolvedConnectorIds).toEqual(["connector_b"]);
     });
   }
@@ -1154,6 +1160,19 @@ describe("recorded destinations and live recall", () => {
     expect(payload.failed).toMatchObject([{ connectorId: "connector_b", code: "network", message: "offline" }]);
   });
 
+  test("an unresolved link does not hide a timeout from the remaining Workspace", async () => {
+    await configure();
+    route({
+      [`GET ${GATEWAY}/v1/connectors/connector_b`]: () =>
+        Response.json({ connector: { id: "connector_b", workspaceId: "ws-scratch", status: "disabled" } }),
+      [`POST ${GATEWAY}/v1/recall`]: () => typedError(504, "recall_timeout", "deadline exceeded"),
+    });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload.status).toBe("recall_timeout");
+    expect(payload.unresolvedConnectorIds).toEqual(["connector_b"]);
+    expect(payload.failed).toMatchObject([{ connectorId: "connector_a", code: "recall_timeout", message: "deadline exceeded" }]);
+  });
+
   test("a shared Workspace is asked once and every refused Connector is reported", async () => {
     await configure(["connector_a", "connector_a_twin"]);
     route({ [`POST ${GATEWAY}/v1/recall`]: () => typedError(403, "forbidden", "no access") });
@@ -1161,8 +1180,8 @@ describe("recorded destinations and live recall", () => {
     expect(recallCalls()).toHaveLength(1);
     expect(payload.status).toBe("error");
     expect(payload.unresolvedConnectorIds).toEqual(["connector_a", "connector_a_twin"]);
-    expect(payload.code).toBe("no_destination");
-    expect(payload.message).toContain("connector_a_twin");
+    expect(payload.failed).toMatchObject([{ code: "not_entitled", message: "no access" }]);
+    expect(payload.code).toBeUndefined();
   });
 
   test("listing and recall overlap, and the live name wins without rewriting config", async () => {

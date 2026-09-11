@@ -131,6 +131,14 @@ describe("loadProjectConfig", () => {
   });
 
   describe("the destination set — destinations[].connectorId routes", () => {
+    test("normalizes the discovery marker without using it as a routing override", () => {
+      writeConfig(project, { authMode: "api-key", apiKey: "key-test", endpoint: "https://chosen.example.com", discoveredGateway: " https://discovered.example.com/// " });
+      const config = loadProjectConfig(project);
+      expect(config?.discoveredGateway).toBe("https://discovered.example.com");
+      expect(gatewayBase(config)).toBe("https://chosen.example.com");
+      writeConfig(project, { authMode: "api-key", apiKey: "key-test", discoveredGateway: 42 });
+      expect(loadProjectConfig(project)).toBeUndefined();
+    });
     test("connectorIds-only configs require a reconnect", () => {
       writeConfig(project, { authMode: "oauth", profileId: "profile_1", connectorIds: ["link_1"] });
       expect(loadProjectConfig(project)).toBeUndefined();

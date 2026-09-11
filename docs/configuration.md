@@ -79,6 +79,13 @@ Changing connect's control URL selects the new environment's discovered gateway,
 not the previous environment's saved endpoint. An explicit `--endpoint` or
 `AUGENTA_API_URL` still takes precedence.
 
+For an automatically discovered endpoint, connect also records `discoveredGateway`.
+When it still matches `endpoint`, reconnect refreshes both from discovery so gateway
+rotations are picked up. A hand-edited endpoint, or one explicitly selected with
+`--endpoint` or `AUGENTA_API_URL`, remains an override within the saved environment.
+The marker is local bookkeeping, not another routing setting; capture and recall
+continue using `endpoint` until reconnect updates it.
+
 | Setting in `config.json` | Environment override | What it selects |
 | --- | --- | --- |
 | `controlUrl` | `AUGENTA_CONTROL_URL` | Sign-in discovery; defaults to `https://augenta.ai` |

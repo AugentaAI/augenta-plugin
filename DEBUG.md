@@ -27,6 +27,11 @@ Connect records `controlUrl` in `<project>/.augenta/config.json`. Reconnecting
 without a flag or variable defaults to that recorded URL. Every URL follows
 **CLI flag > environment variable > config.json > default**. The file's
 `endpoint` can override the discovered gateway within its recorded environment.
+Connect marks an automatically selected endpoint with `discoveredGateway`; if
+those values still match, the next connect refreshes the endpoint from discovery.
+A hand-edited endpoint differs from the marker and remains an override. Explicit
+flag or environment overrides are written without the marker, even when their
+value happens to equal discovery.
 When the control URL changes, connect uses the new environment's discovered
 gateway unless `--endpoint` or `AUGENTA_API_URL` explicitly overrides it. The payload's
 `environmentChange` names the old and new environments when the control URL moves.

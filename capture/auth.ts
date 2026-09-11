@@ -27,7 +27,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ensureAugentaDir } from "./augenta-dir";
 import { openBrowser } from "../runtime/node";
-export { DEFAULT_CONTROL_URL } from "./config";
 
 export interface OAuthConfig {
   issuer: string;

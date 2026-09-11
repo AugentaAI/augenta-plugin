@@ -42,6 +42,7 @@ import {
   type WorkspacePrompts,
 } from "./connect";
 import { Outbox } from "../capture/outbox";
+import { loadProjectConfig } from "../capture/config";
 import {
   profileIdFor,
   readPendingLogin,
@@ -304,6 +305,18 @@ describe("project config writers", () => {
     );
     expect(() => statSync(join(project, ".augenta", "config.json"))).toThrow();
   });
+
+  test("OAuth writer whitelists fields even when inputs contain extra credentials", () => {
+    const connection = {
+      ...connectionRecord("profile_123", ["connector_456"]),
+      accessToken: "secret-not-for-project", authMode: "api-key",
+      org: { id: "org_1", accessToken: "secret-not-for-project" },
+      destinations: [{ connectorId: "connector_456", workspaceId: "ws-default", accessToken: "secret-not-for-project" }],
+    };
+    const path = writeOAuthConfig(project, connection);
+    expect(readFileSync(path, "utf8")).not.toContain("secret-not-for-project");
+    expect(loadProjectConfig(project)?.authMode).toBe("oauth");
+  });
 });
 
 describe("CLI subprocess", () => {
@@ -321,6 +334,30 @@ describe("CLI subprocess", () => {
 });
 
 describe("platform-key connection", () => {
+  for (const field of ["id", "orgId", "workspaceId"] as const) {
+    for (const value of [undefined, null, "", "   ", 42]) {
+      test(`refuses invalid ${field}=${String(value)} without overwriting a usable config`, async () => {
+        const path = writeApiKeyConfig(project, "sk-aug-existing.secret");
+        const before = readFileSync(path, "utf8");
+        globalThis.fetch = (async (_url, _init) => Response.json({ connectors: [{
+          id: "connector_123", orgId: "org_1", workspaceId: "ws-default",
+          status: "active", direction: "inbound", [field]: value,
+        }] })) as typeof fetch;
+        await expect(connectWithApiKey(project, "sk-aug-new.secret")).rejects.toThrow("non-empty id, orgId, and workspaceId");
+        expect(readFileSync(path, "utf8")).toBe(before);
+        expect(loadProjectConfig(project)?.apiKey).toBe("sk-aug-existing.secret");
+      });
+    }
+  }
+
+  test("invalid assignment metadata creates no config on first connect", async () => {
+    globalThis.fetch = (async (_url, _init) => Response.json({ connectors: [{
+      id: "connector_123", status: "active", direction: "inbound",
+    }] })) as typeof fetch;
+    await expect(connectWithApiKey(project, "sk-aug-new.secret")).rejects.toThrow("non-empty id, orgId, and workspaceId");
+    expect(() => statSync(join(project, ".augenta", "config.json"))).toThrow();
+  });
+
   test("verifies the assigned inbound Connector before writing config", async () => {
     globalThis.fetch = (async (url, init) => {
       expect(String(url)).toBe("https://gw.example.com/v1/connectors");
@@ -348,6 +385,7 @@ describe("platform-key connection", () => {
     );
 
     expect(result.connector.id).toBe("connector_123");
+    expect(loadProjectConfig(project)?.destinations).toEqual([{ connectorId: "connector_123", workspaceId: "ws-default" }]);
     expect(JSON.parse(readFileSync(result.path, "utf8"))).toEqual({
       authMode: "api-key",
       captureSince: expect.any(String),
@@ -369,6 +407,7 @@ describe("platform-key connection", () => {
         connectors: [
           {
             id: "connector_v",
+            orgId: "org_1",
             kind: "agent",
             direction: "inbound",
             status: "active",
@@ -502,6 +541,7 @@ describe("platform-key connection", () => {
         connectors: [
           {
             id: "connector_out",
+            orgId: "org_1",
             kind: "service",
             direction: "outbound",
             status: "active",
@@ -709,7 +749,7 @@ describe("JSON verbs", () => {
     const explicit = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true });
     expect(explicit.environment).toBe(CONTROL);
     expect(explicit.current).toMatchObject({ environment: "https://saved.example.com" });
-    expect(requests.some((request) => request.includes("ignored.example.com"))).toBe(false);
+    expect(requests.map((request) => new URL(request.slice(request.indexOf(" ") + 1)).hostname)).not.toContain("ignored.example.com");
   });
 
   test("probe retains the saved connection when discovery is offline, without exposing credentials", async () => {
@@ -738,7 +778,7 @@ describe("JSON verbs", () => {
       });
       expect(payload.status).toBe("need_workspace");
       expect(requests).toContain(`GET ${GATEWAY}/v1/me`);
-      expect(requests.some((request) => request.includes("old-gateway.example.com"))).toBe(false);
+      expect(requests.map((request) => new URL(request.slice(request.indexOf(" ") + 1)).hostname)).not.toContain("old-gateway.example.com");
       expect(payload.current).toMatchObject({ environment: "https://old-control.example.com" });
     });
   }
@@ -751,6 +791,53 @@ describe("JSON verbs", () => {
     const payload = await runJsonVerb({ projectRoot: project }, { json: true, probe: true });
     expect(payload.status).toBe("need_workspace");
     expect(requests).toContain(`GET ${GATEWAY}/v1/me`);
+  });
+
+  test("reconnect refreshes an automatically recorded gateway in the same environment", async () => {
+    const { profileId } = await signIn();
+    writeOAuthConfig(project, {
+      ...connectionRecord(profileId, ["connector_new"], "https://retired.example.com"),
+      controlUrl: CONTROL, discoveredGateway: "https://retired.example.com",
+    });
+    route();
+    const payload = await runJsonVerb({ projectRoot: project }, { json: true, workspaces: ["ws-default"] });
+    expect(payload.status).toBe("connected");
+    expect(loadProjectConfig(project)).toMatchObject({ endpoint: GATEWAY, discoveredGateway: GATEWAY });
+    expect(requests.map((request) => new URL(request.slice(request.indexOf(" ") + 1)).hostname)).not.toContain("retired.example.com");
+  });
+
+  test("a hand-edited endpoint remains an override even with a discovery marker", async () => {
+    const { profileId } = await signIn();
+    writeOAuthConfig(project, {
+      ...connectionRecord(profileId, ["connector_new"]), controlUrl: CONTROL,
+      discoveredGateway: "https://discovered.example.com",
+    });
+    route({ [`GET ${CONTROL}/.well-known/augenta.json`]: () =>
+      Response.json({ issuer: ISSUER, clientId: "client_public", gateway: "https://rotated.example.com" }) });
+    const payload = await runJsonVerb({ projectRoot: project }, { json: true, workspaces: ["ws-default"] });
+    expect(payload.status).toBe("connected");
+    expect(loadProjectConfig(project)?.endpoint).toBe(GATEWAY);
+    expect(loadProjectConfig(project)?.discoveredGateway).toBeUndefined();
+  });
+
+  test("new connections mark discovery-derived endpoints but explicit overrides remain pinned", async () => {
+    await signIn();
+    route();
+    expect((await runJsonVerb({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] })).status).toBe("connected");
+    expect(loadProjectConfig(project)?.discoveredGateway).toBe(GATEWAY);
+    expect((await runJsonVerb({ projectRoot: project }, { ...baseArgs, endpoint: GATEWAY, workspaces: ["ws-default"] })).status).toBe("connected");
+    expect(loadProjectConfig(project)?.discoveredGateway).toBeUndefined();
+  });
+
+  test("probe identifies a platform-key connection without exposing or replacing its key", async () => {
+    await signIn();
+    const path = writeApiKeyConfig(project, "sk-aug-existing.secret", GATEWAY, { controlUrl: CONTROL });
+    const saved = readFileSync(path, "utf8");
+    route();
+    const payload = await runJsonVerb({ projectRoot: project }, { json: true, probe: true });
+    expect(payload).toMatchObject({ alreadyConnected: true, current: { authMode: "api-key" } });
+    expect(JSON.stringify(payload)).not.toContain("sk-aug-existing.secret");
+    expect(readFileSync(path, "utf8")).toBe(saved);
   });
 
   for (const override of ["flag", "env"] as const) {
@@ -1412,6 +1499,7 @@ describe("JSON verbs", () => {
         controlUrl: CONTROL,
         org: { id: "org_1", name: "Example Org" },
         endpoint: GATEWAY,
+        discoveredGateway: GATEWAY,
       });
   });
 

@@ -191,7 +191,10 @@ export function writeApiKeyConfig(
         authMode: "api-key",
         captureSince: new Date().toISOString(),
         apiKey,
-        ...details,
+        org: details.org ? { id: details.org.id, name: details.org.name } : undefined,
+        destinations: details.destinations?.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+        controlUrl: details.controlUrl,
+        ingestUrl: details.ingestUrl,
         ...(endpoint ? { endpoint } : {}),
       },
       null,
@@ -220,6 +223,7 @@ export function writeOAuthConfig(
     profileId: string;
     controlUrl: string;
     endpoint: string;
+    discoveredGateway?: string;
     org: Organization;
     destinations: readonly Destination[];
     ingestUrl?: string;
@@ -236,7 +240,13 @@ export function writeOAuthConfig(
       {
         authMode: "oauth",
         captureSince: new Date().toISOString(),
-        ...connection,
+        profileId: connection.profileId,
+        controlUrl: connection.controlUrl,
+        endpoint: connection.endpoint,
+        discoveredGateway: connection.discoveredGateway,
+        org: { id: connection.org.id, name: connection.org.name },
+        destinations: connection.destinations.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+        ingestUrl: connection.ingestUrl,
       },
       null,
       2,
@@ -665,13 +675,16 @@ async function linkForWorkspace(
 async function resolveOAuth(
   args: Args,
   projectRoot = args.project ?? process.cwd(),
-): Promise<{ oauth: OAuthConfig; gateway: string; control: string }> {
+): Promise<{ oauth: OAuthConfig; gateway: string; control: string; discoveredGateway?: string }> {
   const prior = loadProjectConfig(projectRoot);
   const control = controlUrl(prior, args.controlUrl);
   const discovered = await augentaOAuthConfig(control);
-  const savedEndpoint = control === (prior?.controlUrl ?? DEFAULT_CONTROL_URL) ? prior?.endpoint : undefined;
+  const savedEndpoint = control === (prior?.controlUrl ?? DEFAULT_CONTROL_URL) && prior?.endpoint !== prior?.discoveredGateway
+    ? prior?.endpoint : undefined;
   const gateway = gatewayBase({ endpoint: savedEndpoint || discovered.gateway }, args.endpoint);
-  return { oauth: { ...discovered, gateway }, gateway, control };
+  const discoveredGateway = args.endpoint?.trim() || process.env.AUGENTA_API_URL?.trim() || savedEndpoint
+    ? undefined : discovered.gateway;
+  return { oauth: { ...discovered, gateway }, gateway, control, discoveredGateway };
 }
 
 /**
@@ -745,7 +758,7 @@ async function establishConnectors(
   args: Args,
   profileId: string,
   gateway: string,
-  connection: { controlUrl: string; org: Organization },
+  connection: { controlUrl: string; org: Organization; discoveredGateway?: string },
   workspaces: readonly Workspace[],
   priorConnectorIds: readonly string[],
   /** The organization's live Workspaces, so removals can be NAMED rather than
@@ -855,7 +868,7 @@ export async function connectProject(
   projectRoot: string,
   args: Args,
 ): Promise<void> {
-  const { oauth, gateway, control } = await resolveOAuth(args, projectRoot);
+  const { oauth, gateway, control, discoveredGateway } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
   const selected = await selectOrCreateProfile(oauth, prior?.profileId);
   console.log(
@@ -900,7 +913,7 @@ export async function connectProject(
       args,
       selected.profileId,
       gateway,
-      { controlUrl: control, org: selected.me.org },
+      { controlUrl: control, org: selected.me.org, discoveredGateway },
       workspaces,
       priorIds,
       available,
@@ -1243,7 +1256,7 @@ export async function connectToWorkspaces(
   resolved: ResolvedProject,
   args: Args,
 ): Promise<JsonPayload> {
-  const { oauth, gateway, control } = await resolveOAuth(args, resolved.projectRoot);
+  const { oauth, gateway, control, discoveredGateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
   const usable = await usableProfiles(oauth, args.profile ?? prior?.profileId);
   if (usable.length === 0) {
@@ -1297,7 +1310,7 @@ export async function connectToWorkspaces(
     args,
     picked.profileId,
     gateway,
-    { controlUrl: control, org: picked.me.org },
+    { controlUrl: control, org: picked.me.org, discoveredGateway },
     workspaces,
     prior?.connectorIds ?? [],
     available,
@@ -1353,6 +1366,7 @@ function environmentChange(cfg: ProjectConfig | undefined, args: Args): { enviro
 function savedConnection(cfg: ProjectConfig | undefined) {
   if (!cfg) return undefined;
   return {
+    authMode: cfg.authMode,
     environment: environmentLabel(cfg.controlUrl),
     organization: cfg.org?.name ?? cfg.org?.id,
     destinations: cfg.destinations ?? [],
@@ -1443,6 +1457,9 @@ export async function verifyApiKeyConnection(
   }
   const connectors = ((await response.json()) as { connectors?: Connector[] })
     .connectors ?? [];
+  if (!Array.isArray(connectors)) {
+    throw new Error("Augenta returned an invalid Connector assignment");
+  }
   if (connectors.length === 0) {
     throw new Error("the platform key is not assigned to a Connector");
   }
@@ -1462,6 +1479,12 @@ export async function verifyApiKeyConnection(
     );
   }
   const connector = connectors[0]!;
+  if (!connector || (["id", "orgId", "workspaceId"] as const).some((field) => {
+    const value = connector[field];
+    return typeof value !== "string" || !value.trim();
+  })) {
+    throw new Error("the assigned Connector must have non-empty id, orgId, and workspaceId fields");
+  }
   if (
     connector.status !== "active" ||
     (connector.direction !== "inbound" &&

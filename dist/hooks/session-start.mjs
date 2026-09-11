@@ -87,7 +87,7 @@ function loadProjectConfig(projectRoot) {
       return;
     const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
     const settings = {};
-    for (const key of ["endpoint", "controlUrl", "ingestUrl"]) {
+    for (const key of ["endpoint", "controlUrl", "ingestUrl", "discoveredGateway"]) {
       const raw = value[key];
       if (raw !== undefined && typeof raw !== "string")
         return;

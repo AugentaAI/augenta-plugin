@@ -560,10 +560,6 @@ async function askDestination(
     } catch {
       parsed = undefined;
     }
-    const error = errorFields(parsed, text);
-    if (ctx.profileId && (response.status === 403 || (response.status === 404 && error.structured && error.code !== "empty_scope"))) {
-      return { kind: "failed", code: "unresolved_connector", message: "this destination is not accessible; reconnect" };
-    }
     return classifyRecallResponse({
       status: response.status,
       body: parsed,
@@ -607,12 +603,13 @@ export function aggregateStatus(payload: {
   if (total === 0) return "error";
   if (answers.length === total) return "answered";
   if (nothingRemembered.length === total) return "nothing_remembered";
-  if (payload.unresolvedConnectorIds?.length && answers.length + nothingRemembered.length === 0) return "error";
-  if (failed.length === total) {
+  if (answers.length + nothingRemembered.length === 0) {
     // Every destination refused for the same reason, so the reason IS the
     // verdict — the caller should act on it once, not once per Workspace.
+    if (failed.length === 0) return "error";
     if (failed.every((f) => f.code === "need_login")) return "need_login";
     if (failed.every((f) => f.code === "recall_unavailable")) return "recall_unavailable";
+    if (failed.every((f) => f.code === "recall_timeout")) return "recall_timeout";
     return "error";
   }
   return "partially_answered";
@@ -772,6 +769,8 @@ export async function runRecall(
       }
     }
     if (destinations.length > 0) {
+      // Names do not authorize a read. Start their best-effort lookup only after
+      // link checks pass, then overlap it with recall instead of waiting on it.
       names = fetchAllWorkspaces(profileId, gateway).catch(() => [] as Workspace[]);
     }
     ctx = { url, query, timeoutMs, profileId };
@@ -833,12 +832,13 @@ export async function runRecall(
   for (const { destination, outcome } of outcomes) {
     const liveName = named.find((workspace) => workspace.id === destination.workspaceId)?.name;
     if (liveName) destination.workspaceName = liveName;
+    // A verified link does not grant Workspace read access. Report affected link
+    // ids, but preserve the door's code and message in failed for actionable advice.
     if (cfg.authMode === "oauth" && outcome.kind === "failed" &&
-        ["unresolved_connector", "not_entitled", "not_found", "workspace_archived", "workspace_not_found", "workspace_forbidden"].includes(outcome.code)) {
+        ["not_entitled", "not_found", "workspace_archived", "workspace_not_found", "workspace_forbidden"].includes(outcome.code)) {
       unresolvedConnectorIds.push(...linkedDestinations
         .filter((entry) => entry.workspaceId === destination.workspaceId)
         .map((entry) => entry.connectorId!));
-      continue;
     }
     // `kind` is the discriminator this loop branches on and has no meaning in the
     // payload, so it is destructured away rather than published as a second status.
@@ -853,14 +853,6 @@ export async function runRecall(
     }
   }
 
-  if (unresolvedConnectorIds.length > 0 && answers.length + nothingRemembered.length + failed.length === 0) {
-    return bail(
-      "error",
-      "no_destination",
-      `no destination could be used for recall (${unresolvedConnectorIds.join(", ")}); reconnect to review this project's Workspaces`,
-      { unresolvedConnectorIds },
-    );
-  }
   const status = aggregateStatus({ answers, nothingRemembered, failed, unresolvedConnectorIds });
   return {
     status,
@@ -899,7 +891,7 @@ function printPayload(payload: RecallPayload): void {
     // no agent to notice a destination quietly missing from the answers.
     console.error(
       `Augenta recall: no answer from ${payload.unresolvedConnectorIds.join(", ")} — ` +
-        "those links could not be used or their Workspaces refused recall; reconnect to review them.",
+        "those links could not be used or their Workspaces refused recall; see any Workspace failure above before reconnecting.",
     );
   }
   if (payload.message && payload.answers.length === 0) {
@@ -934,7 +926,7 @@ if (isMain(import.meta.url)) {
     // environment without recall (`recall_unavailable`), or a partial result —
     // and making any of them non-zero would turn a normal answer into a broken
     // command for anyone who scripts this.
-    if (payload.status === "error") process.exitCode = 1;
+    if (payload.status === "error" || payload.status === "recall_timeout") process.exitCode = 1;
   } catch (error) {
     const message = describeError(error);
     if (wantsJson) {

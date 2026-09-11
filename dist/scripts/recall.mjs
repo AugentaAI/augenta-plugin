@@ -128,7 +128,7 @@ function loadProjectConfig(projectRoot) {
       return;
     const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
     const settings = {};
-    for (const key of ["endpoint", "controlUrl", "ingestUrl"]) {
+    for (const key of ["endpoint", "controlUrl", "ingestUrl", "discoveredGateway"]) {
       const raw = value[key];
       if (raw !== undefined && typeof raw !== "string")
         return;
@@ -904,10 +904,6 @@ async function askDestination(ctx, destination) {
     } catch {
       parsed = undefined;
     }
-    const error = errorFields(parsed, text);
-    if (ctx.profileId && (response.status === 403 || response.status === 404 && error.structured && error.code !== "empty_scope")) {
-      return { kind: "failed", code: "unresolved_connector", message: "this destination is not accessible; reconnect" };
-    }
     return classifyRecallResponse({
       status: response.status,
       body: parsed,
@@ -940,13 +936,15 @@ function aggregateStatus(payload) {
     return "answered";
   if (nothingRemembered.length === total)
     return "nothing_remembered";
-  if (payload.unresolvedConnectorIds?.length && answers.length + nothingRemembered.length === 0)
-    return "error";
-  if (failed.length === total) {
+  if (answers.length + nothingRemembered.length === 0) {
+    if (failed.length === 0)
+      return "error";
     if (failed.every((f) => f.code === "need_login"))
       return "need_login";
     if (failed.every((f) => f.code === "recall_unavailable"))
       return "recall_unavailable";
+    if (failed.every((f) => f.code === "recall_timeout"))
+      return "recall_timeout";
     return "error";
   }
   return "partially_answered";
@@ -1068,9 +1066,8 @@ async function runRecall(resolved, args) {
     const liveName = named.find((workspace) => workspace.id === destination.workspaceId)?.name;
     if (liveName)
       destination.workspaceName = liveName;
-    if (cfg.authMode === "oauth" && outcome.kind === "failed" && ["unresolved_connector", "not_entitled", "not_found", "workspace_archived", "workspace_not_found", "workspace_forbidden"].includes(outcome.code)) {
+    if (cfg.authMode === "oauth" && outcome.kind === "failed" && ["not_entitled", "not_found", "workspace_archived", "workspace_not_found", "workspace_forbidden"].includes(outcome.code)) {
       unresolvedConnectorIds.push(...linkedDestinations.filter((entry) => entry.workspaceId === destination.workspaceId).map((entry) => entry.connectorId));
-      continue;
     }
     if (outcome.kind === "answered") {
       const { kind: _answered, ...fields } = outcome;
@@ -1081,9 +1078,6 @@ async function runRecall(resolved, args) {
       const { kind: _failed, ...fields } = outcome;
       failed.push({ ...destination, ...fields });
     }
-  }
-  if (unresolvedConnectorIds.length > 0 && answers.length + nothingRemembered.length + failed.length === 0) {
-    return bail("error", "no_destination", `no destination could be used for recall (${unresolvedConnectorIds.join(", ")}); reconnect to review this project's Workspaces`, { unresolvedConnectorIds });
   }
   const status = aggregateStatus({ answers, nothingRemembered, failed, unresolvedConnectorIds });
   return {
@@ -1115,7 +1109,7 @@ function printPayload(payload) {
     console.error(`Augenta recall: could not ask ${label}: ${entry.message}`);
   }
   if (payload.unresolvedConnectorIds?.length) {
-    console.error(`Augenta recall: no answer from ${payload.unresolvedConnectorIds.join(", ")} — ` + "those links could not be used or their Workspaces refused recall; reconnect to review them.");
+    console.error(`Augenta recall: no answer from ${payload.unresolvedConnectorIds.join(", ")} — ` + "those links could not be used or their Workspaces refused recall; see any Workspace failure above before reconnecting.");
   }
   if (payload.message && payload.answers.length === 0) {
     console.error(`Augenta recall: ${payload.message}`);
@@ -1137,7 +1131,7 @@ if (isMain(import.meta.url)) {
     } else {
       printPayload(payload);
     }
-    if (payload.status === "error")
+    if (payload.status === "error" || payload.status === "recall_timeout")
       process.exitCode = 1;
   } catch (error) {
     const message = describeError(error);

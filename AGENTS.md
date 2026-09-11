@@ -237,6 +237,9 @@ and the differences are deliberate:
   Deduplicate by Workspace only after checking every selected link, so another
   active link to the same Workspace can still be used. The recall API separately
   authorizes Workspace membership; that alone does not detect a disabled link.
+  Keep a Workspace refusal's code and message in `failed` alongside affected
+  unresolved ids; an active link can still lack read access, and reconnecting
+  does not repair an entitlement denial or reopen an archived Workspace.
 - **The client never names an organization on the wire.** It knows the org id
   locally for display. It sends only the existing `workspace` selector; the platform
   composes the retrieval `scope` from the authenticated identity. Do not add a
