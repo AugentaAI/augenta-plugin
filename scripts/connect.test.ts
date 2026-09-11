@@ -248,6 +248,7 @@ describe("project config writers", () => {
     const path = writeApiKeyConfig(project, "sk-aug-test.secret", "http://gw.example.com");
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
       authMode: "api-key",
+      captureSince: expect.any(String),
       apiKey: "sk-aug-test.secret",
       endpoint: "http://gw.example.com",
     });
@@ -259,11 +260,12 @@ describe("project config writers", () => {
     const path = writeApiKeyConfig(project, "sk-aug-test.secret");
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
       authMode: "api-key",
+      captureSince: expect.any(String),
       apiKey: "sk-aug-test.secret",
     });
   });
 
-  test("oauth config contains only the profile, Connectors, and endpoint override", () => {
+  test("oauth config contains profile, Connectors, consent time, and endpoint override", () => {
     const path = writeOAuthConfig(
       project,
       "profile_123",
@@ -274,6 +276,7 @@ describe("project config writers", () => {
     // installed plugin read the scalar and go quietly single-destination.
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
       authMode: "oauth",
+      captureSince: expect.any(String),
       profileId: "profile_123",
       connectorIds: ["connector_456", "connector_789"],
       endpoint: "https://dev.example.com",
@@ -331,6 +334,7 @@ describe("platform-key connection", () => {
     expect(result.connector.id).toBe("connector_123");
     expect(JSON.parse(readFileSync(result.path, "utf8"))).toEqual({
       authMode: "api-key",
+      captureSince: expect.any(String),
       apiKey: "sk-aug-live.secret",
       endpoint: "https://gw.example.com",
     });
@@ -1277,6 +1281,7 @@ describe("JSON verbs", () => {
     expect(JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")))
       .toEqual({
         authMode: "oauth",
+      captureSince: expect.any(String),
         profileId: profileIdFor(
           { issuer: ISSUER, clientId: "client_public", gateway: GATEWAY },
           "org_1",

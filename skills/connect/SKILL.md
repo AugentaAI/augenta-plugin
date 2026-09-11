@@ -173,6 +173,10 @@ from `signedInAs`:
   captured activity** — the audience is the union of all of them;
 - and, if `environment` is not `prod`, which environment this is.
 
+For Codex, also explain that capture starts with native turns beginning after
+connection: the connection turn and older history are excluded. Project-memory
+capture keeps its existing scope.
+
 **If your harness's user-input mechanism can offer several options at once**, ask
 one question listing every entry from `workspaces`, with the Workspaces in
 `destinations` already selected, plus a final option `Create a new Workspace`.
@@ -220,6 +224,12 @@ Creation and connection are separate calls: never pass `--create-workspace` and
 `--workspace` together, which is refused as `conflicting_verbs`.
 
 ## 4. Confirm
+
+Connector creation proves configuration only. After the next completed turn,
+run the same installed `dist/scripts/connect.mjs` with `--project <projectRoot> --json --health` to check activity. If dispatch is absent, direct the user to
+review the plugin hooks in their host and follow its activation/restart guidance.
+Never change host trust records or invoke capture/delivery manually as proof.
+Report API acceptance separately from verified ingestion.
 
 On `connected`, name **every** entry in `destinations` — this project now feeds
 each of them, through that entry's `connectorId`. When there is more than one,

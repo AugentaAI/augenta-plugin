@@ -67,6 +67,8 @@ export interface CaptureEvent {
    * trajectory-domain data; it rides on the step, not the envelope.
    */
   turn?: number;
+  /** Native boundary evidence, or explicitly ambiguous recovery. */
+  turn_source?: "native" | "unknown";
   kind: EventKind;
   role: EventRole;
   tool_name?: string;

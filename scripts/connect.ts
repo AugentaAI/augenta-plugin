@@ -16,6 +16,7 @@
  * subset invariant and `linkForWorkspace` for why links are adopted, never moved.
  * A platform key stays single-destination (`verifyApiKeyConnection`).
  */
+import { captureHealth } from "../capture/health";
 import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -80,6 +81,7 @@ interface Args {
   /** Check the key ALREADY on disk against the gateway and write nothing. */
   verifyOnly?: boolean;
   probe?: boolean;
+  health?: boolean;
   login?: boolean;
   awaitLogin?: boolean;
   waitSeconds?: number;
@@ -156,6 +158,8 @@ export function parseArgs(argv: string[]): Args {
       args.verifyOnly = true;
     } else if (flag === "--json") {
       args.json = true;
+    } else if (flag === "--health") {
+      args.health = true;
     } else if (flag === "--probe") {
       args.probe = true;
     } else if (flag === "--login") {
@@ -179,6 +183,7 @@ export function writeApiKeyConfig(
     `${JSON.stringify(
       {
         authMode: "api-key",
+        captureSince: new Date().toISOString(),
         apiKey,
         ...(endpoint ? { endpoint } : {}),
       },
@@ -219,6 +224,7 @@ export function writeOAuthConfig(
     `${JSON.stringify(
       {
         authMode: "oauth",
+        captureSince: new Date().toISOString(),
         profileId,
         connectorIds: [...connectorIds],
         ...(endpoint ? { endpoint } : {}),
@@ -1288,6 +1294,7 @@ export async function connectToWorkspaces(
     // reliable than remembering to check whether an array is empty.
     status: failed.length > 0 ? "partially_connected" : "connected",
     destinations,
+    captureHealth: captureHealth(resolved.projectRoot),
     ...(failed.length > 0
       ? {
           failed: failed.map(
@@ -1314,6 +1321,9 @@ export async function runJsonVerb(
   resolved: ResolvedProject,
   args: Args,
 ): Promise<JsonPayload> {
+  if (args.health && (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe)) {
+    return { status: "error", code: "conflicting_verbs", message: "--health is a local read-only operation; run it by itself with --json" };
+  }
   // The platform-key path writes a secret given on the command line, so it stays
   // outside JSON mode: an agent must never be the process that handles one.
   if (args.apiKey) {
@@ -1343,6 +1353,7 @@ export async function runJsonVerb(
   if (args.workspaces?.length) return connectToWorkspaces(resolved, args);
   if (args.awaitLogin) return awaitLogin(args);
   if (args.login) return startLogin(args);
+  if (args.health) return { status: "capture_health", ...captureHealth(resolved.projectRoot) };
   if (args.probe) return probeConnection(resolved, args);
   return {
     status: "error",

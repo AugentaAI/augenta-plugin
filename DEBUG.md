@@ -214,3 +214,72 @@ and commit the rebuilt `dist/` in the same change instead.
 `plugin details` must report the manifest version, both skills (`connect` and
 `recall`), every event in `hooks/hooks.json`, and no load errors. It cannot catch an over-declared
 hook timeout — only a real Codex install can. See `AGENTS.md`.
+
+## Capture health and native-turn acceptance
+
+Use the installed version's connect bundle for a local, read-only diagnostic:
+
+```bash
+node <plugin-root>/dist/scripts/connect.mjs --project <project-root> --json --health
+```
+
+This command makes no network request and prints no credentials, transcript
+contents, local paths or Connector IDs. `configured` means the config parsed;
+`dispatch` means a Node hook entrypoint ran; `capture` records the latest local
+capture result; `pendingBytes` is the current queue depth; `delivery` records API
+acceptance/retry/rejection. Success counters count observed successful capture
+passes and accepted HTTP requests, not unique turns or lifetime deliveries.
+`lastSuccessAt` survives a later failure and spool compaction. Ingestion into the
+lake remains `unverified`: accepting an HTTP request is a different boundary.
+The counters are local best-effort diagnostics, not a billing ledger.
+
+If there is no dispatch, inspect the host's hook approval and plugin activation
+UI first, then its runtime launcher errors. This plugin cannot infer approval
+from a manifest or change a host's trust state. A missing transcript after
+dispatch is reported as `missing_transcript`; a queue with retries points to the
+delivery boundary. Malformed stdin before a project can be identified cannot
+produce project health. The launcher still emits its bounded Node diagnostic
+for connected projects when Node cannot start. Deleting capture/turn cursors is
+not a recovery procedure: it can replay history and reset sequence identity.
+
+The installed host regression uses a disposable home, a real marketplace
+installation and real Codex lifecycle dispatch, with a deterministic local model
+endpoint and a local ingestion receiver:
+
+```bash
+bun scripts/codex-lifecycle-e2e.ts /absolute/path/to/codex
+```
+
+It exercises connection after an existing task, a fresh connected task, a tool
+call followed by a text-only turn, final assistant persistence, process restart,
+offline retry, disabled capture and accepted-step deduplication. Tool failures
+from a nested sandbox still exercise the tool lifecycle. No capture or shipper
+function is called manually. The invocation-only hook-trust flag is used solely
+for these vetted repository hooks in the disposable profile. It does **not**
+prove a user's approval flow. It never edits an installed cache or trust record.
+
+Measured 2026-09-11 with Node 20+ bundles built by the pinned Bun:
+
+| Host | Installed lifecycle fixture | Active desktop approval/activation | Hosted ingestion |
+| --- | --- | --- | --- |
+| Shell Codex CLI 0.144.4 | Passed full regression | Not applicable | Not tested |
+| Desktop-embedded Codex 0.153.4, launched as CLI | Passed full regression | Not tested | Not tested |
+| Active desktop session using the embedded runtime | Not established | Unresolved | Not tested |
+
+Read-only process inspection confirmed the embedded executable differs from the
+shell CLI. Local native rollout schemas include `turn_id` on `task_started`,
+`turn_context` and `task_complete`. The start marker's `started_at` is Unix seconds;
+its envelope `timestamp` preserves the subsecond consent boundary. Fixtures use
+synthetic text and identifiers in those observed shapes.
+
+**Release acceptance remains open:** the affected active desktop's first failing
+boundary has not been established. Its control socket was unavailable and the
+computer-use tool refused access to the Codex app. An independently launched host
+or a successful direct bundle test cannot close that gap. Complete two short
+turns in the actual desktop after supported approval/activation, correlate hook
+execution with local health and destination ingestion, and repeat both fresh and
+mid-task connection before claiming the desktop defect fixed. Do not broaden
+capture scope, bulk-replay history, edit trust files, or modify a marketplace
+cache to make that acceptance pass. Historical recovery needs a separately
+explicit transcript/time range and destination selection; this change adds no
+bulk recovery command.

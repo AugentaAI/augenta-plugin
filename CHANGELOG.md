@@ -33,6 +33,28 @@ release a user can read.
   connection settings and how the plugin works. Plugin behavior is unchanged;
   no reconnect is required.
 
+## [0.10.2] — 2026-09-11
+
+### Fixed
+
+- Codex capture uses native turn IDs, so delayed reads and missing prompt hooks
+  no longer combine known turns. Unknown history is marked explicitly. Concurrent
+  capture processes serialize their cursor updates.
+- Local capture health separates hook activity, capture, pending delivery and API
+  acceptance. Success timestamps survive queue compaction and later failures.
+  Check with the installed connect bundle's `--project <path> --json --health`.
+
+### Changed
+
+- New connections exclude Codex turns that started before connection, including
+  the connection turn. Existing configs keep their scope until reconnected;
+  reconnecting sets a new capture baseline. No reconnect is required for the
+  native-turn fix. Project-memory and destination selection retain their scope.
+- Added a real installed Codex lifecycle regression with a local fixture receiver.
+  Active desktop approval/activation and hosted ingestion remain release acceptance
+  requirements; these changes do not claim to resolve an unobserved host dispatch
+  failure. No hook manifest or host trust records are changed.
+
 ## [0.10.1] — 2026-09-08
 
 Claude captures now distinguish tools the harness denied from tools that ran and failed.
@@ -325,6 +347,7 @@ authentication failure.
   memory for Claude Code and Codex.
 
 [Unreleased]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.1...HEAD
+[0.10.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.1...HEAD
 [0.10.1]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.10.1
 [0.10.0]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.10.0
 [0.9.3]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.9.3

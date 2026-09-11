@@ -13,6 +13,7 @@
  *
  * Only node builtins here, so it costs the importing bundle almost nothing.
  */
+import { recordHealth } from "./health";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -57,8 +58,10 @@ export function spawnShipper(projectRoot: string): void {
       stdio: "ignore",
       env: process.env,
     });
+    child.once("error", () => recordHealth(projectRoot, "delivery", "failed"));
     child.unref();
   } catch {
+    recordHealth(projectRoot, "delivery", "failed");
     /* spawning the shipper is best-effort; the next Stop will retry the drain */
   }
 }

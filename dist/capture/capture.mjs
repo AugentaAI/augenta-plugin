@@ -34,8 +34,8 @@ var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, 
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // capture/capture.ts
-import { existsSync as existsSync8, openSync, fstatSync, readSync, closeSync } from "node:fs";
-import { basename as basename2, dirname as dirname6, join as join8 } from "node:path";
+import { existsSync as existsSync8, openSync as openSync2, fstatSync, readSync, closeSync as closeSync2 } from "node:fs";
+import { basename as basename2, dirname as dirname6, join as join10 } from "node:path";
 
 // capture/sanitize.ts
 function normalizedKey(key) {
@@ -770,6 +770,125 @@ class Outbox {
 // capture/capture-cursor.ts
 import { join as join3, dirname } from "node:path";
 import { mkdirSync as mkdirSync3, existsSync as existsSync3, readFileSync as readFileSync2, writeFileSync as writeFileSync3, renameSync as renameSync2 } from "node:fs";
+
+// capture/native-turns.ts
+function validNativeTurns(value) {
+  if (!value || typeof value !== "object")
+    return false;
+  const s = value;
+  return Number.isSafeInteger(s.ordinal) && s.ordinal >= 0 && !!s.ids && typeof s.ids === "object" && !Array.isArray(s.ids) && Object.values(s.ids).every((n) => Number.isSafeInteger(n) && n > 0 && n <= s.ordinal) && (s.active === undefined || typeof s.active === "string" && Object.hasOwn(s.ids, s.active)) && (s.eligible === undefined || typeof s.eligible === "boolean") && (s.captureSince === undefined || typeof s.captureSince === "string");
+}
+function normalizeNativeTurns(opts, prior, captureSince) {
+  const turns = prior ? { ...prior, ids: { ...prior.ids } } : { ids: {}, ordinal: 0 };
+  if (turns.captureSince !== captureSince && turns.active)
+    turns.eligible = false;
+  turns.captureSince = captureSince;
+  const events = [];
+  const raws = [];
+  const records = [];
+  let nextSeq = opts.startSeq;
+  let nextOffset = opts.startOffset;
+  let model = opts.ctx.model;
+  let batch = [];
+  let batchTurn = 0;
+  let batchSource = "unknown";
+  let batchEligible = !captureSince;
+  const since = captureSince ? Date.parse(captureSince) : undefined;
+  const flush = () => {
+    if (!batch.length)
+      return;
+    const result = normalizeCodexRollout({
+      ...opts,
+      lines: batch,
+      startSeq: nextSeq,
+      startOffset: nextOffset,
+      ctx: { ...opts.ctx, model }
+    });
+    nextOffset = result.nextOffset;
+    model = result.lastModel ?? model;
+    if (batchEligible) {
+      nextSeq = result.nextSeq;
+      const rawRecords = result.raws.map(({ raw, sid }) => ({
+        raw,
+        sid,
+        src: "codex",
+        proj: opts.ctx.project,
+        turn: batchTurn
+      }));
+      for (const e of result.events) {
+        e.turn = batchTurn;
+        e.turn_source = batchSource;
+      }
+      const covered = new Set(result.events.map((e) => e.sid));
+      for (const sid of new Set(result.raws.map((r) => r.sid))) {
+        if (covered.has(sid))
+          continue;
+        result.events.push({
+          src: "codex",
+          sid,
+          proj: opts.ctx.project,
+          ts: timestampOf(result.raws[0]?.raw),
+          seq: nextSeq++,
+          kind: "session",
+          role: "system",
+          turn: batchTurn,
+          turn_source: batchSource,
+          text: "[augenta: transcript records with no mappable steps — raw channel attached]"
+        });
+      }
+      events.push(...result.events);
+      raws.push(...result.raws);
+      records.push(...result.events, ...rawRecords);
+    }
+    batch = [];
+  };
+  for (const line of opts.lines) {
+    let x;
+    try {
+      x = JSON.parse(line);
+    } catch {}
+    const p = x?.payload;
+    const starts = x?.type === "event_msg" && p?.type === "task_started" || x?.type === "turn_context";
+    const ends = x?.type === "event_msg" && ["task_complete", "turn_aborted"].includes(p?.type ?? "");
+    if (starts && typeof p?.turn_id === "string" && p.turn_id.length > 0 && p.turn_id.length <= 256) {
+      if (turns.active !== p.turn_id) {
+        flush();
+        if (!Object.hasOwn(turns.ids, p.turn_id)) {
+          Object.defineProperty(turns.ids, p.turn_id, { value: ++turns.ordinal, enumerable: true, writable: true, configurable: true });
+        }
+        turns.active = p.turn_id;
+        const timestamp = Date.parse(x?.timestamp ?? "");
+        turns.eligible = since === undefined || Number.isFinite(timestamp) && timestamp >= since;
+      }
+    }
+    const turn = turns.active ? turns.ids[turns.active] : 0;
+    const source = turns.active ? "native" : "unknown";
+    const eligible = turns.active ? turns.eligible !== false : since === undefined;
+    if (batch.length && (turn !== batchTurn || source !== batchSource || eligible !== batchEligible))
+      flush();
+    batchTurn = turn;
+    batchSource = source;
+    batchEligible = eligible;
+    batch.push(line);
+    if (ends && p?.turn_id === turns.active) {
+      flush();
+      delete turns.active;
+      delete turns.eligible;
+    }
+  }
+  flush();
+  return { events, raws, records, nextSeq, nextOffset, lastModel: model, turns };
+}
+function timestampOf(raw) {
+  try {
+    const timestamp = JSON.parse(raw ?? "{}").timestamp;
+    if (typeof timestamp === "string" && Number.isFinite(Date.parse(timestamp)))
+      return timestamp;
+  } catch {}
+  return new Date().toISOString();
+}
+
+// capture/capture-cursor.ts
 var ZERO = { offset: 0, seq: 0 };
 
 class CaptureState {
@@ -795,6 +914,7 @@ class CaptureState {
       return { ...ZERO };
     }
     return {
+      ...validNativeTurns(c.nativeTurns) ? { nativeTurns: c.nativeTurns } : {},
       offset: c.offset,
       seq: c.seq,
       ...c.rebaseline === true ? { rebaseline: true } : {},
@@ -812,49 +932,60 @@ class CaptureState {
   }
 }
 
-// capture/turn-cursor.ts
-import { join as join4, dirname as dirname2 } from "node:path";
-import { mkdirSync as mkdirSync4, existsSync as existsSync4, readFileSync as readFileSync3, writeFileSync as writeFileSync4, renameSync as renameSync3 } from "node:fs";
-class TurnState {
-  path;
-  projectRoot;
-  constructor(projectRoot) {
-    this.projectRoot = projectRoot;
-    this.path = join4(projectRoot, ".augenta", "state", "turn.json");
-  }
-  readAll() {
-    if (!existsSync4(this.path))
-      return {};
+// capture/capture-lock.ts
+import { mkdirSync as mkdirSync4, openSync, readFileSync as readFileSync3, closeSync, writeFileSync as writeFileSync4, unlinkSync as unlinkSync2, statSync as statSync2 } from "node:fs";
+import { join as join4 } from "node:path";
+function captureLock(projectRoot) {
+  const dir = join4(ensureAugentaDir(projectRoot), "state");
+  mkdirSync4(dir, { recursive: true });
+  const path = join4(dir, "capture.lock");
+  const deadline = Date.now() + 750;
+  do {
     try {
-      const parsed = JSON.parse(readFileSync3(this.path, "utf8"));
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
+      const fd = openSync(path, "wx", 384);
+      try {
+        writeFileSync4(fd, String(process.pid));
+      } finally {
+        closeSync(fd);
+      }
+      return () => {
+        try {
+          unlinkSync2(path);
+        } catch {}
+      };
+    } catch (error) {
+      if (error.code !== "EEXIST")
+        return;
+      try {
+        const pid = Number(readFileSync3(path, "utf8"));
+        if (Number.isSafeInteger(pid) && pid > 0) {
+          try {
+            process.kill(pid, 0);
+          } catch (e) {
+            if (e.code === "ESRCH") {
+              unlinkSync2(path);
+              continue;
+            }
+          }
+        } else if (Date.now() - statSync2(path).mtimeMs > 30000) {
+          unlinkSync2(path);
+          continue;
+        }
+      } catch {}
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
-  }
-  writeAll(all) {
-    ensureAugentaDir(this.projectRoot);
-    mkdirSync4(dirname2(this.path), { recursive: true });
-    const tmp = this.path + ".tmp";
-    writeFileSync4(tmp, JSON.stringify(all));
-    renameSync3(tmp, this.path);
-  }
-  get(transcriptPath) {
-    const v = this.readAll()[transcriptPath];
-    return typeof v === "number" && v >= 0 ? v : 0;
-  }
-  bump(transcriptPath) {
-    const all = this.readAll();
-    const cur = typeof all[transcriptPath] === "number" && all[transcriptPath] >= 0 ? all[transcriptPath] : 0;
-    all[transcriptPath] = cur + 1;
-    this.writeAll(all);
-    return cur + 1;
-  }
+  } while (Date.now() < deadline);
+  return;
 }
 
+// capture/health.ts
+import { mkdirSync as mkdirSync5, readFileSync as readFileSync5, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join6 } from "node:path";
+import { randomUUID } from "node:crypto";
+
 // capture/config.ts
-import { existsSync as existsSync5, readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname3, join as join5 } from "node:path";
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
+import { dirname as dirname2, join as join5 } from "node:path";
 var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
 function parseConnectorIds(value) {
   const raw = Array.isArray(value.connectorIds) ? value.connectorIds : [];
@@ -878,9 +1009,9 @@ function resolveProjectRoot(cwd) {
     return;
   let dir = cwd;
   for (let i = 0;i < 30; i++) {
-    if (existsSync5(configPath(dir)))
+    if (existsSync4(configPath(dir)))
       return dir;
-    const parent = dirname3(dir);
+    const parent = dirname2(dir);
     if (parent === dir)
       return;
     dir = parent;
@@ -890,6 +1021,9 @@ function resolveProjectRoot(cwd) {
 function loadProjectConfig(projectRoot) {
   try {
     const value = JSON.parse(readFileSync4(configPath(projectRoot), "utf8"));
+    if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
+      return;
+    const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
     const endpoint = typeof value.endpoint === "string" && value.endpoint.trim() ? value.endpoint.trim() : undefined;
     if (value.authMode === "oauth") {
       const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
@@ -898,6 +1032,7 @@ function loadProjectConfig(projectRoot) {
         return;
       return {
         authMode: "oauth",
+        ...captureSince ? { captureSince } : {},
         profileId,
         connectorIds,
         ...endpoint ? { endpoint } : {},
@@ -910,6 +1045,7 @@ function loadProjectConfig(projectRoot) {
         return;
       return {
         authMode: "api-key",
+        ...captureSince ? { captureSince } : {},
         apiKey,
         ...endpoint ? { endpoint } : {},
         projectRoot
@@ -940,20 +1076,114 @@ function captureEnabled(cfg) {
   return cfg.authMode === "oauth" ? Boolean(cfg.profileId) && (cfg.connectorIds?.length ?? 0) > 0 : Boolean(cfg.apiKey);
 }
 
+// capture/health.ts
+var STAGES = ["dispatch", "capture", "delivery"];
+var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
+function read(projectRoot, stage) {
+  try {
+    const s = JSON.parse(readFileSync5(join6(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
+      return;
+    return {
+      at: new Date(s.at).toISOString(),
+      outcome: s.outcome,
+      count: s.count,
+      successes: s.successes,
+      ...Number.isFinite(Date.parse(s.lastSuccessAt)) ? { lastSuccessAt: new Date(s.lastSuccessAt).toISOString() } : {}
+    };
+  } catch {
+    return;
+  }
+}
+function recordHealth(projectRoot, stage, outcome, count = 0) {
+  try {
+    const dir = join6(ensureAugentaDir(projectRoot), "state");
+    mkdirSync5(dir, { recursive: true });
+    const old = read(projectRoot, stage);
+    const at = new Date().toISOString();
+    const success = outcome === "captured" || outcome === "accepted";
+    const value = {
+      at,
+      outcome,
+      count,
+      successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
+      ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
+    };
+    const file = join6(dir, `health-${stage}.json`);
+    const tmp = `${file}.${randomUUID()}.tmp`;
+    writeFileSync5(tmp, JSON.stringify(value), { mode: 384 });
+    renameSync3(tmp, file);
+  } catch {}
+}
+function captureHealth(projectRoot) {
+  const cfg = loadProjectConfig(projectRoot);
+  const activity = Object.fromEntries(STAGES.map((stage) => [stage, read(projectRoot, stage) ?? null]));
+  return {
+    configured: !!cfg,
+    enabled: captureEnabled(cfg),
+    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds.length : cfg ? 1 : 0,
+    pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
+    ...activity,
+    hostApproval: "unknown",
+    ingestion: "unverified",
+    nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch ? "check_host_hook_approval_and_activation" : "complete_a_turn_then_check_activity"
+  };
+}
+
+// capture/turn-cursor.ts
+import { join as join7, dirname as dirname3 } from "node:path";
+import { mkdirSync as mkdirSync6, existsSync as existsSync5, readFileSync as readFileSync6, writeFileSync as writeFileSync6, renameSync as renameSync4 } from "node:fs";
+class TurnState {
+  path;
+  projectRoot;
+  constructor(projectRoot) {
+    this.projectRoot = projectRoot;
+    this.path = join7(projectRoot, ".augenta", "state", "turn.json");
+  }
+  readAll() {
+    if (!existsSync5(this.path))
+      return {};
+    try {
+      const parsed = JSON.parse(readFileSync6(this.path, "utf8"));
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  writeAll(all) {
+    ensureAugentaDir(this.projectRoot);
+    mkdirSync6(dirname3(this.path), { recursive: true });
+    const tmp = this.path + ".tmp";
+    writeFileSync6(tmp, JSON.stringify(all));
+    renameSync4(tmp, this.path);
+  }
+  get(transcriptPath) {
+    const v = this.readAll()[transcriptPath];
+    return typeof v === "number" && v >= 0 ? v : 0;
+  }
+  bump(transcriptPath) {
+    const all = this.readAll();
+    const cur = typeof all[transcriptPath] === "number" && all[transcriptPath] >= 0 ? all[transcriptPath] : 0;
+    all[transcriptPath] = cur + 1;
+    this.writeAll(all);
+    return cur + 1;
+  }
+}
+
 // capture/memory.ts
 import { createHash } from "node:crypto";
 import {
   existsSync as existsSync6,
   lstatSync,
-  mkdirSync as mkdirSync5,
-  readFileSync as readFileSync5,
+  mkdirSync as mkdirSync7,
+  readFileSync as readFileSync7,
   readdirSync,
-  renameSync as renameSync4,
-  statSync as statSync2,
-  writeFileSync as writeFileSync5
+  renameSync as renameSync5,
+  statSync as statSync3,
+  writeFileSync as writeFileSync7
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname as dirname4, extname, isAbsolute, join as join6, relative, resolve, sep } from "node:path";
+import { basename, dirname as dirname4, extname, isAbsolute, join as join8, relative, resolve, sep } from "node:path";
 var MAX_DOCUMENT_EXPERIENCE_BYTES = 512 * 1024;
 function sameSnapshot(before, after) {
   return before.dev === after.dev && before.ino === after.ino && before.mode === after.mode && before.size === after.size && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs;
@@ -962,7 +1192,7 @@ function sha256(input) {
   return createHash("sha256").update(input).digest("hex");
 }
 function memoryStatePath(projectRoot) {
-  return join6(projectRoot, ".augenta", "state", "memory.json");
+  return join8(projectRoot, ".augenta", "state", "memory.json");
 }
 function validEntry(value) {
   const e = value;
@@ -970,7 +1200,7 @@ function validEntry(value) {
 }
 function readMemoryIndex(projectRoot) {
   try {
-    const parsed = JSON.parse(readFileSync5(memoryStatePath(projectRoot), "utf8"));
+    const parsed = JSON.parse(readFileSync7(memoryStatePath(projectRoot), "utf8"));
     const rawDocuments = parsed.documents;
     if (!parsed || parsed.version !== 1 || !rawDocuments || typeof rawDocuments !== "object") {
       return { version: 1, documents: {} };
@@ -986,13 +1216,13 @@ function readMemoryIndex(projectRoot) {
   }
 }
 function writeMemoryIndex(projectRoot, index) {
-  const stateDir = join6(ensureAugentaDir(projectRoot), "state");
-  const path = join6(stateDir, "memory.json");
+  const stateDir = join8(ensureAugentaDir(projectRoot), "state");
+  const path = join8(stateDir, "memory.json");
   const tmp = path + ".tmp";
   try {
-    mkdirSync5(stateDir, { recursive: true });
-    writeFileSync5(tmp, JSON.stringify(index));
-    renameSync4(tmp, path);
+    mkdirSync7(stateDir, { recursive: true });
+    writeFileSync7(tmp, JSON.stringify(index));
+    renameSync5(tmp, path);
     return true;
   } catch {
     return false;
@@ -1011,7 +1241,7 @@ function normalizeLogicalPath(path) {
 function scanClaudeMemory(transcriptPath) {
   if (!transcriptPath)
     return { complete: false, documents: [] };
-  const root = join6(dirname4(transcriptPath), "memory");
+  const root = join8(dirname4(transcriptPath), "memory");
   try {
     if (!existsSync6(root) || !lstatSync(root).isDirectory())
       return { complete: false, documents: [] };
@@ -1035,7 +1265,7 @@ function scanClaudeMemory(transcriptPath) {
       return;
     }
     for (const entry of entries) {
-      const path = join6(dir, entry.name);
+      const path = join8(dir, entry.name);
       if (entry.isSymbolicLink())
         continue;
       if (entry.isDirectory()) {
@@ -1050,7 +1280,7 @@ function scanClaudeMemory(transcriptPath) {
           complete = false;
           continue;
         }
-        const text = readFileSync5(path, "utf8");
+        const text = readFileSync7(path, "utf8");
         const after = lstatSync(path);
         if (!after.isFile() || !sameSnapshot(before, after)) {
           complete = false;
@@ -1144,18 +1374,18 @@ function parseCodexTaskGroups(text, projectRoot) {
   return documents;
 }
 function scanCodexMemory(projectRoot, codexHome) {
-  const root = codexHome ?? process.env.CODEX_HOME ?? join6(homedir(), ".codex");
-  const path = join6(root, "memories", "MEMORY.md");
+  const root = codexHome ?? process.env.CODEX_HOME ?? join8(homedir(), ".codex");
+  const path = join8(root, "memories", "MEMORY.md");
   try {
     if (!existsSync6(path))
       return { complete: false, documents: [] };
     const linkBefore = lstatSync(path);
-    const before = statSync2(path);
+    const before = statSync3(path);
     if (!before.isFile())
       return { complete: false, documents: [] };
-    const text = readFileSync5(path, "utf8");
+    const text = readFileSync7(path, "utf8");
     const linkAfter = lstatSync(path);
-    const after = statSync2(path);
+    const after = statSync3(path);
     if (!after.isFile() || !sameSnapshot(linkBefore, linkAfter) || !sameSnapshot(before, after))
       return { complete: false, documents: [] };
     const sourceUpdatedAt = after.mtime.toISOString();
@@ -1338,14 +1568,14 @@ function captureAgentMemory(opts) {
 // capture/shipper.ts
 import { spawn } from "node:child_process";
 import { existsSync as existsSync7 } from "node:fs";
-import { dirname as dirname5, join as join7 } from "node:path";
+import { dirname as dirname5, join as join9 } from "node:path";
 import { fileURLToPath } from "node:url";
 function shipperEntry() {
   const self = fileURLToPath(import.meta.url);
   const ext = self.endsWith(".ts") ? ".ts" : ".mjs";
   const here = dirname5(self);
-  const sibling = join7(here, `ship${ext}`);
-  return existsSync7(sibling) ? sibling : join7(here, "..", "capture", `ship${ext}`);
+  const sibling = join9(here, `ship${ext}`);
+  return existsSync7(sibling) ? sibling : join9(here, "..", "capture", `ship${ext}`);
 }
 function spawnShipper(projectRoot) {
   try {
@@ -1354,8 +1584,11 @@ function spawnShipper(projectRoot) {
       stdio: "ignore",
       env: process.env
     });
+    child.once("error", () => recordHealth(projectRoot, "delivery", "failed"));
     child.unref();
-  } catch {}
+  } catch {
+    recordHealth(projectRoot, "delivery", "failed");
+  }
 }
 
 // hooks/harness.ts
@@ -1459,7 +1692,7 @@ function resolveMemoryHarness(transcriptPath) {
     return "claude-code";
   let fd = -1;
   try {
-    fd = openSync(transcriptPath, "r");
+    fd = openSync2(transcriptPath, "r");
     const size = fstatSync(fd).size;
     if (size <= 0)
       return "claude-code";
@@ -1471,7 +1704,7 @@ function resolveMemoryHarness(transcriptPath) {
     return "claude-code";
   } finally {
     if (fd >= 0)
-      closeSync(fd);
+      closeSync2(fd);
   }
 }
 function shouldFlush(payload) {
@@ -1498,10 +1731,10 @@ function resolveCaptureTarget(payload) {
     return { transcriptPath: supplied, agentId, agentType };
   if (!sessionTranscript || !agentId)
     return { transcriptPath: undefined };
-  const derived = join8(dirname6(sessionTranscript), basename2(sessionTranscript, ".jsonl"), "subagents", `agent-${agentId}.jsonl`);
+  const derived = join10(dirname6(sessionTranscript), basename2(sessionTranscript, ".jsonl"), "subagents", `agent-${agentId}.jsonl`);
   return existsSync8(derived) ? { transcriptPath: derived, agentId, agentType } : { transcriptPath: undefined };
 }
-function runCapture(payload, opts = {}) {
+function captureUnderLock(payload, opts = {}) {
   const projectRoot = opts.projectRoot ?? resolveProjectRoot(payload.cwd);
   const { transcriptPath, agentId, agentType } = resolveCaptureTarget(payload);
   const flush = shouldFlush(payload);
@@ -1527,8 +1760,10 @@ function runCapture(payload, opts = {}) {
       spawnShipper(projectRoot);
     return { appended, flushed: flush };
   };
-  if (!transcriptPath || !existsSync8(transcriptPath))
+  if (!transcriptPath || !existsSync8(transcriptPath)) {
+    recordHealth(projectRoot, "capture", "missing_transcript");
     return finish(0);
+  }
   const state = new CaptureState(projectRoot);
   const cursor = state.get(transcriptPath);
   let readFrom = cursor.offset;
@@ -1536,7 +1771,7 @@ function runCapture(payload, opts = {}) {
   let tailBuf;
   let fd = -1;
   try {
-    fd = openSync(transcriptPath, "r");
+    fd = openSync2(transcriptPath, "r");
     const size = fstatSync(fd).size;
     if (cursor.rebaseline || size < cursor.offset) {
       readFrom = size;
@@ -1545,18 +1780,23 @@ function runCapture(payload, opts = {}) {
     if (readFrom < size)
       tailBuf = readTail(fd, readFrom, size, fullTail ? Infinity : maxTailBytes);
   } catch {
+    recordHealth(projectRoot, "capture", "failed");
     return finish(0);
   } finally {
     if (fd >= 0)
-      closeSync(fd);
+      closeSync2(fd);
   }
   if (!tailBuf) {
     if (rebaselined) {
       state.set(transcriptPath, {
         offset: readFrom,
         seq: cursor.seq,
+        ...cursor.nativeTurns ? { nativeTurns: cursor.nativeTurns } : {},
         ...cursor.model ? { model: cursor.model } : {}
       });
+    }
+    if (payload.hook_event_name === "PreCompact") {
+      state.set(transcriptPath, { ...state.get(transcriptPath), rebaseline: true });
     }
     return finish(0);
   }
@@ -1571,7 +1811,7 @@ function runCapture(payload, opts = {}) {
   const sessionId = payload.session_id || "unknown";
   const project = payload.cwd || process.cwd();
   const normalize = codex ? normalizeCodexRollout : normalizeClaudeTranscript;
-  const { events, raws: rawLines, nextSeq, nextOffset, lastModel } = normalize({
+  const normalizeOpts = {
     lines: completeLines,
     ctx: {
       sessionId,
@@ -1585,10 +1825,12 @@ function runCapture(payload, opts = {}) {
     startSeq: cursor.seq,
     startOffset: readFrom,
     scrub: scrub2
-  });
+  };
+  const native = codex ? normalizeNativeTurns(normalizeOpts, cursor.nativeTurns, opts.captureSince) : undefined;
+  const { events, raws: rawLines, nextSeq, nextOffset, lastModel } = native ?? normalize(normalizeOpts);
   const raws = rawLines.map(({ raw, sid }) => ({ raw, src, sid, proj: project }));
   let finalSeq = nextSeq;
-  if (events.length === 0 && raws.length > 0) {
+  if (!native && events.length === 0 && raws.length > 0) {
     const linesBySid = new Map;
     for (const r of raws)
       linesBySid.set(r.sid, (linesBySid.get(r.sid) ?? 0) + 1);
@@ -1608,15 +1850,21 @@ function runCapture(payload, opts = {}) {
   }
   let turn;
   try {
-    turn = new TurnState(projectRoot).get(transcriptPath);
-    for (const e of events)
-      e.turn = turn;
-    for (const r of raws)
-      r.turn = turn;
+    turn = native ? events[0]?.turn ?? 0 : new TurnState(projectRoot).get(transcriptPath);
+    if (!native) {
+      for (const e of events)
+        e.turn = turn;
+      for (const r of raws)
+        r.turn = turn;
+    }
   } catch {}
+  let accepted = true;
   if (events.length + raws.length > 0) {
     const box = new Outbox(projectRoot, { maxSpoolBytes: opts.maxSpoolBytes });
-    const ok = box.append([...events, ...raws]);
+    const ok = box.append(native?.records ?? [...events, ...raws]);
+    accepted = ok;
+    if (!ok)
+      recordHealth(projectRoot, "capture", "spool_full");
     if (!ok && box.markDropped()) {
       const marker = {
         src,
@@ -1627,25 +1875,50 @@ function runCapture(payload, opts = {}) {
         kind: "session",
         role: "system",
         text: SPOOL_FULL_MARKER,
-        ...turn !== undefined ? { turn } : {}
+        ...turn !== undefined ? { turn } : {},
+        ...native ? { turn_source: events[0]?.turn_source ?? "unknown" } : {}
       };
       box.forceAppend([marker]);
       finalSeq += 1;
     }
   }
   state.set(transcriptPath, {
+    ...native ? { nativeTurns: native.turns } : {},
     offset: nextOffset,
     seq: finalSeq,
     ...payload.hook_event_name === "PreCompact" ? { rebaseline: true } : {},
     ...lastModel ?? cursor.model ? { model: lastModel ?? cursor.model } : {}
   });
+  if (accepted)
+    recordHealth(projectRoot, "capture", events.length ? "captured" : "idle", events.length);
   return finish(events.length);
+}
+function runCapture(payload, opts = {}) {
+  const root = opts.projectRoot ?? resolveProjectRoot(payload.cwd);
+  if (!root)
+    return { appended: 0, flushed: false };
+  const release = captureLock(root);
+  if (!release) {
+    recordHealth(root, "capture", "retry");
+    return { appended: 0, flushed: false };
+  }
+  try {
+    return captureUnderLock(payload, opts);
+  } finally {
+    release();
+  }
 }
 if (isMain(import.meta.url)) {
   try {
     const payload = JSON.parse(await readStdin());
-    if (captureEnabled(projectConfig(payload.cwd))) {
-      runCapture(payload);
+    const cfg = projectConfig(payload.cwd);
+    if (cfg && captureEnabled(cfg)) {
+      recordHealth(cfg.projectRoot, "dispatch", "started");
+      try {
+        runCapture(payload, { captureSince: cfg.captureSince });
+      } catch {
+        recordHealth(cfg.projectRoot, "capture", "failed");
+      }
     }
   } catch {}
   process.exit(0);

@@ -33,38 +33,10 @@ var __toESM = (mod, isNodeMode, target) => {
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
-// hooks/session-start.ts
-import { homedir as homedir3 } from "node:os";
-import { join as join7 } from "node:path";
-import { mkdirSync as mkdirSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync5, renameSync as renameSync4 } from "node:fs";
-
-// hooks/harness.ts
-function isCodexHarness(transcriptPath) {
-  if (!transcriptPath)
-    return false;
-  const p = transcriptPath.replace(/\\/g, "/");
-  const configuredHome = process.env.CODEX_HOME?.replace(/\\/g, "/").replace(/\/+$/, "");
-  return /\/\.codex\//.test(p) || /\/rollout-[^/]*\.jsonl$/i.test(p) || Boolean(configuredHome && (p === configuredHome || p.startsWith(configuredHome + "/")));
-}
-function sniffHarness(line) {
-  let parsed;
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    return;
-  }
-  if (!parsed || typeof parsed !== "object")
-    return;
-  const o = parsed;
-  const hasMessage = typeof o.message === "object" && o.message !== null;
-  const hasPayload = typeof o.payload === "object" && o.payload !== null;
-  if (typeof o.type === "string" && hasPayload && !hasMessage)
-    return "codex";
-  if (typeof o.type === "string" && ["user", "assistant", "system", "summary"].includes(o.type) || hasMessage) {
-    return "claude-code";
-  }
-  return;
-}
+// capture/health.ts
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join4 } from "node:path";
+import { randomUUID } from "node:crypto";
 
 // capture/config.ts
 import { existsSync, readFileSync } from "node:fs";
@@ -104,6 +76,9 @@ function resolveProjectRoot(cwd) {
 function loadProjectConfig(projectRoot) {
   try {
     const value = JSON.parse(readFileSync(configPath(projectRoot), "utf8"));
+    if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
+      return;
+    const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
     const endpoint = typeof value.endpoint === "string" && value.endpoint.trim() ? value.endpoint.trim() : undefined;
     if (value.authMode === "oauth") {
       const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
@@ -112,6 +87,7 @@ function loadProjectConfig(projectRoot) {
         return;
       return {
         authMode: "oauth",
+        ...captureSince ? { captureSince } : {},
         profileId,
         connectorIds,
         ...endpoint ? { endpoint } : {},
@@ -124,6 +100,7 @@ function loadProjectConfig(projectRoot) {
         return;
       return {
         authMode: "api-key",
+        ...captureSince ? { captureSince } : {},
         apiKey,
         ...endpoint ? { endpoint } : {},
         projectRoot
@@ -154,10 +131,6 @@ function captureEnabled(cfg) {
   return cfg.authMode === "oauth" ? Boolean(cfg.profileId) && (cfg.connectorIds?.length ?? 0) > 0 : Boolean(cfg.apiKey);
 }
 
-// capture/outbox.ts
-import { join as join3 } from "node:path";
-import { mkdirSync as mkdirSync2, existsSync as existsSync3, readFileSync as readFileSync2, writeFileSync as writeFileSync2, appendFileSync, renameSync, statSync, unlinkSync } from "node:fs";
-
 // capture/augenta-dir.ts
 import { join as join2 } from "node:path";
 import { chmodSync, mkdirSync, existsSync as existsSync2, writeFileSync } from "node:fs";
@@ -177,6 +150,8 @@ function ensureAugentaDir(projectRoot) {
 }
 
 // capture/outbox.ts
+import { join as join3 } from "node:path";
+import { mkdirSync as mkdirSync2, existsSync as existsSync3, readFileSync as readFileSync2, writeFileSync as writeFileSync2, appendFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 var NEWLINE = 10;
 var MAX_SPOOL_BYTES = 50 * 1024 * 1024;
 var MAX_DEST_LAG_BYTES = 16 * 1024 * 1024;
@@ -472,17 +447,104 @@ class Outbox {
   }
 }
 
+// capture/health.ts
+var STAGES = ["dispatch", "capture", "delivery"];
+var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
+function read(projectRoot, stage) {
+  try {
+    const s = JSON.parse(readFileSync3(join4(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
+      return;
+    return {
+      at: new Date(s.at).toISOString(),
+      outcome: s.outcome,
+      count: s.count,
+      successes: s.successes,
+      ...Number.isFinite(Date.parse(s.lastSuccessAt)) ? { lastSuccessAt: new Date(s.lastSuccessAt).toISOString() } : {}
+    };
+  } catch {
+    return;
+  }
+}
+function recordHealth(projectRoot, stage, outcome, count = 0) {
+  try {
+    const dir = join4(ensureAugentaDir(projectRoot), "state");
+    mkdirSync3(dir, { recursive: true });
+    const old = read(projectRoot, stage);
+    const at = new Date().toISOString();
+    const success = outcome === "captured" || outcome === "accepted";
+    const value = {
+      at,
+      outcome,
+      count,
+      successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
+      ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
+    };
+    const file = join4(dir, `health-${stage}.json`);
+    const tmp = `${file}.${randomUUID()}.tmp`;
+    writeFileSync3(tmp, JSON.stringify(value), { mode: 384 });
+    renameSync2(tmp, file);
+  } catch {}
+}
+function captureHealth(projectRoot) {
+  const cfg = loadProjectConfig(projectRoot);
+  const activity = Object.fromEntries(STAGES.map((stage) => [stage, read(projectRoot, stage) ?? null]));
+  return {
+    configured: !!cfg,
+    enabled: captureEnabled(cfg),
+    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds.length : cfg ? 1 : 0,
+    pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
+    ...activity,
+    hostApproval: "unknown",
+    ingestion: "unverified",
+    nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch ? "check_host_hook_approval_and_activation" : "complete_a_turn_then_check_activity"
+  };
+}
+
+// hooks/session-start.ts
+import { homedir as homedir3 } from "node:os";
+import { join as join8 } from "node:path";
+import { mkdirSync as mkdirSync6, readFileSync as readFileSync6, writeFileSync as writeFileSync6, renameSync as renameSync5 } from "node:fs";
+
+// hooks/harness.ts
+function isCodexHarness(transcriptPath) {
+  if (!transcriptPath)
+    return false;
+  const p = transcriptPath.replace(/\\/g, "/");
+  const configuredHome = process.env.CODEX_HOME?.replace(/\\/g, "/").replace(/\/+$/, "");
+  return /\/\.codex\//.test(p) || /\/rollout-[^/]*\.jsonl$/i.test(p) || Boolean(configuredHome && (p === configuredHome || p.startsWith(configuredHome + "/")));
+}
+function sniffHarness(line) {
+  let parsed;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (!parsed || typeof parsed !== "object")
+    return;
+  const o = parsed;
+  const hasMessage = typeof o.message === "object" && o.message !== null;
+  const hasPayload = typeof o.payload === "object" && o.payload !== null;
+  if (typeof o.type === "string" && hasPayload && !hasMessage)
+    return "codex";
+  if (typeof o.type === "string" && ["user", "assistant", "system", "summary"].includes(o.type) || hasMessage) {
+    return "claude-code";
+  }
+  return;
+}
+
 // capture/shipper.ts
 import { spawn } from "node:child_process";
 import { existsSync as existsSync4 } from "node:fs";
-import { dirname as dirname2, join as join4 } from "node:path";
+import { dirname as dirname2, join as join5 } from "node:path";
 import { fileURLToPath } from "node:url";
 function shipperEntry() {
   const self = fileURLToPath(import.meta.url);
   const ext = self.endsWith(".ts") ? ".ts" : ".mjs";
   const here = dirname2(self);
-  const sibling = join4(here, `ship${ext}`);
-  return existsSync4(sibling) ? sibling : join4(here, "..", "capture", `ship${ext}`);
+  const sibling = join5(here, `ship${ext}`);
+  return existsSync4(sibling) ? sibling : join5(here, "..", "capture", `ship${ext}`);
 }
 function spawnShipper(projectRoot) {
   try {
@@ -491,8 +553,11 @@ function spawnShipper(projectRoot) {
       stdio: "ignore",
       env: process.env
     });
+    child.once("error", () => recordHealth(projectRoot, "delivery", "failed"));
     child.unref();
-  } catch {}
+  } catch {
+    recordHealth(projectRoot, "delivery", "failed");
+  }
 }
 
 // capture/memory.ts
@@ -500,15 +565,15 @@ import { createHash } from "node:crypto";
 import {
   existsSync as existsSync5,
   lstatSync,
-  mkdirSync as mkdirSync3,
-  readFileSync as readFileSync3,
+  mkdirSync as mkdirSync4,
+  readFileSync as readFileSync4,
   readdirSync,
-  renameSync as renameSync2,
+  renameSync as renameSync3,
   statSync as statSync2,
-  writeFileSync as writeFileSync3
+  writeFileSync as writeFileSync4
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname as dirname3, extname, isAbsolute, join as join5, relative, resolve, sep } from "node:path";
+import { basename, dirname as dirname3, extname, isAbsolute, join as join6, relative, resolve, sep } from "node:path";
 
 // capture/scrub.ts
 var MASK = (label) => `[redacted:${label}]`;
@@ -565,7 +630,7 @@ function sha256(input) {
   return createHash("sha256").update(input).digest("hex");
 }
 function memoryStatePath(projectRoot) {
-  return join5(projectRoot, ".augenta", "state", "memory.json");
+  return join6(projectRoot, ".augenta", "state", "memory.json");
 }
 function validEntry(value) {
   const e = value;
@@ -573,7 +638,7 @@ function validEntry(value) {
 }
 function readMemoryIndex(projectRoot) {
   try {
-    const parsed = JSON.parse(readFileSync3(memoryStatePath(projectRoot), "utf8"));
+    const parsed = JSON.parse(readFileSync4(memoryStatePath(projectRoot), "utf8"));
     const rawDocuments = parsed.documents;
     if (!parsed || parsed.version !== 1 || !rawDocuments || typeof rawDocuments !== "object") {
       return { version: 1, documents: {} };
@@ -589,13 +654,13 @@ function readMemoryIndex(projectRoot) {
   }
 }
 function writeMemoryIndex(projectRoot, index) {
-  const stateDir = join5(ensureAugentaDir(projectRoot), "state");
-  const path = join5(stateDir, "memory.json");
+  const stateDir = join6(ensureAugentaDir(projectRoot), "state");
+  const path = join6(stateDir, "memory.json");
   const tmp = path + ".tmp";
   try {
-    mkdirSync3(stateDir, { recursive: true });
-    writeFileSync3(tmp, JSON.stringify(index));
-    renameSync2(tmp, path);
+    mkdirSync4(stateDir, { recursive: true });
+    writeFileSync4(tmp, JSON.stringify(index));
+    renameSync3(tmp, path);
     return true;
   } catch {
     return false;
@@ -614,7 +679,7 @@ function normalizeLogicalPath(path) {
 function scanClaudeMemory(transcriptPath) {
   if (!transcriptPath)
     return { complete: false, documents: [] };
-  const root = join5(dirname3(transcriptPath), "memory");
+  const root = join6(dirname3(transcriptPath), "memory");
   try {
     if (!existsSync5(root) || !lstatSync(root).isDirectory())
       return { complete: false, documents: [] };
@@ -638,7 +703,7 @@ function scanClaudeMemory(transcriptPath) {
       return;
     }
     for (const entry of entries) {
-      const path = join5(dir, entry.name);
+      const path = join6(dir, entry.name);
       if (entry.isSymbolicLink())
         continue;
       if (entry.isDirectory()) {
@@ -653,7 +718,7 @@ function scanClaudeMemory(transcriptPath) {
           complete = false;
           continue;
         }
-        const text = readFileSync3(path, "utf8");
+        const text = readFileSync4(path, "utf8");
         const after = lstatSync(path);
         if (!after.isFile() || !sameSnapshot(before, after)) {
           complete = false;
@@ -747,8 +812,8 @@ function parseCodexTaskGroups(text, projectRoot) {
   return documents;
 }
 function scanCodexMemory(projectRoot, codexHome) {
-  const root = codexHome ?? process.env.CODEX_HOME ?? join5(homedir(), ".codex");
-  const path = join5(root, "memories", "MEMORY.md");
+  const root = codexHome ?? process.env.CODEX_HOME ?? join6(homedir(), ".codex");
+  const path = join6(root, "memories", "MEMORY.md");
   try {
     if (!existsSync5(path))
       return { complete: false, documents: [] };
@@ -756,7 +821,7 @@ function scanCodexMemory(projectRoot, codexHome) {
     const before = statSync2(path);
     if (!before.isFile())
       return { complete: false, documents: [] };
-    const text = readFileSync3(path, "utf8");
+    const text = readFileSync4(path, "utf8");
     const linkAfter = lstatSync(path);
     const after = statSync2(path);
     if (!after.isFile() || !sameSnapshot(linkBefore, linkAfter) || !sameSnapshot(before, after))
@@ -942,16 +1007,16 @@ function captureAgentMemory(opts) {
 import {
   chmodSync as chmodSync2,
   existsSync as existsSync6,
-  mkdirSync as mkdirSync4,
-  readFileSync as readFileSync4,
-  renameSync as renameSync3,
+  mkdirSync as mkdirSync5,
+  readFileSync as readFileSync5,
+  renameSync as renameSync4,
   statSync as statSync3,
   unlinkSync as unlinkSync2,
-  writeFileSync as writeFileSync4
+  writeFileSync as writeFileSync5
 } from "node:fs";
-import { createHash as createHash2, randomUUID } from "node:crypto";
+import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
 import { homedir as homedir2 } from "node:os";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 
 // runtime/node.ts
 import { spawnSync } from "node:child_process";
@@ -1005,14 +1070,14 @@ class ReLoginRequiredError extends Error {
     this.reason = reason;
   }
 }
-var authRoot = () => process.env.AUGENTA_AUTH_HOME || join6(homedir2(), ".augenta");
-var authPath = () => join6(authRoot(), "auth.json");
-var lockPath = () => join6(authRoot(), "auth.lock");
+var authRoot = () => process.env.AUGENTA_AUTH_HOME || join7(homedir2(), ".augenta");
+var authPath = () => join7(authRoot(), "auth.json");
+var lockPath = () => join7(authRoot(), "auth.lock");
 var LOCK_WAIT_MS = 1e4;
 var STALE_LOCK_MS = 30000;
 var REQUEST_TIMEOUT_MS = 15000;
 function ensureAuthRoot() {
-  mkdirSync4(authRoot(), { recursive: true, mode: 448 });
+  mkdirSync5(authRoot(), { recursive: true, mode: 448 });
   chmodSync2(authRoot(), 448);
 }
 function readAuthStore() {
@@ -1020,7 +1085,7 @@ function readAuthStore() {
     ensureAuthRoot();
     if (existsSync6(authPath()))
       chmodSync2(authPath(), 384);
-    const parsed = JSON.parse(readFileSync4(authPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync5(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
       return { version: 1, profiles: {} };
     }
@@ -1032,15 +1097,15 @@ function readAuthStore() {
 function writeAuthStore(store) {
   ensureAuthRoot();
   const path = authPath();
-  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  const tmp = `${path}.${process.pid}.${randomUUID2()}.tmp`;
   try {
-    writeFileSync4(tmp, `${JSON.stringify(store, null, 2)}
+    writeFileSync5(tmp, `${JSON.stringify(store, null, 2)}
 `, {
       mode: 384,
       flag: "wx"
     });
     chmodSync2(tmp, 384);
-    renameSync3(tmp, path);
+    renameSync4(tmp, path);
     chmodSync2(path, 384);
   } finally {
     try {
@@ -1055,7 +1120,7 @@ async function withAuthLock(fn) {
   const deadline = Date.now() + LOCK_WAIT_MS;
   while (true) {
     try {
-      writeFileSync4(lock, String(process.pid), { flag: "wx", mode: 384 });
+      writeFileSync5(lock, String(process.pid), { flag: "wx", mode: 384 });
       break;
     } catch {
       try {
@@ -1128,17 +1193,17 @@ function browserCommand(url) {
     return ["cmd", "/c", "start", "", url];
   return ["xdg-open", url];
 }
-var pendingLoginPath = () => join6(authRoot(), "pending-login.json");
+var pendingLoginPath = () => join7(authRoot(), "pending-login.json");
 function savePendingLogin(pending) {
   ensureAuthRoot();
   const path = pendingLoginPath();
-  writeFileSync4(path, `${JSON.stringify(pending, null, 2)}
+  writeFileSync5(path, `${JSON.stringify(pending, null, 2)}
 `, { mode: 384 });
   chmodSync2(path, 384);
 }
 function readPendingLogin() {
   try {
-    const parsed = JSON.parse(readFileSync4(pendingLoginPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync5(pendingLoginPath(), "utf8"));
     if (typeof parsed.deviceCode !== "string" || typeof parsed.clientId !== "string" || typeof parsed.issuer !== "string" || typeof parsed.expiresAt !== "number" || parsed.expiresAt <= Date.now()) {
       return;
     }
@@ -1321,12 +1386,12 @@ async function fetchWithProfile(profileId, url, init = {}) {
 }
 var NOTICES = ["relogin", "badkey", "connect"];
 function noticePath(projectRoot, notice) {
-  return join6(projectRoot, ".augenta", `${notice}-required`);
+  return join7(projectRoot, ".augenta", `${notice}-required`);
 }
 function markAuthNotice(projectRoot, notice) {
   try {
     ensureAugentaDir(projectRoot);
-    writeFileSync4(noticePath(projectRoot, notice), `${notice}
+    writeFileSync5(noticePath(projectRoot, notice), `${notice}
 `, {
       mode: 384
     });
@@ -1365,6 +1430,7 @@ var staleConfig = Boolean(configuredRoot) && !cfg;
 var connectedRoot = cfg ? configuredRoot : undefined;
 if (connectedRoot) {
   if (captureEnabled(cfg)) {
+    recordHealth(connectedRoot, "dispatch", "started");
     const action = connectAction;
     const notices = [];
     const authNotice = takeAuthNotice(connectedRoot);
@@ -1395,12 +1461,12 @@ if (connectedRoot) {
   process.exit(0);
 }
 var home = process.env.AUGENTA_HOME ?? homedir3();
-var stateDir = join7(home, ".augenta", "state");
-var markerPath = join7(stateDir, "connect-prompted.json");
-var legacyMarkerPath = join7(stateDir, "init-prompted.json");
+var stateDir = join8(home, ".augenta", "state");
+var markerPath = join8(stateDir, "connect-prompted.json");
+var legacyMarkerPath = join8(stateDir, "init-prompted.json");
 function readMarkers(path) {
   try {
-    const parsed = JSON.parse(readFileSync5(path, "utf8"));
+    const parsed = JSON.parse(readFileSync6(path, "utf8"));
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
@@ -1413,11 +1479,11 @@ if (markers[markerKey])
 if (!staleConfig && readMarkers(legacyMarkerPath)[projectPath])
   process.exit(0);
 try {
-  mkdirSync5(stateDir, { recursive: true });
+  mkdirSync6(stateDir, { recursive: true });
   markers[markerKey] = new Date().toISOString();
   const tmp = markerPath + ".tmp";
-  writeFileSync5(tmp, JSON.stringify(markers));
-  renameSync4(tmp, markerPath);
+  writeFileSync6(tmp, JSON.stringify(markers));
+  renameSync5(tmp, markerPath);
 } catch {
   process.exit(0);
 }

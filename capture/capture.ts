@@ -27,6 +27,9 @@ import type { CaptureEvent, RawRecord } from "./event";
 import { scrub as defaultScrub } from "./scrub";
 import { Outbox } from "./outbox";
 import { CaptureState } from "./capture-cursor";
+import { captureLock } from "./capture-lock";
+import { recordHealth } from "./health";
+import { normalizeNativeTurns } from "./native-turns";
 import { TurnState } from "./turn-cursor";
 import { captureEnabled, projectConfig, resolveProjectRoot } from "./config";
 import { captureAgentMemory } from "./memory";
@@ -66,6 +69,8 @@ export interface RunCaptureOptions {
   /** Spool byte cap passed through to the {@link Outbox}; defaults to
    *  {@link MAX_SPOOL_BYTES}. Injectable for tests. */
   maxSpoolBytes?: number;
+  /** Only native turns starting at/after explicit connection consent. */
+  captureSince?: string;
 }
 
 /** Text of the ONE synthetic marker event emitted on the first drop of a
@@ -254,7 +259,7 @@ export function resolveCaptureTarget(
  * the harness is still writing is left for the next fire — so we never emit a
  * half-written transcript record.
  */
-export function runCapture(
+function captureUnderLock(
   payload: CapturePayload,
   opts: RunCaptureOptions = {},
 ): { appended: number; flushed: boolean } {
@@ -289,7 +294,10 @@ export function runCapture(
     return { appended, flushed: flush };
   };
 
-  if (!transcriptPath || !existsSync(transcriptPath)) return finish(0);
+  if (!transcriptPath || !existsSync(transcriptPath)) {
+    recordHealth(projectRoot, "capture", "missing_transcript");
+    return finish(0);
+  }
 
   const state = new CaptureState(projectRoot);
   const cursor = state.get(transcriptPath);
@@ -331,6 +339,7 @@ export function runCapture(
     }
     if (readFrom < size) tailBuf = readTail(fd, readFrom, size, fullTail ? Infinity : maxTailBytes);
   } catch {
+    recordHealth(projectRoot, "capture", "failed");
     return finish(0);
   } finally {
     if (fd >= 0) closeSync(fd);
@@ -345,8 +354,12 @@ export function runCapture(
       state.set(transcriptPath, {
         offset: readFrom,
         seq: cursor.seq,
+        ...(cursor.nativeTurns ? { nativeTurns: cursor.nativeTurns } : {}),
         ...(cursor.model ? { model: cursor.model } : {}),
       });
+    }
+    if (payload.hook_event_name === "PreCompact") {
+      state.set(transcriptPath, { ...state.get(transcriptPath), rebaseline: true });
     }
     return finish(0); // nothing new; a boundary fire still flushes the buffer
   }
@@ -371,7 +384,7 @@ export function runCapture(
   const sessionId = payload.session_id || "unknown";
   const project = payload.cwd || process.cwd();
   const normalize = codex ? normalizeCodexRollout : normalizeClaudeTranscript;
-  const { events, raws: rawLines, nextSeq, nextOffset, lastModel } = normalize({
+  const normalizeOpts = {
     lines: completeLines,
     ctx: {
       sessionId,
@@ -388,7 +401,9 @@ export function runCapture(
     startSeq: cursor.seq,
     startOffset: readFrom,
     scrub,
-  });
+  };
+  const native = codex ? normalizeNativeTurns(normalizeOpts, cursor.nativeTurns, opts.captureSince) : undefined;
+  const { events, raws: rawLines, nextSeq, nextOffset, lastModel } = native ?? normalize(normalizeOpts);
 
   // Raw-telemetry channel: one RawRecord per consumed non-blank valid JSON line,
   // structurally sanitized but otherwise UNSCRUBBED — including lines that
@@ -418,7 +433,7 @@ export function runCapture(
   // just raws[0]'s sid would leave any other-sid raws in a zero-event group
   // that gets dropped — the exact orphaning this synthetic exists to prevent
   // (see normalize-core.ts). Each synthetic takes its own monotonic seq.
-  if (events.length === 0 && raws.length > 0) {
+  if (!native && events.length === 0 && raws.length > 0) {
     const linesBySid = new Map<string, number>();
     for (const r of raws) linesBySid.set(r.sid, (linesBySid.get(r.sid) ?? 0) + 1);
     for (const [sid, count] of linesBySid) {
@@ -436,23 +451,29 @@ export function runCapture(
     }
   }
 
+  // Claude retains the prompt ordinal; Codex already segmented native turns.
   // Stamp the current agent turn (UserPromptSubmit bumps it) on both channels
   // so the flush can group this turn's steps + raws into one experience.
   // Best-effort — never block capture over turn bookkeeping.
   let turn: number | undefined;
   try {
-    turn = new TurnState(projectRoot).get(transcriptPath);
-    for (const e of events) e.turn = turn;
-    for (const r of raws) r.turn = turn;
+    turn = native ? events[0]?.turn ?? 0 : new TurnState(projectRoot).get(transcriptPath);
+    if (!native) {
+      for (const e of events) e.turn = turn;
+      for (const r of raws) r.turn = turn;
+    }
   } catch {
     /* records ship without a turn stamp; the grouper buckets them as turn 0 */
   }
 
   // finalSeq is bumped again below if a drop marker consumes a seq of its
   // own, so a later real event can never collide with it either.
+  let accepted = true;
   if (events.length + raws.length > 0) {
     const box = new Outbox(projectRoot, { maxSpoolBytes: opts.maxSpoolBytes });
-    const ok = box.append([...events, ...raws]);
+    const ok = box.append(native?.records ?? [...events, ...raws]);
+    accepted = ok;
+    if (!ok) recordHealth(projectRoot, "capture", "spool_full");
     if (!ok && box.markDropped()) {
       // First drop of a new overflow episode: this fire's events/raws above
       // are lost (the transcript on disk remains the recovery source), but a
@@ -479,6 +500,7 @@ export function runCapture(
         role: "system",
         text: SPOOL_FULL_MARKER,
         ...(turn !== undefined ? { turn } : {}),
+        ...(native ? { turn_source: events[0]?.turn_source ?? "unknown" as const } : {}),
       };
       box.forceAppend([marker]);
       finalSeq += 1;
@@ -491,13 +513,27 @@ export function runCapture(
   // everything up to the rewrite is now captured, so the next fire should resume
   // at the rewritten file's end instead of trusting this offset.
   state.set(transcriptPath, {
+    ...(native ? { nativeTurns: native.turns } : {}),
     offset: nextOffset,
     seq: finalSeq,
     ...(payload.hook_event_name === "PreCompact" ? { rebaseline: true } : {}),
     ...(lastModel ?? cursor.model ? { model: lastModel ?? cursor.model } : {}),
   });
 
+  if (accepted) recordHealth(projectRoot, "capture", events.length ? "captured" : "idle", events.length);
   return finish(events.length);
+}
+
+/** A short project lock also protects the shared cursor map for concurrent sessions. */
+export function runCapture(payload: CapturePayload, opts: RunCaptureOptions = {}): { appended: number; flushed: boolean } {
+  const root = opts.projectRoot ?? resolveProjectRoot(payload.cwd);
+  if (!root) return { appended: 0, flushed: false };
+  const release = captureLock(root);
+  if (!release) {
+    recordHealth(root, "capture", "retry");
+    return { appended: 0, flushed: false };
+  }
+  try { return captureUnderLock(payload, opts); } finally { release(); }
 }
 
 if (isMain(import.meta.url)) {
@@ -505,8 +541,11 @@ if (isMain(import.meta.url)) {
   // capture, always exit 0.
   try {
     const payload = JSON.parse(await readStdin()) as CapturePayload;
-    if (captureEnabled(projectConfig(payload.cwd))) {
-      runCapture(payload);
+    const cfg = projectConfig(payload.cwd);
+    if (cfg && captureEnabled(cfg)) {
+      recordHealth(cfg.projectRoot, "dispatch", "started");
+      try { runCapture(payload, { captureSince: cfg.captureSince }); }
+      catch { recordHealth(cfg.projectRoot, "capture", "failed"); }
     }
   } catch {
     /* malformed payload or capture failure — stay silent, never block the turn */

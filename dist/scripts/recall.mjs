@@ -117,6 +117,9 @@ function resolveProjectRoot(cwd) {
 function loadProjectConfig(projectRoot) {
   try {
     const value = JSON.parse(readFileSync(configPath(projectRoot), "utf8"));
+    if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
+      return;
+    const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
     const endpoint = typeof value.endpoint === "string" && value.endpoint.trim() ? value.endpoint.trim() : undefined;
     if (value.authMode === "oauth") {
       const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
@@ -125,6 +128,7 @@ function loadProjectConfig(projectRoot) {
         return;
       return {
         authMode: "oauth",
+        ...captureSince ? { captureSince } : {},
         profileId,
         connectorIds,
         ...endpoint ? { endpoint } : {},
@@ -137,6 +141,7 @@ function loadProjectConfig(projectRoot) {
         return;
       return {
         authMode: "api-key",
+        ...captureSince ? { captureSince } : {},
         apiKey,
         ...endpoint ? { endpoint } : {},
         projectRoot

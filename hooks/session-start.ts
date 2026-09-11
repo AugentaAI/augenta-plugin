@@ -39,6 +39,7 @@
  *  needs nothing injected (the plugin is push-only), and a previously-prompted
  *  project gets no nag.
  */
+import { recordHealth } from "../capture/health";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
@@ -85,6 +86,7 @@ if (connectedRoot) {
   // noise. Leaving the marker unread also keeps it — it surfaces on the first
   // session after capture is re-enabled, which is when it becomes actionable.
   if (captureEnabled(cfg)) {
+    recordHealth(connectedRoot, "dispatch", "started");
     const action = connectAction;
     const notices: string[] = [];
     const authNotice = takeAuthNotice(connectedRoot);

@@ -7,6 +7,7 @@
  * NOTHING (no additionalContext, no stdout) and is a silent no-op for projects
  * that haven't opted in via `.augenta/config.json`.
  */
+import { recordHealth } from "../capture/health";
 import { TurnState } from "../capture/turn-cursor";
 import { projectConfig, captureEnabled } from "../capture/config";
 import { readStdin } from "../runtime/node";
@@ -27,6 +28,7 @@ try {
 try {
   const cfg = projectConfig(cwd);
   if (transcriptPath && cfg && captureEnabled(cfg)) {
+    recordHealth(cfg.projectRoot, "dispatch", "started");
     new TurnState(cfg.projectRoot).bump(transcriptPath);
   }
 } catch {
