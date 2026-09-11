@@ -46,7 +46,7 @@ function writeMarkers(file: string, markers: Record<string, string>): void {
 }
 
 function fire(payload: object, overrides: Record<string, string> = {}): string {
-  const env: Record<string, string> = { ...(process.env as Record<string, string>), AUGENTA_HOME: home, ...overrides };
+  const env: Record<string, string> = { ...(process.env as Record<string, string>), AUGENTA_CONTROL_URL: "", AUGENTA_HOME: home, ...overrides };
   const proc = Bun.spawnSync(["bun", "run", HOOK], {
     stdin: Buffer.from(JSON.stringify(payload)),
     env,
@@ -57,6 +57,26 @@ function fire(payload: object, overrides: Record<string, string> = {}): string {
 }
 
 describe("unconnected project — the connect prompt, harness-aware", () => {
+  test("an old connectorIds config gets the reconnect prompt", () => {
+    mkdirSync(join(project, ".augenta"), { recursive: true });
+    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ authMode: "oauth", profileId: "profile_one", connectorIds: ["connector_one"] }));
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toContain("cannot read");
+  });
+
+  test("a saved non-production environment is disclosed through Codex additionalContext", () => {
+    mkdirSync(join(project, ".augenta"), { recursive: true });
+    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({
+      authMode: "oauth", profileId: "profile_one", controlUrl: "https://control.example.com",
+      destinations: [{ connectorId: "connector_one", workspaceId: "ws-one", workspaceName: "Platform" }],
+    }));
+    const payload = JSON.parse(fire({ transcript_path: CODEX_TP, cwd: project }));
+    expect(payload.hookSpecificOutput).toEqual({
+      hookEventName: "SessionStart",
+      additionalContext: "Augenta: this project is connected to the https://control.example.com environment, not production, feeding Platform.",
+    });
+    expect(fire({ transcript_path: CODEX_TP, cwd: project }, { AUGENTA_CONTROL_URL: "https://augenta.ai" })).toBe("");
+  });
+
   test("Claude Code: fires /augenta:connect with agent-directed context", () => {
     const out = fire({ transcript_path: CLAUDE_TP, cwd: project });
     const parsed = JSON.parse(out);

@@ -1,6 +1,6 @@
 ---
 name: connect
-description: Connect the current project to Augenta Workspaces through Connectors. Use when the user runs /augenta:connect, invokes $augenta:connect, or asks to connect or enable Augenta. The user signs in to Augenta once, explicitly selects every Workspace this project should feed, and the project stores only a global profile reference and its Connector ids.
+description: Connect the current project to Augenta Workspaces through Connectors. Use when the user runs /augenta:connect, invokes $augenta:connect, or asks to connect or enable Augenta. The user signs in to Augenta once, explicitly selects every Workspace this project should feed, and the project records a profile reference, environment URLs, organization and destinations.
 allowed-tools: AskUserQuestion, Bash, Read
 ---
 
@@ -90,6 +90,9 @@ Every payload includes `environment` and `projectRoot`. **When `environment` is
 not `prod`, say so** in both the question and the confirmation: connecting a
 project to a dev or staging Workspace by accident is silent otherwise.
 
+When `environmentChange` is present, say the project is moving from `from` to
+`to` before the destination question and in the confirmation.
+
 When a payload includes `worktreeRedirect`, tell the user that cwd is a linked
 worktree and that the main checkout at `projectRoot` is being connected instead —
 capture only searches upward from the working directory, so connecting the
@@ -105,6 +108,10 @@ Read-only. It starts no sign-in, so nothing has happened yet and you can still
 explain and ask. `alreadyConnected: true` means reconnecting will verify or change
 which Workspaces this project feeds — continue, do not stop.
 
+`current` describes the saved connection before live checks: its `environment`,
+`organization`, and `destinations` (including saved names). Use it for context;
+the live top-level `destinations` and Workspace list win when choosing the set.
+
 `destinations` lists the Workspaces the project feeds right now; use it to
 pre-select in step 3. Two cases there need saying out loud rather than quietly
 dropping, because the project is still shipping to them and the answer in step 3
@@ -119,8 +126,8 @@ replaces the whole set:
 
 Ask whether to sign in to Augenta, in one sentence: capture is per project, it
 sends this project's agent activity and matching project memory, and sign-in is
-stored globally in `~/.augenta/auth.json` while the project itself stores only a
-profile reference and its Connector ids. If the user declines, acknowledge and
+stored globally in `~/.augenta/auth.json` while the project records a profile
+reference, environment URLs, organization and chosen destinations. If the user declines, acknowledge and
 stop.
 
 ```bash

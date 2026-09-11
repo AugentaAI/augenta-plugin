@@ -7,9 +7,9 @@ and never something to walk a user through.
 
 ## Point the plugin at a non-production Augenta
 
-Export the control URL. `augentaOAuthConfig` (`capture/auth.ts:211`) reads
-`AUGENTA_CONTROL_URL` on every code path, so this reaches the interactive script,
-every `--json` verb, and the connect skill alike:
+Export the control URL. The shared `controlUrl` resolver in `capture/config.ts`
+reads `AUGENTA_CONTROL_URL` on every connect path, so this reaches the interactive
+script, every `--json` verb, and the connect skill alike:
 
 ```bash
 export AUGENTA_CONTROL_URL=<control-url>
@@ -23,6 +23,14 @@ public client id, and gateway together — by fetching
 `<control-url>/.well-known/augenta.json`. `scripts/connect.ts --control-url <url>`
 does the same for one invocation and wins over the variable.
 
+Connect records `controlUrl` in `<project>/.augenta/config.json`. Reconnecting
+without a flag or variable defaults to that recorded URL. Every URL follows
+**CLI flag > environment variable > config.json > default**. The file's
+`endpoint` can override the discovered gateway within its recorded environment.
+When the control URL changes, connect uses the new environment's discovered
+gateway unless `--endpoint` or `AUGENTA_API_URL` explicitly overrides it. The payload's
+`environmentChange` names the old and new environments when the control URL moves.
+
 Do not use `--endpoint` alone to reach another environment. It moves the gateway
 only, leaving the issuer and client id on the previous environment, which fails
 later as an unexplained 401 rather than at the point of the mistake.
@@ -33,7 +41,7 @@ touches the control plane: it posts to the GATEWAY in the project's own
 that environment. So a project connected against dev asks dev, whatever
 `AUGENTA_CONTROL_URL` says. To aim recall somewhere else, either reconnect the
 project or set `AUGENTA_API_URL`, which `gatewayBase` reads first. This is also
-why `recallEnvironment` (`scripts/recall.ts:541`) consults BOTH coordinates — the
+why `recallEnvironment` in `scripts/recall.ts` consults BOTH coordinates — the
 control URL alone would report `prod` about a question going to dev.
 
 **Neither skill has an environment flag, on purpose.** `SKILL.md` stays
@@ -46,11 +54,12 @@ against fresh discovery and **clears the grant** on mismatch
 sign-in the user already authorized in their browser. A process-wide variable
 cannot be applied to only some of the verbs.
 
-Disclosure is unaffected. `environmentLabel` (`capture/platform.ts:155`) reads the
-same variable, so every payload's `environment` field becomes the literal URL
+Disclosure is unaffected. `environmentLabel` takes the resolved control URL,
+so every payload's `environment` field becomes the literal URL
 instead of `prod`, and `SKILL.md` requires the agent to state a non-prod
 environment in both the Workspace question and the confirmation. If a skill run
-reports `prod` or says nothing, the variable did not reach the harness process.
+reports `prod`, check the resolved URL. Session start also names a non-production
+connection and its saved destinations, without a network lookup.
 
 ## Run the working tree instead of an installed copy
 
@@ -130,8 +139,8 @@ GitHub Actions verifies the platform-key path instead and must never receive a
 human access or refresh token.
 
 Once connected, the project's `.augenta/config.json` carries the dev gateway as
-`endpoint`, so hooks ship to dev with no variable set at runtime. The environment
-selection is a connect-time decision, recorded in the config.
+`endpoint` alongside `controlUrl`, so hooks ship to dev and reconnect discovers
+dev with no variable set at runtime. Both are recorded in the config.
 
 ## Local state, and how to reset it
 
@@ -158,8 +167,11 @@ a bug in whichever half you were not watching.
 
 ## Other runtime overrides
 
-`AUGENTA_API_URL` overrides the gateway base and `AUGENTA_INGEST_URL` redirects
-the experiences endpoint. Neither opts a project into capture — capture still
+`AUGENTA_CONTROL_URL`/`controlUrl` selects discovery,
+`AUGENTA_API_URL`/`endpoint` overrides the gateway base, and
+`AUGENTA_INGEST_URL`/`ingestUrl` redirects the experiences endpoint. Environment
+variables win over file values; explicit CLI flags win over both. Connect keeps
+a hand-set `ingestUrl` on reconnect. None opts a project into capture — capture still
 requires `.augenta/config.json`. `AUGENTA_CAPTURE_ENABLED=0` is the global kill
 switch.
 

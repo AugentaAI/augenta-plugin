@@ -73,12 +73,29 @@ mock.module("../runtime/node", () => ({
   },
 }));
 
+function connectionRecord(profileId: string, connectorIds: string[], endpoint = "https://gw.example.com") {
+  return {
+    profileId, endpoint, controlUrl: "https://augenta.ai", org: { id: "org_1", name: "Example" },
+    destinations: connectorIds.map((connectorId) => ({ connectorId, workspaceId: connectorId === "connector_ws-scratch" ? "ws-scratch" : "ws-default" })),
+  };
+}
+
 const CONNECT = join(import.meta.dir, "connect.ts");
 const realFetch = globalThis.fetch;
 
 let project: string;
-beforeEach(() => (project = realpathSync(mkdtempSync(join(tmpdir(), "aug-connect-")))));
+const URL_ENV_KEYS = ["AUGENTA_CONTROL_URL", "AUGENTA_API_URL", "AUGENTA_INGEST_URL"] as const;
+let savedUrlEnv: Record<string, string | undefined>;
+beforeEach(() => {
+  project = realpathSync(mkdtempSync(join(tmpdir(), "aug-connect-")));
+  savedUrlEnv = Object.fromEntries(URL_ENV_KEYS.map((key) => [key, process.env[key]]));
+  for (const key of URL_ENV_KEYS) delete process.env[key];
+});
 afterEach(() => {
+  for (const key of URL_ENV_KEYS) {
+    if (savedUrlEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedUrlEnv[key];
+  }
   globalThis.fetch = realFetch;
   rmSync(project, { recursive: true, force: true });
 });
@@ -265,26 +282,24 @@ describe("project config writers", () => {
     });
   });
 
-  test("oauth config contains profile, Connectors, consent time, and endpoint override", () => {
+  test("oauth config records the organization, destinations, consent time, and URLs", () => {
     const path = writeOAuthConfig(
       project,
-      "profile_123",
-      ["connector_456", "connector_789"],
-      "https://dev.example.com",
+      connectionRecord("profile_123", ["connector_456", "connector_789"], "https://dev.example.com"),
     );
     // Only the plural spelling is emitted: writing both would let an older
     // installed plugin read the scalar and go quietly single-destination.
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
       authMode: "oauth",
       captureSince: expect.any(String),
-      profileId: "profile_123",
-      connectorIds: ["connector_456", "connector_789"],
-      endpoint: "https://dev.example.com",
+      ...connectionRecord("profile_123", ["connector_456", "connector_789"], "https://dev.example.com"),
     });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(readFileSync(join(project, ".augenta", ".gitignore"), "utf8")).toBe("*\n");
   });
 
   test("refuses to write an OAuth config without a destination", () => {
-    expect(() => writeOAuthConfig(project, "profile_123", [])).toThrow(
+    expect(() => writeOAuthConfig(project, connectionRecord("profile_123", []))).toThrow(
       "requires at least one Connector",
     );
     expect(() => statSync(join(project, ".augenta", "config.json"))).toThrow();
@@ -316,6 +331,7 @@ describe("platform-key connection", () => {
         connectors: [
           {
             id: "connector_123",
+            orgId: "org_1",
             kind: "agent",
             direction: "inbound",
             status: "active",
@@ -337,6 +353,8 @@ describe("platform-key connection", () => {
       captureSince: expect.any(String),
       apiKey: "sk-aug-live.secret",
       endpoint: "https://gw.example.com",
+      org: { id: "org_1" },
+      destinations: [{ connectorId: "connector_123", workspaceId: "ws-default" }],
     });
   });
 
@@ -445,7 +463,7 @@ describe("platform-key connection", () => {
     });
 
     test("refuses an oauth project instead of pretending to verify one", async () => {
-      writeOAuthConfig(project, "profile_1", ["connector_1"]);
+      writeOAuthConfig(project, connectionRecord("profile_1", ["connector_1"]));
       let called = false;
       globalThis.fetch = (async (_url, _init) => {
         called = true;
@@ -660,6 +678,110 @@ describe("JSON verbs", () => {
     // The whole point of a separate probe: nothing may leave the machine before
     // the user has been told what connecting does and agreed to it.
     expect(requests.some((r) => r.includes("device_authorization"))).toBe(false);
+  });
+
+  test("probe discovers the saved environment and reports local names before live resolution", async () => {
+    const { profileId } = await signIn();
+    writeOAuthConfig(project, {
+      ...connectionRecord(profileId, ["connector_new"]), controlUrl: CONTROL,
+      org: { id: "org_1", name: "Saved Org" },
+      destinations: [{ connectorId: "connector_new", workspaceId: "ws-default", workspaceName: "Saved name" }],
+    });
+    seedLink("connector_new", "ws-default");
+    route();
+    const payload = await runJsonVerb({ projectRoot: project }, { json: true, probe: true });
+    expect(requests).toContain(`GET ${CONTROL}/.well-known/augenta.json`);
+    expect(payload.environment).toBe(CONTROL);
+    expect(payload.environmentChange).toBeUndefined();
+    expect(payload.current).toMatchObject({ environment: CONTROL, organization: "Saved Org", destinations: [{ workspaceName: "Saved name" }] });
+    expect(payload.destinations).toMatchObject([{ workspaceName: "Default Workspace" }]);
+  });
+
+  test("an env override reports the environment change and an explicit flag wins", async () => {
+    writeOAuthConfig(project, { ...connectionRecord("profile_saved", ["connector_new"]), controlUrl: "https://saved.example.com" });
+    process.env.AUGENTA_CONTROL_URL = CONTROL;
+    route();
+    const payload = await runJsonVerb({ projectRoot: project }, { json: true, probe: true });
+    expect(payload.environmentChange).toEqual({ from: "https://saved.example.com", to: CONTROL });
+    expect(payload.current).toMatchObject({ environment: "https://saved.example.com" });
+    expect(requests).toContain(`GET ${CONTROL}/.well-known/augenta.json`);
+    process.env.AUGENTA_CONTROL_URL = "https://ignored.example.com";
+    const explicit = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true });
+    expect(explicit.environment).toBe(CONTROL);
+    expect(explicit.current).toMatchObject({ environment: "https://saved.example.com" });
+    expect(requests.some((request) => request.includes("ignored.example.com"))).toBe(false);
+  });
+
+  test("probe retains the saved connection when discovery is offline, without exposing credentials", async () => {
+    writeApiKeyConfig(project, "sk-private.secret", GATEWAY, {
+      controlUrl: CONTROL, org: { id: "org_saved", name: "Saved Org" },
+      destinations: [{ connectorId: "connector_new", workspaceId: "ws-default", workspaceName: "Saved Workspace" }],
+    });
+    process.env.AUGENTA_CONTROL_URL = "https://offline.example.com";
+    route({ ["GET https://offline.example.com/.well-known/augenta.json"]: () => { throw new Error("offline"); } });
+    const payload = await runJsonVerb({ projectRoot: project }, { json: true, probe: true });
+    expect(payload).toMatchObject({ status: "error", message: "offline", environment: "https://offline.example.com", current: { environment: CONTROL, organization: "Saved Org", destinations: [{ workspaceName: "Saved Workspace" }] } });
+    expect(JSON.stringify(payload)).not.toContain("sk-private.secret");
+  });
+
+  for (const override of ["flag", "env"] as const) {
+    test(`a control ${override} switch discovers the new gateway instead of reusing the saved one`, async () => {
+      const { profileId } = await signIn();
+      writeOAuthConfig(project, {
+        ...connectionRecord(profileId, ["connector_new"], "https://old-gateway.example.com"),
+        controlUrl: "https://old-control.example.com",
+      });
+      if (override === "env") process.env.AUGENTA_CONTROL_URL = CONTROL;
+      route();
+      const payload = await runJsonVerb({ projectRoot: project }, {
+        json: true, probe: true, ...(override === "flag" ? { controlUrl: CONTROL } : {}),
+      });
+      expect(payload.status).toBe("need_workspace");
+      expect(requests).toContain(`GET ${GATEWAY}/v1/me`);
+      expect(requests.some((request) => request.includes("old-gateway.example.com"))).toBe(false);
+      expect(payload.current).toMatchObject({ environment: "https://old-control.example.com" });
+    });
+  }
+
+  test("a same-environment reconnect keeps its saved gateway override", async () => {
+    await signIn();
+    writeOAuthConfig(project, { ...connectionRecord("saved", ["connector_new"]), controlUrl: CONTROL });
+    route({ [`GET ${CONTROL}/.well-known/augenta.json`]: () =>
+      Response.json({ issuer: ISSUER, clientId: "client_public", gateway: "https://discovered.example.com" }) });
+    const payload = await runJsonVerb({ projectRoot: project }, { json: true, probe: true });
+    expect(payload.status).toBe("need_workspace");
+    expect(requests).toContain(`GET ${GATEWAY}/v1/me`);
+  });
+
+  for (const override of ["flag", "env"] as const) {
+    test(`an explicit gateway ${override} still wins during an environment switch`, async () => {
+      await signIn();
+      writeOAuthConfig(project, {
+        ...connectionRecord("saved", ["connector_new"], "https://old-gateway.example.com"),
+        controlUrl: "https://old-control.example.com",
+      });
+      process.env.AUGENTA_API_URL = override === "env" ? GATEWAY : "https://ignored.example.com";
+      route({ [`GET ${CONTROL}/.well-known/augenta.json`]: () =>
+        Response.json({ issuer: ISSUER, clientId: "client_public", gateway: "https://discovered.example.com" }) });
+      const payload = await runJsonVerb({ projectRoot: project }, {
+        ...baseArgs, probe: true, ...(override === "flag" ? { endpoint: GATEWAY } : {}),
+      });
+      expect(payload.status).toBe("need_workspace");
+      expect(requests).toContain(`GET ${GATEWAY}/v1/me`);
+    });
+  }
+
+  test("reconnect preserves a hand-set ingest URL and writes verified destination names", async () => {
+    const { profileId } = await signIn();
+    writeOAuthConfig(project, { ...connectionRecord(profileId, ["connector_new"]), controlUrl: CONTROL, ingestUrl: "http://127.0.0.1:30080/v1/experiences" });
+    seedLink("connector_new", "ws-default");
+    route();
+    const payload = await runJsonVerb({ projectRoot: project }, { json: true, workspaces: ["ws-default"] });
+    expect(payload.status).toBe("connected");
+    const saved = JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8"));
+    expect(saved).toMatchObject({ controlUrl: CONTROL, endpoint: GATEWAY, org: { id: "org_1", name: "Example Org" }, ingestUrl: "http://127.0.0.1:30080/v1/experiences", destinations: [{ connectorId: "connector_new", workspaceId: "ws-default", workspaceName: "Default Workspace" }] });
+    expect(saved).not.toHaveProperty("connectorIds");
+    expect(statSync(join(project, ".augenta", "config.json")).mode & 0o777).toBe(0o600);
   });
 
   test("probe lists Workspaces for an existing sign-in", async () => {
@@ -990,7 +1112,7 @@ describe("JSON verbs", () => {
     // Reconnecting is how a user verifies or changes the destinations, so a prior
     // config is reported as fields and must never short-circuit the flow.
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["connector_old"]);
+    writeOAuthConfig(project, connectionRecord("profile_stale", ["connector_old"]));
     route();
     seedLink("connector_old", "ws-scratch");
 
@@ -1016,7 +1138,7 @@ describe("JSON verbs", () => {
     // destination from the pre-selection and, since the answer is the complete
     // set, from the config on the next reconnect.
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["connector_gone"]);
+    writeOAuthConfig(project, connectionRecord("profile_stale", ["connector_gone"]));
     route(); // nothing seeded — the GET 404s
 
     const payload = await probeConnection({ projectRoot: project }, baseArgs);
@@ -1286,7 +1408,9 @@ describe("JSON verbs", () => {
           { issuer: ISSUER, clientId: "client_public", gateway: GATEWAY },
           "org_1",
         ),
-        connectorIds: ["connector_new"],
+        destinations: [{ connectorId: "connector_new", workspaceId: "ws-default", workspaceName: "Default Workspace" }],
+        controlUrl: CONTROL,
+        org: { id: "org_1", name: "Example Org" },
         endpoint: GATEWAY,
       });
   });
@@ -1305,7 +1429,7 @@ describe("JSON verbs", () => {
     expect((payload.destinations as Array<{ workspaceId: string }>).map((d) => d.workspaceId))
       .toEqual(["ws-default", "ws-scratch"]);
     expect(
-      JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).connectorIds,
+      JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).destinations.map((destination: { connectorId: string }) => destination.connectorId),
     ).toEqual(["connector_new", "connector_ws-scratch"]);
   });
 
@@ -1331,7 +1455,7 @@ describe("JSON verbs", () => {
     // workspaceId onto it. Under fan-out that would steal the link belonging to a
     // destination the user KEPT and relabel history already attached to it.
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["connector_new"]);
+    writeOAuthConfig(project, connectionRecord("profile_stale", ["connector_new"]));
     route();
     seedLink("connector_new", "ws-default"); // prior connection to ws-default
 
@@ -1358,7 +1482,7 @@ describe("JSON verbs", () => {
     // deleting the link would be an org-level mutation nobody was asked about, and
     // a network call that can half-fail after the user was told "done".
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["connector_new", "connector_ws-scratch"]);
+    writeOAuthConfig(project, connectionRecord("profile_stale", ["connector_new", "connector_ws-scratch"]));
     route();
     seedLink("connector_new", "ws-default");
     seedLink("connector_ws-scratch", "ws-scratch");
@@ -1380,7 +1504,7 @@ describe("JSON verbs", () => {
       ],
     });
     expect(
-      JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).connectorIds,
+      JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).destinations.map((destination: { connectorId: string }) => destination.connectorId),
     ).toEqual(["connector_new"]);
     // Nothing destructive, and no attempt to disable the dropped link.
     expect(requests.some((r) => r.startsWith("DELETE "))).toBe(false);
@@ -1434,7 +1558,7 @@ describe("JSON verbs", () => {
     });
     const written = JSON.parse(
       readFileSync(join(project, ".augenta", "config.json"), "utf8"),
-    ).connectorIds as string[];
+    ).destinations.map((destination: { connectorId: string }) => destination.connectorId) as string[];
     expect(written).toEqual(["connector_new"]);
     expect(written.every((id) => id !== "connector_ws-scratch")).toBe(true);
   });
@@ -1459,7 +1583,7 @@ describe("JSON verbs", () => {
     // "Could not link X" reads as "X was not added". When X was already a
     // destination, the state actually changed: it is no longer being fed.
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["connector_new", "connector_ws-scratch"]);
+    writeOAuthConfig(project, connectionRecord("profile_stale", ["connector_new", "connector_ws-scratch"]));
     route({
       // The link RESOLVES (so it is a known prior destination) but updating it
       // fails — which is what separates "kept but failed" from "unresolvable".
@@ -1484,7 +1608,7 @@ describe("JSON verbs", () => {
 
   test("a prior link that no longer resolves is reported, not silently dropped", async () => {
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["connector_new", "connector_ghost"]);
+    writeOAuthConfig(project, connectionRecord("profile_stale", ["connector_new", "connector_ghost"]));
     route();
     seedLink("connector_new", "ws-default"); // connector_ghost 404s
 
@@ -1498,7 +1622,7 @@ describe("JSON verbs", () => {
       unresolvedConnectorIds: ["connector_ghost"],
     });
     expect(
-      JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).connectorIds,
+      JSON.parse(readFileSync(join(project, ".augenta", "config.json"), "utf8")).destinations.map((destination: { connectorId: string }) => destination.connectorId),
     ).toEqual(["connector_new"]);
   });
 
@@ -1506,7 +1630,7 @@ describe("JSON verbs", () => {
     // currentConnector throws on anything but 403/404; priorLinks must absorb that
     // — an unreadable prior link is exactly when reconnecting has to keep working.
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["connector_boom"]);
+    writeOAuthConfig(project, connectionRecord("profile_stale", ["connector_boom"]));
     route({
       [`GET ${GATEWAY}/v1/connectors/connector_boom`]: () =>
         new Response("upstream on fire", { status: 500 }),
@@ -1528,7 +1652,7 @@ describe("JSON verbs", () => {
     // the shipper runs, a pre-fan-out cursor cannot tell which key earned its
     // watermark. See Outbox.registerDestinations.
     await signIn();
-    writeOAuthConfig(project, "profile_stale", ["connector_new"]);
+    writeOAuthConfig(project, connectionRecord("profile_stale", ["connector_new"]));
     route();
     seedLink("connector_new", "ws-default");
 

@@ -44,7 +44,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { isCodexHarness } from "./harness";
-import { captureEnabled, loadProjectConfig, resolveProjectRoot } from "../capture/config";
+import { captureEnabled, controlUrl, loadProjectConfig, resolveProjectRoot } from "../capture/config";
+import { environmentLabel } from "../capture/platform";
 import { Outbox } from "../capture/outbox";
 import { spawnShipper } from "../capture/shipper";
 import { captureAgentMemory } from "../capture/memory";
@@ -89,6 +90,11 @@ if (connectedRoot) {
     recordHealth(connectedRoot, "dispatch", "started");
     const action = connectAction;
     const notices: string[] = [];
+    const environment = environmentLabel(controlUrl(cfg));
+    if (environment !== "prod") {
+      const names = cfg?.destinations?.map((destination) => destination.workspaceName || destination.workspaceId).join(", ");
+      notices.push(`Augenta: this project is connected to the ${environment} environment, not production${names ? `, feeding ${names}` : ""}.`);
+    }
     const authNotice = takeAuthNotice(connectedRoot);
     if (authNotice === "badkey") {
       /* Worded apart from the two below, not just with a different noun, because

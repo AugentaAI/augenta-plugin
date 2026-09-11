@@ -27,9 +27,14 @@ import { isMain } from "../runtime/node";
 import { PLUGIN_VERSION } from "../runtime/version";
 import { ensureAugentaDir } from "../capture/augenta-dir";
 import {
+  DEFAULT_CONTROL_URL,
   DEFAULT_GATEWAY,
+  controlUrl,
   gatewayBase,
   loadProjectConfig,
+  type Destination,
+  type Organization,
+  type ProjectConfig,
 } from "../capture/config";
 import { Outbox } from "../capture/outbox";
 import {
@@ -175,6 +180,7 @@ export function writeApiKeyConfig(
   projectRoot: string,
   apiKey: string,
   endpoint?: string,
+  details: Pick<ProjectConfig, "org" | "destinations" | "controlUrl" | "ingestUrl"> = {},
 ): string {
   const dir = ensureAugentaDir(projectRoot);
   const path = join(dir, "config.json");
@@ -185,6 +191,7 @@ export function writeApiKeyConfig(
         authMode: "api-key",
         captureSince: new Date().toISOString(),
         apiKey,
+        ...details,
         ...(endpoint ? { endpoint } : {}),
       },
       null,
@@ -204,17 +211,21 @@ export function writeApiKeyConfig(
  * confirmed, and a read-modify-write torn halfway would silently drop a
  * destination they consented to.
  *
- * Only the plural form is emitted. Writing both spellings would let an older
- * installed plugin read the scalar, ship to that one destination, and go quietly
- * single-destination with nobody told.
+ * Only destinations is emitted. Older plugins must prompt a reconnect rather
+ * than silently interpreting part of the new connection record.
  */
 export function writeOAuthConfig(
   projectRoot: string,
-  profileId: string,
-  connectorIds: readonly string[],
-  endpoint?: string,
+  connection: {
+    profileId: string;
+    controlUrl: string;
+    endpoint: string;
+    org: Organization;
+    destinations: readonly Destination[];
+    ingestUrl?: string;
+  },
 ): string {
-  if (connectorIds.length === 0) {
+  if (connection.destinations.length === 0) {
     throw new Error("an OAuth connection requires at least one Connector");
   }
   const dir = ensureAugentaDir(projectRoot);
@@ -225,9 +236,7 @@ export function writeOAuthConfig(
       {
         authMode: "oauth",
         captureSince: new Date().toISOString(),
-        profileId,
-        connectorIds: [...connectorIds],
-        ...(endpoint ? { endpoint } : {}),
+        ...connection,
       },
       null,
       2,
@@ -655,10 +664,14 @@ async function linkForWorkspace(
 
 async function resolveOAuth(
   args: Args,
-): Promise<{ oauth: OAuthConfig; gateway: string }> {
-  const discovered = await augentaOAuthConfig(args.controlUrl);
-  const gateway = (args.endpoint?.trim() || discovered.gateway).replace(/\/+$/, "");
-  return { oauth: { ...discovered, gateway }, gateway };
+  projectRoot = args.project ?? process.cwd(),
+): Promise<{ oauth: OAuthConfig; gateway: string; control: string }> {
+  const prior = loadProjectConfig(projectRoot);
+  const control = controlUrl(prior, args.controlUrl);
+  const discovered = await augentaOAuthConfig(control);
+  const savedEndpoint = control === (prior?.controlUrl ?? DEFAULT_CONTROL_URL) ? prior?.endpoint : undefined;
+  const gateway = gatewayBase({ endpoint: savedEndpoint || discovered.gateway }, args.endpoint);
+  return { oauth: { ...discovered, gateway }, gateway, control };
 }
 
 /**
@@ -668,12 +681,12 @@ async function resolveOAuth(
  */
 function priorConnection(
   projectRoot: string,
-): { profileId?: string; connectorIds?: string[] } | undefined {
+): ProjectConfig | undefined {
   if (!existsSync(join(projectRoot, ".augenta", "config.json"))) return undefined;
   try {
     const existing = loadProjectConfig(projectRoot);
     return existing?.authMode === "oauth"
-      ? { profileId: existing.profileId, connectorIds: existing.connectorIds }
+      ? existing
       : undefined;
   } catch {
     return undefined;
@@ -732,6 +745,7 @@ async function establishConnectors(
   args: Args,
   profileId: string,
   gateway: string,
+  connection: { controlUrl: string; org: Organization },
   workspaces: readonly Workspace[],
   priorConnectorIds: readonly string[],
   /** The organization's live Workspaces, so removals can be NAMED rather than
@@ -813,12 +827,15 @@ async function establishConnectors(
     });
 
   if (verifiedIds.length === 0) return { results, removed, unresolvedConnectorIds };
-  const configPath = writeOAuthConfig(
-    projectRoot,
+  const configPath = writeOAuthConfig(projectRoot, {
     profileId,
-    verifiedIds,
-    gateway === DEFAULT_GATEWAY ? undefined : gateway,
-  );
+    ...connection,
+    endpoint: gateway,
+    destinations: results
+      .filter((result): result is DestinationResult & { connectorId: string } => Boolean(result.connectorId))
+      .map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+    ingestUrl: loadProjectConfig(projectRoot)?.ingestUrl,
+  });
   // Stamp the outbox's destination map here, while we still know which links were
   // just CREATED. A newly added Workspace must not inherit the pending tail a
   // pre-fan-out cursor accumulated for the destination that earned it, and by the
@@ -838,7 +855,7 @@ export async function connectProject(
   projectRoot: string,
   args: Args,
 ): Promise<void> {
-  const { oauth, gateway } = await resolveOAuth(args);
+  const { oauth, gateway, control } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
   const selected = await selectOrCreateProfile(oauth, prior?.profileId);
   console.log(
@@ -847,7 +864,7 @@ export async function connectProject(
   const priorIds = prior?.connectorIds ?? [];
   const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds);
   const available = await listWorkspaces(selected.profileId, gateway);
-  const environment = environmentLabel(args.controlUrl);
+  const environment = environmentLabel(control);
 
   // BEFORE the answer, not after. This is the disclosure the consent invariant
   // turns on (AGENTS.md → Privacy invariants): a list of Workspace names does not
@@ -861,6 +878,9 @@ export async function connectProject(
   );
   if (environment !== "prod") {
     console.log(`This is the ${environment} environment, not production.`);
+  }
+  if (prior?.controlUrl && prior.controlUrl !== control) {
+    console.log(`This project is moving from ${environmentLabel(prior.controlUrl)} to ${environment}.`);
   }
 
   const workspaces = await selectedWorkspaces(
@@ -880,6 +900,7 @@ export async function connectProject(
       args,
       selected.profileId,
       gateway,
+      { controlUrl: control, org: selected.me.org },
       workspaces,
       priorIds,
       available,
@@ -1019,10 +1040,13 @@ export async function probeConnection(
   resolved: ResolvedProject,
   args: Args,
 ): Promise<JsonPayload> {
-  const { oauth, gateway } = await resolveOAuth(args);
+  const cfg = loadProjectConfig(resolved.projectRoot);
+  const current = savedConnection(cfg);
+  const change = environmentChange(cfg, args);
+  const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
   const priorIds = prior?.connectorIds ?? [];
-  const alreadyConnected = { alreadyConnected: priorIds.length > 0 };
+  const alreadyConnected = { alreadyConnected: Boolean(cfg), ...(current ? { current } : {}), ...change };
   const usable = await usableProfiles(oauth, prior?.profileId);
   if (usable.length === 0) return { status: "need_login", ...alreadyConnected };
   if (usable.length > 1) {
@@ -1155,7 +1179,7 @@ export async function createWorkspaceForSelection(
       message: "a non-empty Workspace name is required",
     };
   }
-  const { oauth, gateway } = await resolveOAuth(args);
+  const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
   const usable = await usableProfiles(oauth, args.profile ?? prior?.profileId);
   if (usable.length === 0) {
@@ -1219,7 +1243,7 @@ export async function connectToWorkspaces(
   resolved: ResolvedProject,
   args: Args,
 ): Promise<JsonPayload> {
-  const { oauth, gateway } = await resolveOAuth(args);
+  const { oauth, gateway, control } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
   const usable = await usableProfiles(oauth, args.profile ?? prior?.profileId);
   if (usable.length === 0) {
@@ -1273,6 +1297,7 @@ export async function connectToWorkspaces(
     args,
     picked.profileId,
     gateway,
+    { controlUrl: control, org: picked.me.org },
     workspaces,
     prior?.connectorIds ?? [],
     available,
@@ -1313,11 +1338,45 @@ export async function connectToWorkspaces(
     // unmentioned.
     ...(unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {}),
     organization: picked.me.org.name,
+    ...environmentChange(prior, args),
     configPath,
   };
 }
 
+function environmentChange(cfg: ProjectConfig | undefined, args: Args): { environmentChange?: { from: string; to: string } } {
+  const next = controlUrl(cfg, args.controlUrl);
+  return cfg?.controlUrl && cfg.controlUrl !== next
+    ? { environmentChange: { from: environmentLabel(cfg.controlUrl), to: environmentLabel(next) } }
+    : {};
+}
+
+function savedConnection(cfg: ProjectConfig | undefined) {
+  if (!cfg) return undefined;
+  return {
+    environment: environmentLabel(cfg.controlUrl),
+    organization: cfg.org?.name ?? cfg.org?.id,
+    destinations: cfg.destinations ?? [],
+  };
+}
+
 export async function runJsonVerb(
+  resolved: ResolvedProject,
+  args: Args,
+): Promise<JsonPayload> {
+  const cfg = loadProjectConfig(resolved.projectRoot);
+  const metadata = {
+    environment: environmentLabel(controlUrl(cfg, args.controlUrl)),
+    ...environmentChange(cfg, args),
+    ...(args.probe && cfg ? { current: savedConnection(cfg) } : {}),
+  };
+  try {
+    return { ...(await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot })), ...metadata };
+  } catch (error) {
+    return { status: "error", code: "failed", message: describeError(error), ...metadata };
+  }
+}
+
+async function dispatchJsonVerb(
   resolved: ResolvedProject,
   args: Args,
 ): Promise<JsonPayload> {
@@ -1389,8 +1448,8 @@ export async function verifyApiKeyConnection(
   }
   // This ban SURVIVES fan-out, deliberately. A signed-in project fans out because
   // a human affirmed a set of Workspaces; nothing on this path affirms anything —
-  // there is no consent gate here, the config format it writes has no field to
-  // express a route, and the shipper sends no Connector header in api-key mode.
+  // there is no consent gate here, the recorded destination only describes the
+  // assignment, and the shipper sends no Connector header in api-key mode.
   // A platform key's server-side assignment IS its routing decision, so with
   // several links visible there is no non-arbitrary pick and the plugin cannot
   // verify which one the door will choose. Fail loudly now rather than let a CI
@@ -1455,7 +1514,7 @@ export async function verifyProjectKey(
      The shipper reaches the door via experiencesUrl -> gatewayBase, which reads
      AUGENTA_API_URL FIRST and only then the config's `endpoint`. Hand-rolling
      `endpoint || DEFAULT` looked equivalent and was not: with AUGENTA_API_URL set —
-     which is how a local or dev environment is pointed, and what dev-plugin-e2e.ts
+     which is how a local or dev environment is pointed, and what dev-e2e.ts
      does — this would have verified a different host than capture actually ships
      to, and a green check against the wrong gateway is worse than no check.
 
@@ -1463,9 +1522,7 @@ export async function verifyProjectKey(
      AUGENTA_INGEST_URL is deliberately not consulted — it overrides the ingest path
      only, and what is being verified here is the key and its Connector on the
      control surface. */
-  const gateway = endpointOverride?.trim()
-    ? endpointOverride.trim().replace(/\/+$/, "")
-    : gatewayBase(cfg);
+  const gateway = gatewayBase(cfg, endpointOverride);
   return { connector: await verifyApiKeyConnection(apiKey, gateway), gateway };
 }
 
@@ -1474,13 +1531,20 @@ export async function connectWithApiKey(
   apiKey: string,
   endpoint?: string,
 ): Promise<{ path: string; connector: Connector }> {
-  const gateway = (endpoint?.trim() || DEFAULT_GATEWAY).replace(/\/+$/, "");
+  const prior = loadProjectConfig(projectRoot);
+  const gateway = gatewayBase(prior, endpoint);
   const connector = await verifyApiKeyConnection(apiKey, gateway);
   return {
     path: writeApiKeyConfig(
       projectRoot,
       apiKey,
       gateway === DEFAULT_GATEWAY ? undefined : gateway,
+      {
+        org: { id: connector.orgId },
+        destinations: [{ connectorId: connector.id, workspaceId: connector.workspaceId }],
+        ...(prior?.controlUrl ? { controlUrl: prior.controlUrl } : {}),
+        ...(prior?.ingestUrl ? { ingestUrl: prior.ingestUrl } : {}),
+      },
     ),
     connector,
   };
@@ -1511,7 +1575,6 @@ if (isMain(import.meta.url)) {
         JSON.stringify(
           {
             ...payload,
-            environment: environmentLabel(args.controlUrl),
             projectRoot,
             ...(resolved.worktreeRedirect
               ? { worktreeRedirect: resolved.worktreeRedirect }

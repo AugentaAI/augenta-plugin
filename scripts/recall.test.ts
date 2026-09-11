@@ -13,7 +13,7 @@
  */
 import { test, expect, describe, beforeEach, afterEach, spyOn } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -52,7 +52,7 @@ let requests: Array<{ method: string; url: string; headers: Headers; body?: stri
  * order is not a suite.
  */
 const savedEnv: Record<string, string | undefined> = {};
-const SANDBOXED = ["AUGENTA_AUTH_HOME", "AUGENTA_CONTROL_URL", "AUGENTA_API_URL"] as const;
+const SANDBOXED = ["AUGENTA_AUTH_HOME", "AUGENTA_CONTROL_URL", "AUGENTA_API_URL", "AUGENTA_INGEST_URL"] as const;
 
 beforeEach(() => {
   project = realpathSync(mkdtempSync(join(tmpdir(), "aug-recall-")));
@@ -97,9 +97,18 @@ function writeConfig(config: Record<string, unknown>): void {
   writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify(config, null, 2));
 }
 
+function storedDestinations(connectorIds: string[]) {
+  return connectorIds.map((connectorId) => ({
+    connectorId,
+    workspaceId: connectorId === "connector_a_twin" ? "ws-default" : LINKS[connectorId] ?? "ws-gone",
+    workspaceName: "Saved Workspace",
+  }));
+}
+
 /** Connector id → the Workspace it is anchored to, as the platform would say. */
 const LINKS: Record<string, string> = {
   connector_a: "ws-default",
+  connector_a_twin: "ws-default",
   connector_b: "ws-scratch",
 };
 const WORKSPACES = [
@@ -130,13 +139,11 @@ function route(
     if (path === `${GATEWAY}/v1/workspaces` && method === "GET") {
       return Response.json({ workspaces: WORKSPACES });
     }
-    if (path.startsWith(`${GATEWAY}/v1/connectors/`)) {
-      const id = decodeURIComponent(path.slice(`${GATEWAY}/v1/connectors/`.length));
-      const workspaceId = LINKS[id];
-      if (!workspaceId) return new Response("no such connector", { status: 404 });
-      return Response.json({
-        connector: { id, kind: "agent", direction: "inbound", status: "active", workspaceId },
-      });
+    if (parsed.origin === GATEWAY && parsed.pathname.startsWith("/v1/connectors/") && method === "GET") {
+      const connectorId = decodeURIComponent(parsed.pathname.slice("/v1/connectors/".length));
+      return LINKS[connectorId]
+        ? Response.json({ connector: { id: connectorId, workspaceId: LINKS[connectorId], status: "active" } })
+        : new Response("not found", { status: 404 });
     }
     return new Response(`unrouted: ${method} ${path}`, { status: 500 });
   }) as typeof fetch;
@@ -640,7 +647,7 @@ describe("a project that cannot be asked", () => {
     writeConfig({
       authMode: "oauth",
       profileId: "profile_gone",
-      connectorIds: ["connector_a"],
+      destinations: storedDestinations(["connector_a"]),
       endpoint: GATEWAY,
     });
     const payload = await runRecall({ projectRoot: project }, args());
@@ -652,7 +659,7 @@ describe("a project that cannot be asked", () => {
 describe("the fan-out", () => {
   async function connectedProject(connectorIds = ["connector_a", "connector_b"]) {
     const { profileId } = await signIn();
-    writeConfig({ authMode: "oauth", profileId, connectorIds, endpoint: GATEWAY });
+    writeConfig({ authMode: "oauth", profileId, destinations: storedDestinations(connectorIds), endpoint: GATEWAY });
     return profileId;
   }
 
@@ -853,15 +860,8 @@ describe("the fan-out", () => {
 
     expect(payload.status).toBe("partially_answered");
     expect(payload.answers).toHaveLength(1);
-    expect(payload.failed).toEqual([
-      {
-        connectorId: "connector_b",
-        workspaceId: "ws-scratch",
-        workspaceName: "Scratch",
-        code: "not_entitled",
-        message: "you are not entitled",
-      },
-    ]);
+    expect(payload.failed).toEqual([]);
+    expect(payload.unresolvedConnectorIds).toEqual(["connector_b"]);
   });
 
   test("rate limiting reports the wait instead of inviting a retry loop", async () => {
@@ -885,11 +885,20 @@ describe("the fan-out", () => {
   test("recall undeployed everywhere collapses to one recall_unavailable verdict", async () => {
     await connectedProject();
     route({
-      [`POST ${GATEWAY}/v1/recall`]: () => new Response("404 Not Found", { status: 404 }),
+      [`POST ${GATEWAY}/v1/recall`]: () => typedError(502, "recall_unavailable", "not deployed"),
     });
     const payload = await runRecall({ projectRoot: project }, args());
     expect(payload.status).toBe("recall_unavailable");
     expect(payload.failed).toHaveLength(2);
+  });
+
+  test("a missing recall route is unavailable rather than an inaccessible destination", async () => {
+    await connectedProject();
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => new Response("404 Not Found", { status: 404 }) });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload.status).toBe("recall_unavailable");
+    expect(payload.failed).toHaveLength(2);
+    expect(payload.unresolvedConnectorIds).toBeUndefined();
   });
 
   test("an expired sign-in is one need_login verdict, after exactly one refresh", async () => {
@@ -926,6 +935,7 @@ describe("the fan-out", () => {
     await connectedProject(["connector_a"]);
     route({
       [`POST ${GATEWAY}/v1/recall`]: async (init) => {
+        init.signal?.throwIfAborted();
         await new Promise((resolve, reject) => {
           setTimeout(resolve, 5_000);
           init.signal?.addEventListener("abort", () => reject(init.signal!.reason));
@@ -956,243 +966,264 @@ describe("the fan-out", () => {
   });
 });
 
-describe("destinations that cannot be resolved", () => {
-  test("a Connector this sign-in cannot see is reported, not silently dropped", async () => {
-    // The project is still SHIPPING to it, so its silence is a fact about the
-    // sign-in rather than about the Workspace.
+describe("recorded destinations and live recall", () => {
+  async function configure(connectorIds = ["connector_a", "connector_b"], extra = {}) {
     const { profileId } = await signIn();
-    writeConfig({
-      authMode: "oauth",
-      profileId,
-      connectorIds: ["connector_a", "connector_gone"],
-      endpoint: GATEWAY,
+    writeConfig({ authMode: "oauth", profileId, destinations: storedDestinations(connectorIds), endpoint: GATEWAY, ...extra });
+  }
+
+  for (const answer of [false, true]) {
+    test(`a disabled Connector is checked before ${answer ? "answer" : "context"} recall`, async () => {
+      await configure();
+      const saved = readFileSync(join(project, ".augenta", "config.json"), "utf8");
+      let checked = false;
+      route({
+        [`GET ${GATEWAY}/v1/connectors/connector_b`]: () => {
+          checked = true;
+          return Response.json({ connector: { id: "connector_b", workspaceId: "ws-scratch", status: "disabled" } });
+        },
+        [`POST ${GATEWAY}/v1/recall`]: () => {
+          expect(checked).toBe(true);
+          return memoryResponse("a");
+        },
+      });
+      const payload = await runRecall({ projectRoot: project }, args({ answer }));
+      expect(payload.status).toBe("partially_answered");
+      expect(payload.answers).toMatchObject([{ connectorId: "connector_a" }]);
+      expect(payload.failed).toEqual([]);
+      expect(payload.unresolvedConnectorIds).toEqual(["connector_b"]);
+      expect(recallCalls().map((call) => JSON.parse(call.body!).workspace)).toEqual(["ws-default"]);
+      expect(readFileSync(join(project, ".augenta", "config.json"), "utf8")).toBe(saved);
     });
-    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a") });
+  }
 
-    const payload = await runRecall({ projectRoot: project }, args());
-
-    expect(payload.status).toBe("answered");
-    expect(payload.answers).toHaveLength(1);
-    expect(payload.unresolvedConnectorIds).toEqual(["connector_gone"]);
+  test("a disabled selected link sends no question and asks to reconnect", async () => {
+    await configure();
+    route({
+      [`GET ${GATEWAY}/v1/connectors/connector_b`]: () =>
+        Response.json({ connector: { id: "connector_b", workspaceId: "ws-scratch", status: "disabled" } }),
+      [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("must not be asked"),
+    });
+    const payload = await runRecall({ projectRoot: project }, args({ workspaces: ["ws-scratch"] }));
+    expect(payload).toMatchObject({ status: "error", code: "no_destination", unresolvedConnectorIds: ["connector_b"] });
+    expect(payload.message).toContain("reconnect");
+    expect(recallCalls()).toEqual([]);
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual(["/v1/connectors/connector_b"]);
   });
 
-  test("a Connector lookup that FAILS is a failed destination, not a missing one", async () => {
-    // 403/404 means "gone"; a 500 or a dropped connection means "could not ask".
-    // Collapsing the two would quietly narrow the fan-out on a network blip.
-    const { profileId } = await signIn();
-    writeConfig({
-      authMode: "oauth",
-      profileId,
-      connectorIds: ["connector_a", "connector_b"],
-      endpoint: GATEWAY,
-    });
+  test("rechecks link status on each recall rather than caching it", async () => {
+    await configure(["connector_a"]);
+    let status = "active";
     route({
-      [`${GATEWAY}/v1/connectors/connector_b`]: () => new Response("boom", { status: 500 }),
+      [`GET ${GATEWAY}/v1/connectors/connector_a`]: () =>
+        Response.json({ connector: { id: "connector_a", workspaceId: "ws-default", status } }),
       [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a"),
     });
-
-    const payload = await runRecall({ projectRoot: project }, args());
-
-    expect(payload.status).toBe("partially_answered");
-    expect(payload.unresolvedConnectorIds).toBeUndefined();
-    expect(payload.failed).toEqual([
-      {
-        connectorId: "connector_b",
-        code: "network",
-        message: "could not inspect the existing Connector (500)",
-      },
-    ]);
-  });
-
-  test("two Connector ids on ONE Workspace are asked once, not twice", async () => {
-    /* Asking twice would bill two model turns, record two reuse activations for
-       one question, and render the same Workspace twice as though two of them
-       had answered. Nothing is lost — the Workspace is still asked. */
-    const { profileId } = await signIn();
-    writeConfig({
-      authMode: "oauth",
-      profileId,
-      connectorIds: ["connector_a", "connector_a_twin"],
-      endpoint: GATEWAY,
-    });
-    route({
-      // A second, distinct Connector anchored to the SAME Workspace.
-      [`${GATEWAY}/v1/connectors/connector_a_twin`]: () =>
-        Response.json({
-          connector: {
-            id: "connector_a_twin",
-            kind: "agent",
-            direction: "inbound",
-            status: "active",
-            workspaceId: "ws-default",
-          },
-        }),
-      [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("once"),
-    });
-
-    const payload = await runRecall({ projectRoot: project }, args());
-
-    expect(payload.status).toBe("answered");
-    expect(payload.answers).toHaveLength(1);
+    expect((await runRecall({ projectRoot: project }, args())).status).toBe("answered");
+    status = "disabled";
+    expect((await runRecall({ projectRoot: project }, args())).unresolvedConnectorIds).toEqual(["connector_a"]);
     expect(recallCalls()).toHaveLength(1);
+    expect(requests.filter((request) => new URL(request.url).pathname === "/v1/connectors/connector_a")).toHaveLength(2);
   });
 
-  test("no resolvable destination at all is an error that names the ids", async () => {
-    const { profileId } = await signIn();
-    writeConfig({
-      authMode: "oauth",
-      profileId,
-      connectorIds: ["connector_gone"],
-      endpoint: GATEWAY,
-    });
-    route();
-    const payload = await runRecall({ projectRoot: project }, args());
-    expect(payload).toMatchObject({ status: "error", code: "no_destination" });
-    expect(payload.message).toContain("connector_gone");
-    expect(payload.unresolvedConnectorIds).toEqual(["connector_gone"]);
-    expect(recallCalls()).toEqual([]);
-  });
-
-  test("the Connector lookups and the Workspace list overlap", async () => {
-    /* Neither needs the other — the lookups decide WHERE the question goes, the
-       list only decides what each answer is CALLED — so in series this cost a
-       full extra round trip before the first question was even sent. Same
-       arrival barrier as the fan-out test: neither answers until both arrive, so
-       a sequential implementation deadlocks rather than merely being slower. */
-    const { profileId } = await signIn();
-    writeConfig({ authMode: "oauth", profileId, connectorIds: ["connector_a"], endpoint: GATEWAY });
+  test("inspects independent links in parallel before sending any question", async () => {
+    await configure();
     let arrivals = 0;
-    let bothArrived!: () => void;
-    const barrier = new Promise<void>((resolve) => {
-      bothArrived = resolve;
-    });
-    const hold = async (body: unknown) => {
-      arrivals += 1;
-      if (arrivals === 2) bothArrived();
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const inspect = async (connectorId: string) => {
+      if (++arrivals === 2) release();
       await barrier;
-      return Response.json(body);
+      return Response.json({ connector: { id: connectorId, workspaceId: LINKS[connectorId], status: "active" } });
     };
     route({
-      [`GET ${GATEWAY}/v1/workspaces`]: () => hold({ workspaces: WORKSPACES }),
-      [`${GATEWAY}/v1/connectors/connector_a`]: () =>
-        hold({
-          connector: {
-            id: "connector_a",
-            kind: "agent",
-            direction: "inbound",
-            status: "active",
-            workspaceId: "ws-default",
-          },
-        }),
+      [`GET ${GATEWAY}/v1/connectors/connector_a`]: () => inspect("connector_a"),
+      [`GET ${GATEWAY}/v1/connectors/connector_b`]: () => inspect("connector_b"),
+      [`POST ${GATEWAY}/v1/recall`]: () => {
+        expect(arrivals).toBe(2);
+        return memoryResponse("a");
+      },
+    });
+    expect((await runRecall({ projectRoot: project }, args())).status).toBe("answered");
+  });
+
+  for (const status of [403, 404]) {
+    test(`Connector ${status} skips only the inaccessible link`, async () => {
+      await configure();
+      route({
+        [`GET ${GATEWAY}/v1/connectors/connector_b`]: () => new Response("not accessible", { status }),
+        [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a"),
+      });
+      const payload = await runRecall({ projectRoot: project }, args());
+      expect(payload.status).toBe("partially_answered");
+      expect(payload.unresolvedConnectorIds).toEqual(["connector_b"]);
+      expect(recallCalls()).toHaveLength(1);
+    });
+  }
+
+  test("a retargeted link cannot ask either its saved or unselected Workspace", async () => {
+    await configure(["connector_a"]);
+    route({
+      [`GET ${GATEWAY}/v1/connectors/connector_a`]: () =>
+        Response.json({ connector: { id: "connector_a", workspaceId: "ws-other", status: "active" } }),
+      [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("must not be asked"),
+    });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload).toMatchObject({ status: "error", code: "no_destination", unresolvedConnectorIds: ["connector_a"] });
+    expect(recallCalls()).toEqual([]);
+  });
+
+  test("checks every link before deduplicating a shared Workspace", async () => {
+    await configure(["connector_a", "connector_a_twin"]);
+    route({
+      [`GET ${GATEWAY}/v1/connectors/connector_a`]: () =>
+        Response.json({ connector: { id: "connector_a", workspaceId: "ws-default", status: "disabled" } }),
       [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a"),
     });
-
     const payload = await runRecall({ projectRoot: project }, args());
-
-    expect(arrivals).toBe(2);
-    expect(payload.answers[0]!.workspaceName).toBe("Default Workspace");
+    expect(payload.status).toBe("partially_answered");
+    expect(payload.unresolvedConnectorIds).toEqual(["connector_a"]);
+    expect(payload.answers).toMatchObject([{ connectorId: "connector_a_twin", workspaceId: "ws-default" }]);
+    expect(recallCalls()).toHaveLength(1);
   });
 
-  test("Workspace names are a label, so an unreadable list costs only the heading", async () => {
-    const { profileId } = await signIn();
-    writeConfig({ authMode: "oauth", profileId, connectorIds: ["connector_a"], endpoint: GATEWAY });
+  test("a refused shared Workspace does not report a disabled link twice", async () => {
+    await configure(["connector_a", "connector_a_twin"]);
+    route({
+      [`GET ${GATEWAY}/v1/connectors/connector_a`]: () =>
+        Response.json({ connector: { id: "connector_a", workspaceId: "ws-default", status: "disabled" } }),
+      [`POST ${GATEWAY}/v1/recall`]: () => typedError(403, "forbidden", "no access"),
+    });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload.unresolvedConnectorIds).toEqual(["connector_a", "connector_a_twin"]);
+  });
+
+  for (const failure of ["network", "server"] as const) {
+    test(`a Connector ${failure} failure blocks its question without claiming it was disabled`, async () => {
+      await configure();
+      route({
+        [`GET ${GATEWAY}/v1/connectors/connector_b`]: () => {
+          if (failure === "network") throw new Error("offline");
+          return new Response("unavailable", { status: 500 });
+        },
+        [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a"),
+      });
+      const payload = await runRecall({ projectRoot: project }, args());
+      expect(payload.status).toBe("partially_answered");
+      expect(payload.unresolvedConnectorIds).toBeUndefined();
+      expect(payload.failed).toMatchObject([{ connectorId: "connector_b", code: "network" }]);
+      expect(recallCalls().map((call) => JSON.parse(call.body!).workspace)).toEqual(["ws-default"]);
+    });
+  }
+
+  test("an expired sign-in during the Connector check sends no question", async () => {
+    await configure(["connector_a"]);
+    route({
+      [`GET ${GATEWAY}/v1/connectors/connector_a`]: () => new Response("expired", { status: 401 }),
+      [`POST ${ISSUER}/oauth2/token`]: () => Response.json({ error: "invalid_grant" }, { status: 400 }),
+      [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("must not be asked"),
+    });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload.status).toBe("need_login");
+    expect(payload.failed).toMatchObject([{ connectorId: "connector_a", code: "need_login" }]);
+    expect(recallCalls()).toEqual([]);
+  });
+
+  for (const [status, code] of [[403, "forbidden"], [404, "not_found"], [409, "workspace_archived"], [400, "workspace_not_found"]] as const) {
+    test(`door ${status}/${code} reports inaccessible destinations`, async () => {
+      await configure();
+      route({ [`POST ${GATEWAY}/v1/recall`]: (init) =>
+        JSON.parse(String(init.body)).workspace === "ws-default" ? memoryResponse("a") : typedError(status, code, "not accessible") });
+      const payload = await runRecall({ projectRoot: project }, args());
+      expect(payload.status).toBe("partially_answered");
+      expect(payload.answers).toHaveLength(1);
+      expect(payload.failed).toEqual([]);
+      expect(payload.unresolvedConnectorIds).toEqual(["connector_b"]);
+    });
+  }
+
+  test("network failures remain failed destinations", async () => {
+    await configure();
+    route({ [`POST ${GATEWAY}/v1/recall`]: (init) => {
+      if (JSON.parse(String(init.body)).workspace === "ws-scratch") throw new Error("offline");
+      return memoryResponse("a");
+    } });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload.status).toBe("partially_answered");
+    expect(payload.unresolvedConnectorIds).toBeUndefined();
+    expect(payload.failed).toMatchObject([{ connectorId: "connector_b", code: "network", message: "offline" }]);
+  });
+
+  test("a shared Workspace is asked once and every refused Connector is reported", async () => {
+    await configure(["connector_a", "connector_a_twin"]);
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => typedError(403, "forbidden", "no access") });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(recallCalls()).toHaveLength(1);
+    expect(payload.status).toBe("error");
+    expect(payload.unresolvedConnectorIds).toEqual(["connector_a", "connector_a_twin"]);
+    expect(payload.code).toBe("no_destination");
+    expect(payload.message).toContain("connector_a_twin");
+  });
+
+  test("listing and recall overlap, and the live name wins without rewriting config", async () => {
+    await configure(["connector_a"]);
+    const saved = readFileSync(join(project, ".augenta", "config.json"), "utf8");
+    let arrivals = 0;
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const hold = async (response: Response) => {
+      if (++arrivals === 2) release();
+      await barrier;
+      return response;
+    };
+    route({
+      [`GET ${GATEWAY}/v1/workspaces`]: () => hold(Response.json({ workspaces: [{ id: "ws-default", name: "Renamed" }] })),
+      [`POST ${GATEWAY}/v1/recall`]: () => hold(memoryResponse("a")),
+    });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(arrivals).toBe(2);
+    expect(payload.answers[0]!.workspaceName).toBe("Renamed");
+    expect(readFileSync(join(project, ".augenta", "config.json"), "utf8")).toBe(saved);
+  });
+
+  test("a failed listing retains the saved heading", async () => {
+    await configure(["connector_a"]);
     route({
       [`GET ${GATEWAY}/v1/workspaces`]: () => new Response("boom", { status: 500 }),
-      [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("still answered"),
+      [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a"),
     });
-
     const payload = await runRecall({ projectRoot: project }, args());
-
     expect(payload.status).toBe("answered");
-    expect(payload.answers[0]).toMatchObject({
-      workspaceId: "ws-default",
-      answer: "still answered",
-    });
-    expect(payload.answers[0]).not.toHaveProperty("workspaceName");
+    expect(payload.answers[0]!.workspaceName).toBe("Saved Workspace");
   });
-});
 
-describe("--workspace narrows the fan-out", () => {
-  test("only the named Workspace is asked", async () => {
-    const { profileId } = await signIn();
-    writeConfig({
-      authMode: "oauth",
-      profileId,
-      connectorIds: ["connector_a", "connector_b"],
-      endpoint: GATEWAY,
-    });
-    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("scoped") });
-
+  test("workspace selection narrows only the recorded set", async () => {
+    await configure();
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a") });
+    const unknown = await runRecall({ projectRoot: project }, args({ workspaces: ["ws-other"] }));
+    expect(unknown).toMatchObject({ status: "error", code: "unknown_workspace" });
+    expect(requests).toEqual([]);
     const payload = await runRecall({ projectRoot: project }, args({ workspaces: ["ws-scratch"] }));
-
     expect(payload.status).toBe("answered");
     expect(recallCalls()).toHaveLength(1);
-    expect(JSON.parse(String(recallCalls()[0]!.body)).workspace).toBe("ws-scratch");
+    expect(JSON.parse(recallCalls()[0]!.body!).workspace).toBe("ws-scratch");
   });
 
-  test("an unresolvable destination makes the answer UNKNOWN, not 'not a destination'", async () => {
-    /* Both outcomes fail closed, which is right. What differs is the sentence:
-       with a Connector unresolved, the run never learned which Workspace it
-       points at, so "this project does not feed X" states a consent conclusion
-       it never reached — and the evidence for why must not be dropped. */
-    const { profileId } = await signIn();
-    writeConfig({
-      authMode: "oauth",
-      profileId,
-      connectorIds: ["connector_a", "connector_b"],
-      endpoint: GATEWAY,
-    });
-    route({
-      [`${GATEWAY}/v1/connectors/connector_b`]: () => new Response("boom", { status: 500 }),
-      [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("nope"),
-    });
-
-    const payload = await runRecall({ projectRoot: project }, args({ workspaces: ["ws-scratch"] }));
-
-    expect(payload).toMatchObject({ status: "error", code: "workspace_unverifiable" });
-    expect(payload.message).toContain("ws-scratch");
-    // The evidence survives the bail rather than being discarded with it.
-    expect(payload.failed).toEqual([
-      {
-        connectorId: "connector_b",
-        code: "network",
-        message: "could not inspect the existing Connector (500)",
-      },
-    ]);
-    expect(recallCalls()).toEqual([]);
-  });
-
-  test("an unreadable prior Connector is reported the same way", async () => {
-    // 403/404 is the other half: this sign-in cannot SEE the link, so it equally
-    // cannot say the requested Workspace is not one of this project's.
-    const { profileId } = await signIn();
-    writeConfig({
-      authMode: "oauth",
-      profileId,
-      connectorIds: ["connector_a", "connector_gone"],
-      endpoint: GATEWAY,
-    });
-    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("nope") });
-
-    const payload = await runRecall({ projectRoot: project }, args({ workspaces: ["ws-scratch"] }));
-
-    expect(payload).toMatchObject({ status: "error", code: "workspace_unverifiable" });
-    expect(payload.unresolvedConnectorIds).toEqual(["connector_gone"]);
-    expect(recallCalls()).toEqual([]);
-  });
-
-  test("a Workspace this project does not feed fails closed, asking nothing", async () => {
-    // Recall can only ask where the project sends. Silently ignoring the flag
-    // would answer a different question than the one that was asked.
-    const { profileId } = await signIn();
-    writeConfig({ authMode: "oauth", profileId, connectorIds: ["connector_a"], endpoint: GATEWAY });
-    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("nope") });
-
-    const payload = await runRecall({ projectRoot: project }, args({ workspaces: ["ws-other"] }));
-
-    expect(payload).toMatchObject({ status: "error", code: "unknown_workspace" });
-    expect(payload.message).toContain("ws-other");
-    expect(recallCalls()).toEqual([]);
+  test("organization and control URL are display-only and env overrides the file", async () => {
+    await configure(["connector_a"], { org: { id: "org-recorded", name: "Recorded Org" }, controlUrl: "https://saved.example.com" });
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a") });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload.organization).toBe("Recorded Org");
+    expect(payload.environment).toBe("https://saved.example.com");
+    expect(JSON.parse(recallCalls()[0]!.body!)).toEqual({ query: "what did we decide", workspace: "ws-default" });
+    process.env.AUGENTA_CONTROL_URL = "https://override.example.com";
+    expect((await runRecall({ projectRoot: project }, args())).environment).toBe("https://override.example.com");
+    process.env.AUGENTA_CONTROL_URL = "https://augenta.ai";
+    process.env.AUGENTA_API_URL = "https://other-gateway.example.com";
+    route({ ["GET https://other-gateway.example.com/v1/connectors/connector_a"]: () => typedError(404, "not_found", "wrong environment") });
+    const overridden = await runRecall({ projectRoot: project }, args());
+    expect(overridden.environment).toBe("https://other-gateway.example.com");
+    expect(overridden.unresolvedConnectorIds).toEqual(["connector_a"]);
   });
 });
 

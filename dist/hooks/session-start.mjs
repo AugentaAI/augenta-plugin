@@ -42,19 +42,26 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
-function parseConnectorIds(value) {
-  const raw = Array.isArray(value.connectorIds) ? value.connectorIds : [];
-  const ids = [];
+var DEFAULT_CONTROL_URL = "https://augenta.ai";
+function parseDestinations(raw) {
+  if (!Array.isArray(raw) || raw.length === 0)
+    return;
+  const destinations = [];
   for (const item of raw) {
-    if (typeof item !== "string")
-      return [];
-    const id = item.trim();
-    if (!id)
-      return [];
-    if (!ids.includes(id))
-      ids.push(id);
+    if (!item || typeof item !== "object")
+      return;
+    const connectorId = typeof item.connectorId === "string" ? item.connectorId.trim() : "";
+    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
+    if (!connectorId || !workspaceId)
+      return;
+    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
+      return;
+    if (destinations.some((destination) => destination.connectorId === connectorId))
+      continue;
+    const workspaceName = item.workspaceName?.trim();
+    destinations.push({ connectorId, workspaceId, ...workspaceName ? { workspaceName } : {} });
   }
-  return ids;
+  return destinations;
 }
 function configPath(projectRoot) {
   return join(projectRoot, ".augenta", "config.json");
@@ -79,30 +86,50 @@ function loadProjectConfig(projectRoot) {
     if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
       return;
     const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
-    const endpoint = typeof value.endpoint === "string" && value.endpoint.trim() ? value.endpoint.trim() : undefined;
+    const settings = {};
+    for (const key of ["endpoint", "controlUrl", "ingestUrl"]) {
+      const raw = value[key];
+      if (raw !== undefined && typeof raw !== "string")
+        return;
+      if (typeof raw === "string" && raw.trim()) {
+        settings[key] = raw.trim().replace(/\/+$/, "");
+      }
+    }
+    if (value.org !== undefined) {
+      if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
+        return;
+      if (value.org.name !== undefined && typeof value.org.name !== "string")
+        return;
+      settings.org = { id: value.org.id.trim(), ...value.org.name?.trim() ? { name: value.org.name.trim() } : {} };
+    }
+    const destinations = value.destinations === undefined ? undefined : parseDestinations(value.destinations);
+    if (value.destinations !== undefined && !destinations)
+      return;
+    if (destinations) {
+      settings.destinations = destinations;
+      settings.connectorIds = destinations.map((destination) => destination.connectorId);
+    }
     if (value.authMode === "oauth") {
       const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
-      const connectorIds = parseConnectorIds(value);
-      if (!profileId || connectorIds.length === 0)
+      if (!profileId || !destinations)
         return;
       return {
+        ...settings,
         authMode: "oauth",
         ...captureSince ? { captureSince } : {},
         profileId,
-        connectorIds,
-        ...endpoint ? { endpoint } : {},
         projectRoot
       };
     }
     if (value.authMode === "api-key") {
       const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
-      if (!apiKey)
+      if (!apiKey || Array.isArray(value.destinations) && value.destinations.length !== 1)
         return;
       return {
+        ...settings,
         authMode: "api-key",
         ...captureSince ? { captureSince } : {},
         apiKey,
-        ...endpoint ? { endpoint } : {},
         projectRoot
       };
     }
@@ -115,11 +142,14 @@ function projectConfig(cwd) {
   const root = resolveProjectRoot(cwd);
   return root ? loadProjectConfig(root) : undefined;
 }
-function gatewayBase(cfg) {
-  return (process.env.AUGENTA_API_URL || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+function controlUrl(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_CONTROL_URL?.trim() || cfg?.controlUrl || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
+}
+function gatewayBase(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
 }
 function experiencesUrl(cfg) {
-  return process.env.AUGENTA_INGEST_URL || `${gatewayBase(cfg)}/v1/experiences`;
+  return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
 }
 function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
@@ -534,17 +564,495 @@ function sniffHarness(line) {
   return;
 }
 
+// capture/auth.ts
+import {
+  chmodSync as chmodSync2,
+  existsSync as existsSync4,
+  mkdirSync as mkdirSync4,
+  readFileSync as readFileSync4,
+  renameSync as renameSync3,
+  statSync as statSync2,
+  unlinkSync as unlinkSync2,
+  writeFileSync as writeFileSync4
+} from "node:fs";
+import { createHash, randomUUID as randomUUID2 } from "node:crypto";
+import { homedir } from "node:os";
+import { join as join5 } from "node:path";
+
+// runtime/node.ts
+import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+function isMain(metaUrl) {
+  const entry = process.argv[1];
+  if (!entry)
+    return false;
+  return canonical(fileURLToPath(metaUrl)) === canonical(entry);
+}
+function canonical(path) {
+  const absolute = resolve(path);
+  try {
+    return realpathSync.native(absolute);
+  } catch {
+    return absolute;
+  }
+}
+function openBrowser(command) {
+  const opener = command[0];
+  if (!opener)
+    return;
+  const url = command[command.length - 1];
+  if (!url || !isHttpsUrl(url))
+    return;
+  spawnSync(opener, command.slice(1), { stdio: "ignore" });
+}
+function isHttpsUrl(value) {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+// capture/auth.ts
+class ReLoginRequiredError extends Error {
+  reason;
+  constructor(message, reason) {
+    super(message);
+    this.name = "ReLoginRequiredError";
+    this.reason = reason;
+  }
+}
+var authRoot = () => process.env.AUGENTA_AUTH_HOME || join5(homedir(), ".augenta");
+var authPath = () => join5(authRoot(), "auth.json");
+var lockPath = () => join5(authRoot(), "auth.lock");
+var LOCK_WAIT_MS = 1e4;
+var STALE_LOCK_MS = 30000;
+var REQUEST_TIMEOUT_MS = 15000;
+function ensureAuthRoot() {
+  mkdirSync4(authRoot(), { recursive: true, mode: 448 });
+  chmodSync2(authRoot(), 448);
+}
+function readAuthStore() {
+  try {
+    ensureAuthRoot();
+    if (existsSync4(authPath()))
+      chmodSync2(authPath(), 384);
+    const parsed = JSON.parse(readFileSync4(authPath(), "utf8"));
+    if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
+      return { version: 1, profiles: {} };
+    }
+    return { version: 1, profiles: parsed.profiles };
+  } catch {
+    return { version: 1, profiles: {} };
+  }
+}
+function writeAuthStore(store) {
+  ensureAuthRoot();
+  const path = authPath();
+  const tmp = `${path}.${process.pid}.${randomUUID2()}.tmp`;
+  try {
+    writeFileSync4(tmp, `${JSON.stringify(store, null, 2)}
+`, {
+      mode: 384,
+      flag: "wx"
+    });
+    chmodSync2(tmp, 384);
+    renameSync3(tmp, path);
+    chmodSync2(path, 384);
+  } finally {
+    try {
+      if (existsSync4(tmp))
+        unlinkSync2(tmp);
+    } catch {}
+  }
+}
+async function withAuthLock(fn) {
+  ensureAuthRoot();
+  const lock = lockPath();
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  while (true) {
+    try {
+      writeFileSync4(lock, String(process.pid), { flag: "wx", mode: 384 });
+      break;
+    } catch {
+      try {
+        if (Date.now() - statSync2(lock).mtimeMs > STALE_LOCK_MS)
+          unlinkSync2(lock);
+      } catch {}
+      if (Date.now() >= deadline) {
+        throw new Error("another Augenta login or token refresh is still running");
+      }
+      await new Promise((resolve2) => setTimeout(resolve2, 100));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    try {
+      unlinkSync2(lock);
+    } catch {}
+  }
+}
+function endpoint(issuer, suffix) {
+  return `${issuer.replace(/\/+$/, "")}${suffix}`;
+}
+function form(values) {
+  return new URLSearchParams(values).toString();
+}
+async function errorCode(response) {
+  const body = await response.json().catch(() => ({}));
+  return typeof body.error === "string" ? body.error : undefined;
+}
+async function refreshTokens(profile) {
+  const response = await fetch(endpoint(profile.issuer, "/oauth2/token"), {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    body: form({
+      grant_type: "refresh_token",
+      refresh_token: profile.refreshToken,
+      client_id: profile.clientId
+    })
+  });
+  if (response.ok)
+    return await response.json();
+  const code = await errorCode(response);
+  if (response.status === 400 || response.status === 401 || code === "invalid_grant" || code === "access_denied") {
+    throw new ReLoginRequiredError("the Augenta sign-in expired or was revoked", "login_revoked");
+  }
+  throw new Error(`Augenta token refresh failed (${response.status})`);
+}
+async function augentaOAuthConfig(controlUrl2) {
+  const response = await fetch(`${controlUrl2.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  if (!response.ok) {
+    throw new Error("Augenta sign-in is not configured for this environment");
+  }
+  const value = await response.json();
+  if (!value.issuer || !value.clientId || !value.gateway) {
+    throw new Error("Augenta returned incomplete sign-in configuration");
+  }
+  return {
+    issuer: value.issuer.replace(/\/+$/, ""),
+    clientId: value.clientId,
+    gateway: value.gateway.replace(/\/+$/, "")
+  };
+}
+function browserCommand(url) {
+  if (process.platform === "darwin")
+    return ["open", url];
+  if (process.platform === "win32")
+    return ["cmd", "/c", "start", "", url];
+  return ["xdg-open", url];
+}
+var pendingLoginPath = () => join5(authRoot(), "pending-login.json");
+function savePendingLogin(pending) {
+  ensureAuthRoot();
+  const path = pendingLoginPath();
+  writeFileSync4(path, `${JSON.stringify(pending, null, 2)}
+`, { mode: 384 });
+  chmodSync2(path, 384);
+}
+function readPendingLogin() {
+  try {
+    const parsed = JSON.parse(readFileSync4(pendingLoginPath(), "utf8"));
+    if (typeof parsed.deviceCode !== "string" || typeof parsed.clientId !== "string" || typeof parsed.issuer !== "string" || typeof parsed.expiresAt !== "number" || parsed.expiresAt <= Date.now()) {
+      return;
+    }
+    return parsed;
+  } catch {
+    return;
+  }
+}
+function clearPendingLogin() {
+  try {
+    unlinkSync2(pendingLoginPath());
+  } catch {}
+}
+async function beginDeviceLogin(config, opts = {}) {
+  const start = await fetch(endpoint(config.issuer, "/oauth2/device_authorization"), {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    body: form({
+      client_id: config.clientId,
+      scope: "openid profile email offline_access"
+    })
+  });
+  if (!start.ok) {
+    throw new Error(`could not start the Augenta sign-in (${start.status})`);
+  }
+  const device = await start.json();
+  const pending = {
+    deviceCode: device.device_code,
+    userCode: device.user_code,
+    verificationUri: device.verification_uri_complete || device.verification_uri,
+    issuer: config.issuer,
+    clientId: config.clientId,
+    gateway: config.gateway,
+    intervalMs: Math.max(1, device.interval ?? 5) * 1000,
+    expiresAt: Date.now() + device.expires_in * 1000
+  };
+  if (opts.openBrowser !== false) {
+    try {
+      openBrowser(browserCommand(pending.verificationUri));
+    } catch {}
+  }
+  return pending;
+}
+async function pollDeviceToken(pending, opts) {
+  const deadline = Math.min(pending.expiresAt, Date.now() + opts.waitMs);
+  let intervalMs = pending.intervalMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve2) => setTimeout(resolve2, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
+    const response = await fetch(endpoint(pending.issuer, "/oauth2/token"), {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      signal: AbortSignal.timeout(Math.max(1, Math.min(REQUEST_TIMEOUT_MS, pending.expiresAt - Date.now()))),
+      body: form({
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        device_code: pending.deviceCode,
+        client_id: pending.clientId
+      })
+    });
+    if (response.ok) {
+      const result = await response.json();
+      if (!result.access_token || !result.refresh_token) {
+        throw new Error("Augenta sign-in did not return refreshable credentials");
+      }
+      return {
+        ok: true,
+        tokens: {
+          accessToken: result.access_token,
+          refreshToken: result.refresh_token,
+          expiresAt: Date.now() + result.expires_in * 1000
+        }
+      };
+    }
+    const code = await errorCode(response);
+    if (code === "authorization_pending")
+      continue;
+    if (code === "slow_down") {
+      intervalMs += 5000;
+      continue;
+    }
+    if (code === "access_denied") {
+      throw new ReLoginRequiredError("the Augenta sign-in was declined", "login_denied");
+    }
+    if (code === "expired_token") {
+      throw new ReLoginRequiredError("the Augenta sign-in link expired", "login_expired");
+    }
+    throw new Error(`Augenta sign-in failed (${response.status})`);
+  }
+  if (Date.now() >= pending.expiresAt) {
+    throw new ReLoginRequiredError("the Augenta sign-in link expired", "login_expired");
+  }
+  return { ok: false, reason: "pending", intervalMs };
+}
+async function deviceLogin(config) {
+  const pending = await beginDeviceLogin(config);
+  console.log(`Open ${pending.verificationUri}`);
+  console.log(`Augenta verification code: ${pending.userCode}`);
+  const result = await pollDeviceToken(pending, {
+    waitMs: pending.expiresAt - Date.now()
+  });
+  if (!result.ok) {
+    throw new ReLoginRequiredError("the Augenta sign-in link expired", "login_expired");
+  }
+  return result.tokens;
+}
+function profileIdFor(config, orgId) {
+  const coordinates = [
+    config.issuer.replace(/\/+$/, ""),
+    config.clientId,
+    config.gateway.replace(/\/+$/, ""),
+    orgId
+  ].join("\x00");
+  const digest = createHash("sha256").update(coordinates).digest("hex").slice(0, 24);
+  return `profile_${digest}`;
+}
+async function saveDeviceProfile(config, tokens, identity) {
+  return withAuthLock(() => {
+    const store = readAuthStore();
+    const profileId = profileIdFor(config, identity.orgId);
+    const profile = {
+      issuer: config.issuer,
+      clientId: config.clientId,
+      gateway: config.gateway,
+      userId: identity.userId,
+      orgId: identity.orgId,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresAt: tokens.expiresAt,
+      updatedAt: new Date().toISOString()
+    };
+    store.profiles[profileId] = profile;
+    writeAuthStore(store);
+    return { profileId, profile };
+  });
+}
+function getAuthProfile(profileId) {
+  return readAuthStore().profiles[profileId];
+}
+function reusableProfiles(config) {
+  return Object.entries(readAuthStore().profiles).filter(([, profile]) => profile.issuer.replace(/\/+$/, "") === config.issuer.replace(/\/+$/, "") && profile.clientId === config.clientId && profile.gateway.replace(/\/+$/, "") === config.gateway.replace(/\/+$/, "")).map(([profileId, profile]) => ({ profileId, profile })).sort((a, b) => b.profile.updatedAt.localeCompare(a.profile.updatedAt));
+}
+async function accessTokenForProfile(profileId, forceRefresh = false) {
+  return withAuthLock(async () => {
+    const store = readAuthStore();
+    const profile = store.profiles[profileId];
+    if (!profile) {
+      throw new ReLoginRequiredError("the Augenta sign-in is missing; run augenta:connect again");
+    }
+    if (!forceRefresh && profile.expiresAt > Date.now() + 60000) {
+      return profile.accessToken;
+    }
+    const rotated = await refreshTokens(profile);
+    const updated = {
+      ...profile,
+      accessToken: rotated.access_token,
+      refreshToken: rotated.refresh_token || profile.refreshToken,
+      expiresAt: Date.now() + rotated.expires_in * 1000,
+      updatedAt: new Date().toISOString()
+    };
+    store.profiles[profileId] = updated;
+    writeAuthStore(store);
+    return updated.accessToken;
+  });
+}
+async function fetchWithProfile(profileId, url, init = {}) {
+  const send = async (forceRefresh) => {
+    const accessToken = await accessTokenForProfile(profileId, forceRefresh);
+    return fetch(url, {
+      ...init,
+      signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      headers: {
+        ...init.body ? { "content-type": "application/json" } : {},
+        ...init.headers || {},
+        authorization: `Bearer ${accessToken}`
+      }
+    });
+  };
+  const first = await send(false);
+  return first.status === 401 ? send(true) : first;
+}
+var NOTICES = ["relogin", "badkey", "connect"];
+function noticePath(projectRoot, notice) {
+  return join5(projectRoot, ".augenta", `${notice}-required`);
+}
+function markAuthNotice(projectRoot, notice) {
+  try {
+    ensureAugentaDir(projectRoot);
+    writeFileSync4(noticePath(projectRoot, notice), `${notice}
+`, {
+      mode: 384
+    });
+  } catch {}
+}
+function takeAuthNotice(projectRoot) {
+  let found;
+  for (const notice of NOTICES) {
+    const path = noticePath(projectRoot, notice);
+    if (!existsSync4(path))
+      continue;
+    found ??= notice;
+    try {
+      unlinkSync2(path);
+    } catch {}
+  }
+  return found;
+}
+
+// capture/platform.ts
+class AugentaRequestError extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+    this.name = "AugentaRequestError";
+  }
+}
+async function bearerJson(profileId, url, init = {}) {
+  const response = await fetchWithProfile(profileId, url, init);
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new AugentaRequestError(response.status, `Augenta request failed (${response.status})${detail ? `: ${detail}` : ""}`);
+  }
+  return await response.json();
+}
+var WORKSPACE_LIST_PAGE_SIZE = 200;
+var WORKSPACE_LIST_MAX_PAGES = 10;
+async function fetchAllWorkspaces(profileId, gateway) {
+  const workspaces = [];
+  let cursor;
+  for (let page = 0;page < WORKSPACE_LIST_MAX_PAGES; page++) {
+    const query = new URLSearchParams({ limit: String(WORKSPACE_LIST_PAGE_SIZE) });
+    if (cursor)
+      query.set("cursor", cursor);
+    const body = await bearerJson(profileId, `${gateway}/v1/workspaces?${query.toString()}`);
+    workspaces.push(...body.workspaces ?? []);
+    if (!body.nextCursor)
+      return workspaces;
+    if (body.nextCursor === cursor) {
+      throw new Error("the Workspace list did not advance — the API returned the same page cursor twice");
+    }
+    cursor = body.nextCursor;
+  }
+  throw new Error(`the Workspace list did not finish within ${WORKSPACE_LIST_MAX_PAGES} pages of ` + `${WORKSPACE_LIST_PAGE_SIZE} — refusing to offer a partial list of destinations`);
+}
+async function currentConnector(profileId, gateway, id) {
+  if (!id)
+    return;
+  const response = await fetchWithProfile(profileId, `${gateway}/v1/connectors/${encodeURIComponent(id)}`);
+  if (response.status === 403 || response.status === 404)
+    return;
+  if (!response.ok) {
+    throw new Error(`could not inspect the existing Connector (${response.status})`);
+  }
+  return (await response.json()).connector;
+}
+function environmentLabel(controlUrl2) {
+  const url = (controlUrl2?.trim() || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
+  return url === DEFAULT_CONTROL_URL ? "prod" : url;
+}
+function describeError(error) {
+  const message = error?.message ?? String(error);
+  if (message !== "fetch failed")
+    return message;
+  const cause = error.cause;
+  const code = cause?.code;
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+    return "cannot reach Augenta: the host name did not resolve. Check your network or DNS.";
+  }
+  if (code === "ECONNREFUSED") {
+    return "cannot reach Augenta: the connection was refused. Check the URL, and any proxy or firewall.";
+  }
+  if (code === "CERT_HAS_EXPIRED" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {
+    return "cannot reach Augenta: the TLS certificate could not be verified. Check for a TLS-intercepting proxy.";
+  }
+  const detail = cause?.message ?? code;
+  return detail ? `cannot reach Augenta: ${detail}` : "cannot reach Augenta: the network request failed. Check your connection.";
+}
+
 // capture/shipper.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync4 } from "node:fs";
-import { dirname as dirname2, join as join5 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync as existsSync5 } from "node:fs";
+import { dirname as dirname2, join as join6 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 function shipperEntry() {
-  const self = fileURLToPath(import.meta.url);
+  const self = fileURLToPath2(import.meta.url);
   const ext = self.endsWith(".ts") ? ".ts" : ".mjs";
   const here = dirname2(self);
-  const sibling = join5(here, `ship${ext}`);
-  return existsSync4(sibling) ? sibling : join5(here, "..", "capture", `ship${ext}`);
+  const sibling = join6(here, `ship${ext}`);
+  return existsSync5(sibling) ? sibling : join6(here, "..", "capture", `ship${ext}`);
 }
 function spawnShipper(projectRoot) {
   try {
@@ -561,19 +1069,19 @@ function spawnShipper(projectRoot) {
 }
 
 // capture/memory.ts
-import { createHash } from "node:crypto";
+import { createHash as createHash2 } from "node:crypto";
 import {
-  existsSync as existsSync5,
+  existsSync as existsSync6,
   lstatSync,
-  mkdirSync as mkdirSync4,
-  readFileSync as readFileSync4,
+  mkdirSync as mkdirSync5,
+  readFileSync as readFileSync5,
   readdirSync,
-  renameSync as renameSync3,
-  statSync as statSync2,
-  writeFileSync as writeFileSync4
+  renameSync as renameSync4,
+  statSync as statSync3,
+  writeFileSync as writeFileSync5
 } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname as dirname3, extname, isAbsolute, join as join6, relative, resolve, sep } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { basename, dirname as dirname3, extname, isAbsolute, join as join7, relative, resolve as resolve2, sep } from "node:path";
 
 // capture/scrub.ts
 var MASK = (label) => `[redacted:${label}]`;
@@ -627,10 +1135,10 @@ function sameSnapshot(before, after) {
   return before.dev === after.dev && before.ino === after.ino && before.mode === after.mode && before.size === after.size && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs;
 }
 function sha256(input) {
-  return createHash("sha256").update(input).digest("hex");
+  return createHash2("sha256").update(input).digest("hex");
 }
 function memoryStatePath(projectRoot) {
-  return join6(projectRoot, ".augenta", "state", "memory.json");
+  return join7(projectRoot, ".augenta", "state", "memory.json");
 }
 function validEntry(value) {
   const e = value;
@@ -638,7 +1146,7 @@ function validEntry(value) {
 }
 function readMemoryIndex(projectRoot) {
   try {
-    const parsed = JSON.parse(readFileSync4(memoryStatePath(projectRoot), "utf8"));
+    const parsed = JSON.parse(readFileSync5(memoryStatePath(projectRoot), "utf8"));
     const rawDocuments = parsed.documents;
     if (!parsed || parsed.version !== 1 || !rawDocuments || typeof rawDocuments !== "object") {
       return { version: 1, documents: {} };
@@ -654,13 +1162,13 @@ function readMemoryIndex(projectRoot) {
   }
 }
 function writeMemoryIndex(projectRoot, index) {
-  const stateDir = join6(ensureAugentaDir(projectRoot), "state");
-  const path = join6(stateDir, "memory.json");
+  const stateDir = join7(ensureAugentaDir(projectRoot), "state");
+  const path = join7(stateDir, "memory.json");
   const tmp = path + ".tmp";
   try {
-    mkdirSync4(stateDir, { recursive: true });
-    writeFileSync4(tmp, JSON.stringify(index));
-    renameSync3(tmp, path);
+    mkdirSync5(stateDir, { recursive: true });
+    writeFileSync5(tmp, JSON.stringify(index));
+    renameSync4(tmp, path);
     return true;
   } catch {
     return false;
@@ -679,9 +1187,9 @@ function normalizeLogicalPath(path) {
 function scanClaudeMemory(transcriptPath) {
   if (!transcriptPath)
     return { complete: false, documents: [] };
-  const root = join6(dirname3(transcriptPath), "memory");
+  const root = join7(dirname3(transcriptPath), "memory");
   try {
-    if (!existsSync5(root) || !lstatSync(root).isDirectory())
+    if (!existsSync6(root) || !lstatSync(root).isDirectory())
       return { complete: false, documents: [] };
   } catch {
     return { complete: false, documents: [] };
@@ -703,7 +1211,7 @@ function scanClaudeMemory(transcriptPath) {
       return;
     }
     for (const entry of entries) {
-      const path = join6(dir, entry.name);
+      const path = join7(dir, entry.name);
       if (entry.isSymbolicLink())
         continue;
       if (entry.isDirectory()) {
@@ -718,7 +1226,7 @@ function scanClaudeMemory(transcriptPath) {
           complete = false;
           continue;
         }
-        const text = readFileSync4(path, "utf8");
+        const text = readFileSync5(path, "utf8");
         const after = lstatSync(path);
         if (!after.isFile() || !sameSnapshot(before, after)) {
           complete = false;
@@ -749,8 +1257,8 @@ function scanClaudeMemory(transcriptPath) {
 function isScopedToProject(scope, projectRoot) {
   if (!isAbsolute(scope))
     return false;
-  const root = resolve(projectRoot);
-  const target = resolve(scope);
+  const root = resolve2(projectRoot);
+  const target = resolve2(scope);
   const rel = relative(root, target);
   return rel === "" || !rel.startsWith(".." + sep) && rel !== ".." && !isAbsolute(rel);
 }
@@ -812,18 +1320,18 @@ function parseCodexTaskGroups(text, projectRoot) {
   return documents;
 }
 function scanCodexMemory(projectRoot, codexHome) {
-  const root = codexHome ?? process.env.CODEX_HOME ?? join6(homedir(), ".codex");
-  const path = join6(root, "memories", "MEMORY.md");
+  const root = codexHome ?? process.env.CODEX_HOME ?? join7(homedir2(), ".codex");
+  const path = join7(root, "memories", "MEMORY.md");
   try {
-    if (!existsSync5(path))
+    if (!existsSync6(path))
       return { complete: false, documents: [] };
     const linkBefore = lstatSync(path);
-    const before = statSync2(path);
+    const before = statSync3(path);
     if (!before.isFile())
       return { complete: false, documents: [] };
-    const text = readFileSync4(path, "utf8");
+    const text = readFileSync5(path, "utf8");
     const linkAfter = lstatSync(path);
-    const after = statSync2(path);
+    const after = statSync3(path);
     if (!after.isFile() || !sameSnapshot(linkBefore, linkAfter) || !sameSnapshot(before, after))
       return { complete: false, documents: [] };
     const sourceUpdatedAt = after.mtime.toISOString();
@@ -838,7 +1346,7 @@ function scanCodexMemory(projectRoot, codexHome) {
 function documentId(source, projectRoot, candidate) {
   const taskGroup = candidate.taskGroup;
   const discriminator = taskGroup ? `\x00${taskGroup.header}\x00${taskGroup.scope}` : "";
-  return sha256(`${source}\x00${resolve(projectRoot)}\x00${candidate.sourcePath}${discriminator}`);
+  return sha256(`${source}\x00${resolve2(projectRoot)}\x00${candidate.sourcePath}${discriminator}`);
 }
 function revision(text, deleted) {
   return sha256(`${deleted ? "deleted" : "live"}\x00${text}`);
@@ -1003,414 +1511,6 @@ function captureAgentMemory(opts) {
   return { spooled: records.length, changed, tombstones, complete: scan.complete };
 }
 
-// capture/auth.ts
-import {
-  chmodSync as chmodSync2,
-  existsSync as existsSync6,
-  mkdirSync as mkdirSync5,
-  readFileSync as readFileSync5,
-  renameSync as renameSync4,
-  statSync as statSync3,
-  unlinkSync as unlinkSync2,
-  writeFileSync as writeFileSync5
-} from "node:fs";
-import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
-import { homedir as homedir2 } from "node:os";
-import { join as join7 } from "node:path";
-
-// runtime/node.ts
-import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { resolve as resolve2 } from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-async function readStdin() {
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-function isMain(metaUrl) {
-  const entry = process.argv[1];
-  if (!entry)
-    return false;
-  return canonical(fileURLToPath2(metaUrl)) === canonical(entry);
-}
-function canonical(path) {
-  const absolute = resolve2(path);
-  try {
-    return realpathSync.native(absolute);
-  } catch {
-    return absolute;
-  }
-}
-function openBrowser(command) {
-  const opener = command[0];
-  if (!opener)
-    return;
-  const url = command[command.length - 1];
-  if (!url || !isHttpsUrl(url))
-    return;
-  spawnSync(opener, command.slice(1), { stdio: "ignore" });
-}
-function isHttpsUrl(value) {
-  try {
-    return new URL(value).protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-// capture/auth.ts
-class ReLoginRequiredError extends Error {
-  reason;
-  constructor(message, reason) {
-    super(message);
-    this.name = "ReLoginRequiredError";
-    this.reason = reason;
-  }
-}
-var authRoot = () => process.env.AUGENTA_AUTH_HOME || join7(homedir2(), ".augenta");
-var authPath = () => join7(authRoot(), "auth.json");
-var lockPath = () => join7(authRoot(), "auth.lock");
-var LOCK_WAIT_MS = 1e4;
-var STALE_LOCK_MS = 30000;
-var REQUEST_TIMEOUT_MS = 15000;
-function ensureAuthRoot() {
-  mkdirSync5(authRoot(), { recursive: true, mode: 448 });
-  chmodSync2(authRoot(), 448);
-}
-function readAuthStore() {
-  try {
-    ensureAuthRoot();
-    if (existsSync6(authPath()))
-      chmodSync2(authPath(), 384);
-    const parsed = JSON.parse(readFileSync5(authPath(), "utf8"));
-    if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
-      return { version: 1, profiles: {} };
-    }
-    return { version: 1, profiles: parsed.profiles };
-  } catch {
-    return { version: 1, profiles: {} };
-  }
-}
-function writeAuthStore(store) {
-  ensureAuthRoot();
-  const path = authPath();
-  const tmp = `${path}.${process.pid}.${randomUUID2()}.tmp`;
-  try {
-    writeFileSync5(tmp, `${JSON.stringify(store, null, 2)}
-`, {
-      mode: 384,
-      flag: "wx"
-    });
-    chmodSync2(tmp, 384);
-    renameSync4(tmp, path);
-    chmodSync2(path, 384);
-  } finally {
-    try {
-      if (existsSync6(tmp))
-        unlinkSync2(tmp);
-    } catch {}
-  }
-}
-async function withAuthLock(fn) {
-  ensureAuthRoot();
-  const lock = lockPath();
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  while (true) {
-    try {
-      writeFileSync5(lock, String(process.pid), { flag: "wx", mode: 384 });
-      break;
-    } catch {
-      try {
-        if (Date.now() - statSync3(lock).mtimeMs > STALE_LOCK_MS)
-          unlinkSync2(lock);
-      } catch {}
-      if (Date.now() >= deadline) {
-        throw new Error("another Augenta login or token refresh is still running");
-      }
-      await new Promise((resolve3) => setTimeout(resolve3, 100));
-    }
-  }
-  try {
-    return await fn();
-  } finally {
-    try {
-      unlinkSync2(lock);
-    } catch {}
-  }
-}
-function endpoint(issuer, suffix) {
-  return `${issuer.replace(/\/+$/, "")}${suffix}`;
-}
-function form(values) {
-  return new URLSearchParams(values).toString();
-}
-async function errorCode(response) {
-  const body = await response.json().catch(() => ({}));
-  return typeof body.error === "string" ? body.error : undefined;
-}
-async function refreshTokens(profile) {
-  const response = await fetch(endpoint(profile.issuer, "/oauth2/token"), {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    body: form({
-      grant_type: "refresh_token",
-      refresh_token: profile.refreshToken,
-      client_id: profile.clientId
-    })
-  });
-  if (response.ok)
-    return await response.json();
-  const code = await errorCode(response);
-  if (response.status === 400 || response.status === 401 || code === "invalid_grant" || code === "access_denied") {
-    throw new ReLoginRequiredError("the Augenta sign-in expired or was revoked", "login_revoked");
-  }
-  throw new Error(`Augenta token refresh failed (${response.status})`);
-}
-var DEFAULT_CONTROL_URL = "https://augenta.ai";
-async function augentaOAuthConfig(controlUrl = process.env.AUGENTA_CONTROL_URL || DEFAULT_CONTROL_URL) {
-  const response = await fetch(`${controlUrl.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-  if (!response.ok) {
-    throw new Error("Augenta sign-in is not configured for this environment");
-  }
-  const value = await response.json();
-  if (!value.issuer || !value.clientId || !value.gateway) {
-    throw new Error("Augenta returned incomplete sign-in configuration");
-  }
-  return {
-    issuer: value.issuer.replace(/\/+$/, ""),
-    clientId: value.clientId,
-    gateway: value.gateway.replace(/\/+$/, "")
-  };
-}
-function browserCommand(url) {
-  if (process.platform === "darwin")
-    return ["open", url];
-  if (process.platform === "win32")
-    return ["cmd", "/c", "start", "", url];
-  return ["xdg-open", url];
-}
-var pendingLoginPath = () => join7(authRoot(), "pending-login.json");
-function savePendingLogin(pending) {
-  ensureAuthRoot();
-  const path = pendingLoginPath();
-  writeFileSync5(path, `${JSON.stringify(pending, null, 2)}
-`, { mode: 384 });
-  chmodSync2(path, 384);
-}
-function readPendingLogin() {
-  try {
-    const parsed = JSON.parse(readFileSync5(pendingLoginPath(), "utf8"));
-    if (typeof parsed.deviceCode !== "string" || typeof parsed.clientId !== "string" || typeof parsed.issuer !== "string" || typeof parsed.expiresAt !== "number" || parsed.expiresAt <= Date.now()) {
-      return;
-    }
-    return parsed;
-  } catch {
-    return;
-  }
-}
-function clearPendingLogin() {
-  try {
-    unlinkSync2(pendingLoginPath());
-  } catch {}
-}
-async function beginDeviceLogin(config, opts = {}) {
-  const start = await fetch(endpoint(config.issuer, "/oauth2/device_authorization"), {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    body: form({
-      client_id: config.clientId,
-      scope: "openid profile email offline_access"
-    })
-  });
-  if (!start.ok) {
-    throw new Error(`could not start the Augenta sign-in (${start.status})`);
-  }
-  const device = await start.json();
-  const pending = {
-    deviceCode: device.device_code,
-    userCode: device.user_code,
-    verificationUri: device.verification_uri_complete || device.verification_uri,
-    issuer: config.issuer,
-    clientId: config.clientId,
-    gateway: config.gateway,
-    intervalMs: Math.max(1, device.interval ?? 5) * 1000,
-    expiresAt: Date.now() + device.expires_in * 1000
-  };
-  if (opts.openBrowser !== false) {
-    try {
-      openBrowser(browserCommand(pending.verificationUri));
-    } catch {}
-  }
-  return pending;
-}
-async function pollDeviceToken(pending, opts) {
-  const deadline = Math.min(pending.expiresAt, Date.now() + opts.waitMs);
-  let intervalMs = pending.intervalMs;
-  while (Date.now() < deadline) {
-    await new Promise((resolve3) => setTimeout(resolve3, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
-    const response = await fetch(endpoint(pending.issuer, "/oauth2/token"), {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      signal: AbortSignal.timeout(Math.max(1, Math.min(REQUEST_TIMEOUT_MS, pending.expiresAt - Date.now()))),
-      body: form({
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-        device_code: pending.deviceCode,
-        client_id: pending.clientId
-      })
-    });
-    if (response.ok) {
-      const result = await response.json();
-      if (!result.access_token || !result.refresh_token) {
-        throw new Error("Augenta sign-in did not return refreshable credentials");
-      }
-      return {
-        ok: true,
-        tokens: {
-          accessToken: result.access_token,
-          refreshToken: result.refresh_token,
-          expiresAt: Date.now() + result.expires_in * 1000
-        }
-      };
-    }
-    const code = await errorCode(response);
-    if (code === "authorization_pending")
-      continue;
-    if (code === "slow_down") {
-      intervalMs += 5000;
-      continue;
-    }
-    if (code === "access_denied") {
-      throw new ReLoginRequiredError("the Augenta sign-in was declined", "login_denied");
-    }
-    if (code === "expired_token") {
-      throw new ReLoginRequiredError("the Augenta sign-in link expired", "login_expired");
-    }
-    throw new Error(`Augenta sign-in failed (${response.status})`);
-  }
-  if (Date.now() >= pending.expiresAt) {
-    throw new ReLoginRequiredError("the Augenta sign-in link expired", "login_expired");
-  }
-  return { ok: false, reason: "pending", intervalMs };
-}
-async function deviceLogin(config) {
-  const pending = await beginDeviceLogin(config);
-  console.log(`Open ${pending.verificationUri}`);
-  console.log(`Augenta verification code: ${pending.userCode}`);
-  const result = await pollDeviceToken(pending, {
-    waitMs: pending.expiresAt - Date.now()
-  });
-  if (!result.ok) {
-    throw new ReLoginRequiredError("the Augenta sign-in link expired", "login_expired");
-  }
-  return result.tokens;
-}
-function profileIdFor(config, orgId) {
-  const coordinates = [
-    config.issuer.replace(/\/+$/, ""),
-    config.clientId,
-    config.gateway.replace(/\/+$/, ""),
-    orgId
-  ].join("\x00");
-  const digest = createHash2("sha256").update(coordinates).digest("hex").slice(0, 24);
-  return `profile_${digest}`;
-}
-async function saveDeviceProfile(config, tokens, identity) {
-  return withAuthLock(() => {
-    const store = readAuthStore();
-    const profileId = profileIdFor(config, identity.orgId);
-    const profile = {
-      issuer: config.issuer,
-      clientId: config.clientId,
-      gateway: config.gateway,
-      userId: identity.userId,
-      orgId: identity.orgId,
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      expiresAt: tokens.expiresAt,
-      updatedAt: new Date().toISOString()
-    };
-    store.profiles[profileId] = profile;
-    writeAuthStore(store);
-    return { profileId, profile };
-  });
-}
-function getAuthProfile(profileId) {
-  return readAuthStore().profiles[profileId];
-}
-function reusableProfiles(config) {
-  return Object.entries(readAuthStore().profiles).filter(([, profile]) => profile.issuer.replace(/\/+$/, "") === config.issuer.replace(/\/+$/, "") && profile.clientId === config.clientId && profile.gateway.replace(/\/+$/, "") === config.gateway.replace(/\/+$/, "")).map(([profileId, profile]) => ({ profileId, profile })).sort((a, b) => b.profile.updatedAt.localeCompare(a.profile.updatedAt));
-}
-async function accessTokenForProfile(profileId, forceRefresh = false) {
-  return withAuthLock(async () => {
-    const store = readAuthStore();
-    const profile = store.profiles[profileId];
-    if (!profile) {
-      throw new ReLoginRequiredError("the Augenta sign-in is missing; run augenta:connect again");
-    }
-    if (!forceRefresh && profile.expiresAt > Date.now() + 60000) {
-      return profile.accessToken;
-    }
-    const rotated = await refreshTokens(profile);
-    const updated = {
-      ...profile,
-      accessToken: rotated.access_token,
-      refreshToken: rotated.refresh_token || profile.refreshToken,
-      expiresAt: Date.now() + rotated.expires_in * 1000,
-      updatedAt: new Date().toISOString()
-    };
-    store.profiles[profileId] = updated;
-    writeAuthStore(store);
-    return updated.accessToken;
-  });
-}
-async function fetchWithProfile(profileId, url, init = {}) {
-  const send = async (forceRefresh) => {
-    const accessToken = await accessTokenForProfile(profileId, forceRefresh);
-    return fetch(url, {
-      ...init,
-      signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      headers: {
-        ...init.body ? { "content-type": "application/json" } : {},
-        ...init.headers || {},
-        authorization: `Bearer ${accessToken}`
-      }
-    });
-  };
-  const first = await send(false);
-  return first.status === 401 ? send(true) : first;
-}
-var NOTICES = ["relogin", "badkey", "connect"];
-function noticePath(projectRoot, notice) {
-  return join7(projectRoot, ".augenta", `${notice}-required`);
-}
-function markAuthNotice(projectRoot, notice) {
-  try {
-    ensureAugentaDir(projectRoot);
-    writeFileSync5(noticePath(projectRoot, notice), `${notice}
-`, {
-      mode: 384
-    });
-  } catch {}
-}
-function takeAuthNotice(projectRoot) {
-  let found;
-  for (const notice of NOTICES) {
-    const path = noticePath(projectRoot, notice);
-    if (!existsSync6(path))
-      continue;
-    found ??= notice;
-    try {
-      unlinkSync2(path);
-    } catch {}
-  }
-  return found;
-}
-
 // hooks/session-start.ts
 var transcriptPath;
 var cwd;
@@ -1433,6 +1533,11 @@ if (connectedRoot) {
     recordHealth(connectedRoot, "dispatch", "started");
     const action = connectAction;
     const notices = [];
+    const environment = environmentLabel(controlUrl(cfg));
+    if (environment !== "prod") {
+      const names = cfg?.destinations?.map((destination) => destination.workspaceName || destination.workspaceId).join(", ");
+      notices.push(`Augenta: this project is connected to the ${environment} environment, not production${names ? `, feeding ${names}` : ""}.`);
+    }
     const authNotice = takeAuthNotice(connectedRoot);
     if (authNotice === "badkey") {
       notices.push("Augenta has queued capture: the platform key in .augenta/config.json was refused (401). " + "Check that the key is complete and current, and that its Connector is still enabled; " + "capture resumes on its own once a request is accepted. " + `Do not run ${action} to fix this — it starts a browser sign-in and would replace this project's key config.`);

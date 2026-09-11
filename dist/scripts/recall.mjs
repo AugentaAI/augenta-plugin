@@ -83,19 +83,26 @@ function isHttpsUrl(value) {
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
-function parseConnectorIds(value) {
-  const raw = Array.isArray(value.connectorIds) ? value.connectorIds : [];
-  const ids = [];
+var DEFAULT_CONTROL_URL = "https://augenta.ai";
+function parseDestinations(raw) {
+  if (!Array.isArray(raw) || raw.length === 0)
+    return;
+  const destinations = [];
   for (const item of raw) {
-    if (typeof item !== "string")
-      return [];
-    const id = item.trim();
-    if (!id)
-      return [];
-    if (!ids.includes(id))
-      ids.push(id);
+    if (!item || typeof item !== "object")
+      return;
+    const connectorId = typeof item.connectorId === "string" ? item.connectorId.trim() : "";
+    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
+    if (!connectorId || !workspaceId)
+      return;
+    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
+      return;
+    if (destinations.some((destination) => destination.connectorId === connectorId))
+      continue;
+    const workspaceName = item.workspaceName?.trim();
+    destinations.push({ connectorId, workspaceId, ...workspaceName ? { workspaceName } : {} });
   }
-  return ids;
+  return destinations;
 }
 function configPath(projectRoot) {
   return join(projectRoot, ".augenta", "config.json");
@@ -120,30 +127,50 @@ function loadProjectConfig(projectRoot) {
     if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
       return;
     const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
-    const endpoint = typeof value.endpoint === "string" && value.endpoint.trim() ? value.endpoint.trim() : undefined;
+    const settings = {};
+    for (const key of ["endpoint", "controlUrl", "ingestUrl"]) {
+      const raw = value[key];
+      if (raw !== undefined && typeof raw !== "string")
+        return;
+      if (typeof raw === "string" && raw.trim()) {
+        settings[key] = raw.trim().replace(/\/+$/, "");
+      }
+    }
+    if (value.org !== undefined) {
+      if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
+        return;
+      if (value.org.name !== undefined && typeof value.org.name !== "string")
+        return;
+      settings.org = { id: value.org.id.trim(), ...value.org.name?.trim() ? { name: value.org.name.trim() } : {} };
+    }
+    const destinations = value.destinations === undefined ? undefined : parseDestinations(value.destinations);
+    if (value.destinations !== undefined && !destinations)
+      return;
+    if (destinations) {
+      settings.destinations = destinations;
+      settings.connectorIds = destinations.map((destination) => destination.connectorId);
+    }
     if (value.authMode === "oauth") {
       const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
-      const connectorIds = parseConnectorIds(value);
-      if (!profileId || connectorIds.length === 0)
+      if (!profileId || !destinations)
         return;
       return {
+        ...settings,
         authMode: "oauth",
         ...captureSince ? { captureSince } : {},
         profileId,
-        connectorIds,
-        ...endpoint ? { endpoint } : {},
         projectRoot
       };
     }
     if (value.authMode === "api-key") {
       const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
-      if (!apiKey)
+      if (!apiKey || Array.isArray(value.destinations) && value.destinations.length !== 1)
         return;
       return {
+        ...settings,
         authMode: "api-key",
         ...captureSince ? { captureSince } : {},
         apiKey,
-        ...endpoint ? { endpoint } : {},
         projectRoot
       };
     }
@@ -156,11 +183,14 @@ function projectConfig(cwd) {
   const root = resolveProjectRoot(cwd);
   return root ? loadProjectConfig(root) : undefined;
 }
-function gatewayBase(cfg) {
-  return (process.env.AUGENTA_API_URL || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+function controlUrl(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_CONTROL_URL?.trim() || cfg?.controlUrl || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
+}
+function gatewayBase(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
 }
 function experiencesUrl(cfg) {
-  return process.env.AUGENTA_INGEST_URL || `${gatewayBase(cfg)}/v1/experiences`;
+  return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
 }
 function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
@@ -314,9 +344,8 @@ async function refreshTokens(profile) {
   }
   throw new Error(`Augenta token refresh failed (${response.status})`);
 }
-var DEFAULT_CONTROL_URL = "https://augenta.ai";
-async function augentaOAuthConfig(controlUrl = process.env.AUGENTA_CONTROL_URL || DEFAULT_CONTROL_URL) {
-  const response = await fetch(`${controlUrl.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+async function augentaOAuthConfig(controlUrl2) {
+  const response = await fetch(`${controlUrl2.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   if (!response.ok) {
     throw new Error("Augenta sign-in is not configured for this environment");
   }
@@ -603,8 +632,8 @@ async function currentConnector(profileId, gateway, id) {
   }
   return (await response.json()).connector;
 }
-function environmentLabel(controlUrl) {
-  const url = (controlUrl?.trim() || process.env.AUGENTA_CONTROL_URL || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
+function environmentLabel(controlUrl2) {
+  const url = (controlUrl2?.trim() || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
   return url === DEFAULT_CONTROL_URL ? "prod" : url;
 }
 function describeError(error) {
@@ -875,6 +904,10 @@ async function askDestination(ctx, destination) {
     } catch {
       parsed = undefined;
     }
+    const error = errorFields(parsed, text);
+    if (ctx.profileId && (response.status === 403 || response.status === 404 && error.structured && error.code !== "empty_scope")) {
+      return { kind: "failed", code: "unresolved_connector", message: "this destination is not accessible; reconnect" };
+    }
     return classifyRecallResponse({
       status: response.status,
       body: parsed,
@@ -900,13 +933,15 @@ async function askDestination(ctx, destination) {
 }
 function aggregateStatus(payload) {
   const { answers, nothingRemembered, failed } = payload;
-  const total = answers.length + nothingRemembered.length + failed.length;
+  const total = answers.length + nothingRemembered.length + failed.length + (payload.unresolvedConnectorIds?.length ?? 0);
   if (total === 0)
     return "error";
   if (answers.length === total)
     return "answered";
   if (nothingRemembered.length === total)
     return "nothing_remembered";
+  if (payload.unresolvedConnectorIds?.length && answers.length + nothingRemembered.length === 0)
+    return "error";
   if (failed.length === total) {
     if (failed.every((f) => f.code === "need_login"))
       return "need_login";
@@ -916,42 +951,8 @@ function aggregateStatus(payload) {
   }
   return "partially_answered";
 }
-async function resolveDestinations(profileId, gateway, connectorIds) {
-  const destinations = [];
-  const unresolvedConnectorIds = [];
-  const failed = [];
-  let needLogin = false;
-  const resolved = await Promise.all(connectorIds.map(async (id) => {
-    try {
-      return { id, link: await currentConnector(profileId, gateway, id) };
-    } catch (error) {
-      return { id, error };
-    }
-  }));
-  for (const entry of resolved) {
-    if ("error" in entry && entry.error !== undefined) {
-      if (entry.error instanceof ReLoginRequiredError) {
-        needLogin = true;
-        continue;
-      }
-      failed.push({
-        connectorId: entry.id,
-        code: "network",
-        message: describeError(entry.error)
-      });
-      continue;
-    }
-    const link = entry.link;
-    if (!link) {
-      unresolvedConnectorIds.push(entry.id);
-      continue;
-    }
-    destinations.push({ connectorId: link.id, workspaceId: link.workspaceId });
-  }
-  return { destinations, unresolvedConnectorIds, failed, needLogin };
-}
-function recallEnvironment(gateway) {
-  const label = environmentLabel();
+function recallEnvironment(gateway, cfg) {
+  const label = environmentLabel(controlUrl(cfg));
   if (label !== "prod")
     return label;
   return gateway === DEFAULT_GATEWAY ? "prod" : gateway;
@@ -961,6 +962,7 @@ async function runRecall(resolved, args) {
   const query = questionFrom(args);
   let environment = recallEnvironment(DEFAULT_GATEWAY);
   let projectRoot = resolved.projectRoot;
+  let organization;
   const bail = (status2, code, message, extra = {}) => ({
     status: status2,
     query,
@@ -970,6 +972,7 @@ async function runRecall(resolved, args) {
     code,
     message,
     environment,
+    ...organization ? { organization } : {},
     projectRoot,
     elapsedMs: Date.now() - startedAt,
     ...extra
@@ -990,11 +993,13 @@ async function runRecall(resolved, args) {
     return bail("not_connected", "unreadable_config", "this project's Augenta config cannot be read; reconnect with the connect skill");
   }
   const gateway = gatewayBase(cfg);
-  environment = recallEnvironment(gateway);
+  environment = recallEnvironment(gateway, cfg);
+  organization = cfg.org?.name ?? cfg.org?.id;
   const answers = [];
   const nothingRemembered = [];
   const failed = [];
-  let unresolvedConnectorIds = [];
+  const unresolvedConnectorIds = [];
+  let names = Promise.resolve([]);
   let destinations = [];
   let ctx;
   const timeoutMs = (args.timeoutSeconds ?? (args.answer ? ANSWER_TIMEOUT_SECONDS : DEFAULT_TIMEOUT_SECONDS)) * 1000;
@@ -1004,37 +1009,38 @@ async function runRecall(resolved, args) {
     if (!getAuthProfile(profileId)) {
       return bail("need_login", "need_login", "this project's Augenta sign-in is missing; sign in again with the connect skill");
     }
-    const [resolution, named] = await Promise.all([
-      resolveDestinations(profileId, gateway, cfg.connectorIds ?? []),
-      fetchAllWorkspaces(profileId, gateway).catch(() => [])
-    ]);
-    if (resolution.needLogin) {
-      return bail("need_login", "need_login", "this project's Augenta sign-in has expired; sign in again with the connect skill");
-    }
-    destinations = [];
-    for (const destination of resolution.destinations) {
-      if (destinations.some((seen) => seen.workspaceId === destination.workspaceId))
-        continue;
-      destinations.push(destination);
-    }
-    unresolvedConnectorIds = resolution.unresolvedConnectorIds;
-    failed.push(...resolution.failed);
-    for (const destination of destinations) {
-      const name = named.find((workspace) => workspace.id === destination.workspaceId)?.name;
-      if (name)
-        destination.workspaceName = name;
-    }
+    destinations = (cfg.destinations ?? []).map((destination) => ({ ...destination }));
     if (args.workspaces?.length) {
       const requested = new Set(args.workspaces);
       const unknown = args.workspaces.filter((id) => !destinations.some((destination) => destination.workspaceId === id));
       if (unknown.length > 0) {
-        const unverifiable = failed.length > 0 || unresolvedConnectorIds.length > 0;
-        return bail("error", unverifiable ? "workspace_unverifiable" : "unknown_workspace", unverifiable ? `could not resolve every destination this project feeds, so ${unknown.join(", ")} cannot be confirmed as one; nothing was asked` : `this project does not feed ${unknown.join(", ")}; recall can only ask the Workspaces it sends to`, {
-          ...failed.length > 0 ? { failed: [...failed] } : {},
-          ...unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {}
-        });
+        return bail("error", "unknown_workspace", `this project does not feed ${unknown.join(", ")}; recall can only ask the Workspaces it sends to`);
       }
       destinations = destinations.filter((destination) => destination.workspaceId && requested.has(destination.workspaceId));
+    }
+    const inspected = await Promise.all(destinations.map(async (destination) => {
+      try {
+        return { destination, connector: await currentConnector(profileId, gateway, destination.connectorId) };
+      } catch (error) {
+        return { destination, error };
+      }
+    }));
+    destinations = [];
+    for (const entry of inspected) {
+      if ("error" in entry) {
+        failed.push({
+          ...entry.destination,
+          code: entry.error instanceof ReLoginRequiredError ? "need_login" : "network",
+          message: describeError(entry.error)
+        });
+      } else if (!entry.connector || entry.connector.status !== "active" || entry.connector.id !== entry.destination.connectorId || entry.connector.workspaceId !== entry.destination.workspaceId) {
+        unresolvedConnectorIds.push(entry.destination.connectorId);
+      } else {
+        destinations.push(entry.destination);
+      }
+    }
+    if (destinations.length > 0) {
+      names = fetchAllWorkspaces(profileId, gateway).catch(() => []);
     }
     ctx = { url, query, timeoutMs, profileId };
   } else {
@@ -1049,13 +1055,23 @@ async function runRecall(resolved, args) {
     ctx = { url, query, timeoutMs, apiKey };
   }
   if (destinations.length === 0 && failed.length === 0) {
-    return bail("error", "no_destination", unresolvedConnectorIds.length > 0 ? `this project lists ${unresolvedConnectorIds.join(", ")}, but ${unresolvedConnectorIds.length === 1 ? "it is" : "they are"} not readable with this sign-in; reconnect` : "this project has no destination to ask; reconnect with the connect skill", unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {});
+    return bail("error", "no_destination", unresolvedConnectorIds.length > 0 ? `this project lists ${unresolvedConnectorIds.join(", ")}, but their links are disabled, inaccessible, or no longer match the saved Workspaces; reconnect` : "this project has no destination to ask; reconnect with the connect skill", unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {});
   }
+  const linkedDestinations = destinations;
+  destinations = destinations.filter((destination, index) => destinations.findIndex((entry) => entry.workspaceId === destination.workspaceId) === index);
   const outcomes = await Promise.all(destinations.map(async (destination) => ({
     destination,
     outcome: await askDestination(ctx, destination)
   })));
+  const named = await names;
   for (const { destination, outcome } of outcomes) {
+    const liveName = named.find((workspace) => workspace.id === destination.workspaceId)?.name;
+    if (liveName)
+      destination.workspaceName = liveName;
+    if (cfg.authMode === "oauth" && outcome.kind === "failed" && ["unresolved_connector", "not_entitled", "not_found", "workspace_archived", "workspace_not_found", "workspace_forbidden"].includes(outcome.code)) {
+      unresolvedConnectorIds.push(...linkedDestinations.filter((entry) => entry.workspaceId === destination.workspaceId).map((entry) => entry.connectorId));
+      continue;
+    }
     if (outcome.kind === "answered") {
       const { kind: _answered, ...fields } = outcome;
       answers.push({ ...destination, ...fields });
@@ -1066,7 +1082,10 @@ async function runRecall(resolved, args) {
       failed.push({ ...destination, ...fields });
     }
   }
-  const status = aggregateStatus({ answers, nothingRemembered, failed });
+  if (unresolvedConnectorIds.length > 0 && answers.length + nothingRemembered.length + failed.length === 0) {
+    return bail("error", "no_destination", `no destination could be used for recall (${unresolvedConnectorIds.join(", ")}); reconnect to review this project's Workspaces`, { unresolvedConnectorIds });
+  }
+  const status = aggregateStatus({ answers, nothingRemembered, failed, unresolvedConnectorIds });
   return {
     status,
     query,
@@ -1075,6 +1094,7 @@ async function runRecall(resolved, args) {
     failed,
     ...unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {},
     environment,
+    ...organization ? { organization } : {},
     projectRoot,
     elapsedMs: Date.now() - startedAt
   };
@@ -1095,7 +1115,7 @@ function printPayload(payload) {
     console.error(`Augenta recall: could not ask ${label}: ${entry.message}`);
   }
   if (payload.unresolvedConnectorIds?.length) {
-    console.error(`Augenta recall: did not ask ${payload.unresolvedConnectorIds.join(", ")} — ` + `this project lists ${payload.unresolvedConnectorIds.length === 1 ? "that Connector" : "those Connectors"} ` + `but ${payload.unresolvedConnectorIds.length === 1 ? "it is" : "they are"} not readable with this sign-in.`);
+    console.error(`Augenta recall: no answer from ${payload.unresolvedConnectorIds.join(", ")} — ` + "those links could not be used or their Workspaces refused recall; reconnect to review them.");
   }
   if (payload.message && payload.answers.length === 0) {
     console.error(`Augenta recall: ${payload.message}`);
