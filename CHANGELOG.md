@@ -40,21 +40,14 @@ release a user can read.
   overrides. Recall retains actionable Workspace refusal details, and a
   malformed platform-key assignment fails before replacing the project config.
 
-- **Recall no longer waits for a model by default.** `/augenta:recall` now asks
-  for the matching memory itself — the consolidated summary and the notes behind
-  it — and your own agent answers from it. On an updated platform, default
-  recall skips the answer-model call and its token cost, and sends your memory
-  to no third-party answer model. Add `--answer` when you want Augenta's own
-  model to write the answer instead; that path behaves exactly as recall did
-  before, including the up-to-a-minute wait.
-
-  The recall response change alone needs no reconnect. **It pairs with a platform change** (the
-  `/v1/recall` response is now an ordered list of typed content blocks): against
-  an environment that has not rolled it yet, this client reads the older
-  `{scope, answer}` response as before. Both modes retain a 75-second client
-  timeout during rollout so older model-backed defaults have time to finish.
-  Publish this client before changing the platform default; the shorter
-  context timeout can follow after all supported environments are updated.
+- **Recall asks Augenta's model for an answer by default.** Use
+  `/augenta:recall context <question>` for the matching memory without an Augenta
+  answer-model call, or `answer` to explicitly request the default. The script
+  accepts `--context` and `--answer`, and refuses them together. If the model is
+  unavailable or model access is not acknowledged, the plugin retries once as
+  context and marks that result so your agent explains it is using memory.
+  This recall change needs no reconnect. Both modes retain the 75-second client
+  ceiling for older platforms; each request sends its mode explicitly.
 
 - Simplified setup, recall, and privacy guidance. Added separate guides for
   connection settings and how the plugin works. Plugin behavior is unchanged;

@@ -1,0 +1,52 @@
+name: Cancel stale CI on merge
+
+# ci.yml's own concurrency (keyed by github.ref, which is stably
+# refs/pull/<n>/merge for pull_request events) already kills a PR's PREVIOUS
+# run the instant a new commit starts one -- that's what makes "click Update
+# branch" cancel the old run automatically. It does NOT cover a run still in
+# flight at the moment the PR itself closes: merging lands on
+# refs/heads/main, a different concurrency group, so nothing ever reaps the
+# PR-ref run and it burns runner minutes to completion against a PR nobody
+# can act on any more. This workflow is that reaper.
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write
+
+concurrency:
+  group: cancel-stale-runs-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Cancel PR-triggered runs still in flight for this branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          SELF_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # `--method GET` is load-bearing. `gh api` defaults to GET only while no
+          # parameters are given and switches to POST the moment one is — so the three
+          # filters below turn this listing into `POST /actions/runs`, which 404s, and
+          # `set -e` then fails the step. The reaper would be red on every closed PR
+          # while cancelling nothing.
+          for status in in_progress queued; do
+            ids="$(gh api --method GET --paginate "repos/$REPO/actions/runs" \
+              -f branch="$BRANCH" -f event=pull_request -f status="$status" \
+              --jq '.workflow_runs[].id')"
+            for id in $ids; do
+              # This workflow is itself an in-flight `pull_request` run on this branch,
+              # so it matches its own filter. Cancelling itself mid-loop would leave the
+              # runs it exists to reap running.
+              if [[ "$id" == "$SELF_RUN_ID" ]]; then continue; fi
+              echo "Cancelling run $id ($status) on $BRANCH"
+              gh api -X POST "repos/$REPO/actions/runs/$id/cancel" || true
+            done
+          done

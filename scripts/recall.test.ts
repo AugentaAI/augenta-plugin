@@ -253,9 +253,7 @@ describe("parseArgs", () => {
       project: "/p",
       timeoutSeconds: 30,
     });
-    // `--answer` is the opt-in to the model path. Absent means the default,
-    // model-free mode — the flag's absence is the request, so it must not be
-    // defaultable to anything else.
+    // The parser records explicit flags; runRecall selects answer when neither is present.
     expect(parseArgs(["--answer"])).toEqual({ words: [], answer: true });
     expect(parseArgs(["--json"]).answer).toBeUndefined();
   });
@@ -699,9 +697,8 @@ describe("the fan-out", () => {
         mode: "context",
       },
     ]);
-    // No renderer and no model: the default mode ran neither, and reporting one
-    // would name work that did not happen.
-    expect(recallModes()).toEqual([undefined, undefined]);
+    // The response determines the reported mode and metadata, regardless of the requested mode.
+    expect(recallModes()).toEqual(["answer", "answer"]);
 
     const calls = recallCalls();
     expect(calls).toHaveLength(2);
@@ -719,10 +716,7 @@ describe("the fan-out", () => {
     ]);
   });
 
-  test("the default asks for no mode and renders the memory; --answer asks for the model", async () => {
-    /* The one wire fact that separates the modes. The default sends NO `mode`
-       parameter — the door's own default decides, so there is one default rather
-       than two that can drift — and `--answer` is the explicit opt-in. */
+  test("the default explicitly asks for answer and --context requests memory", async () => {
     await connectedProject(["connector_a"]);
     route({
       [`POST ${GATEWAY}/v1/recall`]: (_init, url) =>
@@ -730,30 +724,89 @@ describe("the fan-out", () => {
           ? answerResponse("we deploy with the chart")
           : memoryResponse("how this project deploys", ["deployed with the chart"]),
     });
-
-    const remembered = await runRecall({ projectRoot: project }, args());
-    expect(recallModes()).toEqual([undefined]);
-    expect(remembered.status).toBe("answered");
-    expect(remembered.answers[0]).toMatchObject({
-      mode: "context",
-      answer: "how this project deploys\n\ndeployed with the chart",
-    });
-    // Nothing about a renderer or a model, because neither ran.
+    const answered = await runRecall({ projectRoot: project }, args());
+    expect(recallModes()).toEqual(["answer"]);
+    expect(answered.answers[0]).toMatchObject({ mode: "answer", answer: "we deploy with the chart", model: "some-model" });
+    const remembered = await runRecall({ projectRoot: project }, args({ context: true }));
+    expect(recallModes()).toEqual(["answer", "context"]);
+    expect(remembered.answers[0]).toMatchObject({ mode: "context", answer: "how this project deploys\n\ndeployed with the chart" });
     expect(remembered.answers[0]).not.toHaveProperty("model");
     expect(remembered.answers[0]).not.toHaveProperty("renderer");
-
-    const answered = await runRecall({ projectRoot: project }, args({ answer: true }));
-    expect(recallModes()).toEqual([undefined, "answer"]);
-    expect(answered.answers[0]).toMatchObject({
-      mode: "answer",
-      answer: "we deploy with the chart",
-      model: "some-model",
-      renderer: "prose-v1",
-    });
-    // Same body in both modes, which is why the mode is a query parameter: the
-    // door forbids unknown body fields, so every existing request stays valid.
-    const bodies = recallCalls().map((call) => JSON.parse(String(call.body)));
+    const bodies = recallCalls().map((call) => call.body);
     expect(bodies[0]).toEqual(bodies[1]);
+  });
+
+  for (const reason of ["answerer_unavailable", "consent_required"] as const) {
+    for (const explicitAnswer of [false, true]) {
+      test(`${reason} falls back once for ${explicitAnswer ? "explicit" : "default"} answer`, async () => {
+        await connectedProject(["connector_a"]);
+        route({
+          [`POST ${GATEWAY}/v1/recall`]: (_init, url) => url.searchParams.get("mode") === "answer"
+            ? Response.json({ error: { code: reason, message: "Unavailable", retryable: false } }, { status: 503 })
+            : memoryResponse("remembered context"),
+        });
+        const payload = await runRecall({ projectRoot: project }, args({ answer: explicitAnswer }));
+        expect(recallModes()).toEqual(["answer", "context"]);
+        expect(payload.failed).toEqual([]);
+        expect(payload.answers[0]).toMatchObject({
+          mode: "context", answer: "remembered context", fallback: { requested: "answer", reason },
+        });
+        const calls = recallCalls();
+        expect(calls[0]!.body).toBe(calls[1]!.body);
+        expect(calls[0]!.headers.get("authorization")).toBe(calls[1]!.headers.get("authorization"));
+        expect(calls[0]!.headers.get("idempotency-key")).not.toBe(calls[1]!.headers.get("idempotency-key"));
+      });
+    }
+  }
+
+  test("explicit context does not retry an unavailable answerer", async () => {
+    await connectedProject(["connector_a"]);
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => Response.json({
+      error: { code: "answerer_unavailable", message: "Unavailable" },
+    }, { status: 503 }) });
+    const payload = await runRecall({ projectRoot: project }, args({ context: true }));
+    expect(recallModes()).toEqual(["context"]);
+    expect(payload.failed[0]!.code).toBe("answerer_unavailable");
+    expect(payload.failed[0]).not.toHaveProperty("fallback");
+  });
+
+  test("a failed context fallback is returned without another retry", async () => {
+    await connectedProject(["connector_a"]);
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => Response.json({
+      error: { code: "answerer_unavailable", message: "Unavailable" },
+    }, { status: 503 }) });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(recallModes()).toEqual(["answer", "context"]);
+    expect(payload.failed[0]).toMatchObject({ code: "answerer_unavailable", fallback: { requested: "answer", reason: "answerer_unavailable" } });
+  });
+
+  test.each([502, 504])("HTTP %s does not trigger model fallback", async (status) => {
+    await connectedProject(["connector_a"]);
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => Response.json({
+      error: { code: "answerer_unavailable", message: "Unavailable" },
+    }, { status }) });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(recallModes()).toEqual(["answer"]);
+    expect(payload.failed).toHaveLength(1);
+    expect(payload.failed[0]).not.toHaveProperty("fallback");
+  });
+
+  test("a platform-key fallback preserves an empty Workspace outcome and credential", async () => {
+    writeConfig({ authMode: "api-key", apiKey: "platform-test-key", endpoint: GATEWAY });
+    route({ [`POST ${GATEWAY}/v1/recall`]: (_init, url) => url.searchParams.get("mode") === "answer"
+      ? Response.json({ error: { code: "answerer_unavailable", message: "Unavailable" } }, { status: 503 })
+      : Response.json({ error: { code: "empty_scope", message: "Empty" } }, { status: 404 }),
+    });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(recallModes()).toEqual(["answer", "context"]);
+    expect(payload.status).toBe("nothing_remembered");
+    expect(payload.failed).toEqual([]);
+    expect(payload.nothingRemembered).toEqual([{ fallback: { requested: "answer", reason: "answerer_unavailable" } }]);
+    for (const call of recallCalls()) {
+      expect(call.headers.get("authorization")).toBe("AugentaKey platform-test-key");
+      expect(JSON.parse(call.body!)).toEqual({ query: "what did we decide" });
+    }
+    expect(JSON.stringify(payload)).not.toContain("platform-test-key");
   });
 
   test("default recall gives legacy answer servers their full deadline during rollout", async () => {
@@ -768,6 +821,23 @@ describe("the fan-out", () => {
       expect(payload.status).toBe("answered");
       expect(payload.answers.every((answer) => answer.mode === "answer")).toBe(true);
       expect(timeout).toHaveBeenCalledWith(75_000);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
+  test("a timeout override gives each fallback leg its own request ceiling", async () => {
+    writeConfig({ authMode: "api-key", apiKey: "platform-test-key", endpoint: GATEWAY });
+    route({ [`POST ${GATEWAY}/v1/recall`]: (_init, url) => url.searchParams.get("mode") === "answer"
+      ? Response.json({ error: { code: "consent_required", message: "Not acknowledged" } }, { status: 503 })
+      : memoryResponse("remembered context"),
+    });
+    const timeout = spyOn(AbortSignal, "timeout");
+    try {
+      const payload = await runRecall({ projectRoot: project }, args({ timeoutSeconds: 12 }));
+      expect(payload.status).toBe("answered");
+      expect(timeout.mock.calls).toEqual([[12_000], [12_000]]);
+      expect(recallModes()).toEqual(["answer", "context"]);
     } finally {
       timeout.mockRestore();
     }
@@ -993,7 +1063,7 @@ describe("recorded destinations and live recall", () => {
           return memoryResponse("a");
         },
       });
-      const payload = await runRecall({ projectRoot: project }, args({ answer }));
+      const payload = await runRecall({ projectRoot: project }, args({ answer, context: !answer }));
       expect(payload.status).toBe("partially_answered");
       expect(payload.answers).toMatchObject([{ connectorId: "connector_a" }]);
       expect(payload.failed).toEqual([]);
@@ -1313,6 +1383,40 @@ describe("recallEnvironment", () => {
 });
 
 describe("the CLI envelope", () => {
+  test.each(["answerer_unavailable", "consent_required"])("bare mode explains %s distinctly", async (reason) => {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: request => new URL(request.url).searchParams.get("mode") === "answer"
+        ? Response.json({ error: { code: reason, message: "Cannot answer" } }, { status: 503 })
+        : memoryResponse("The remembered deployment target."),
+    });
+    try {
+      writeConfig({ authMode: "api-key", apiKey: "platform-test-key", endpoint: server.url.origin });
+      const child = Bun.spawn(["node", join(import.meta.dir, "../dist/scripts/recall.mjs"), "--project", project, "anything"], {
+        cwd: project,
+        env: { ...process.env, AUGENTA_AUTH_HOME: authHome },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(await child.exited).toBe(0);
+      expect(stdout).toContain("requested memory instead");
+      expect(stdout).toContain("The remembered deployment target.");
+      expect(stdout + stderr).not.toContain("platform-test-key");
+      if (reason === "consent_required") {
+        expect(stdout).toContain("Model access is not acknowledged");
+        expect(stdout).toContain("an administrator must acknowledge external-model access");
+        expect(stdout).not.toContain("model was unavailable");
+      } else {
+        expect(stdout).toContain("Augenta's model was unavailable");
+        expect(stdout).not.toContain("not acknowledged");
+      }
+    } finally {
+      server.stop(true);
+    }
+  });
+
   // Spawned for real, because the envelope fields are added by the entrypoint
   // block and no in-process call exercises them.
   test("reports the project it resolved, the environment, and how long it took", () => {
@@ -1403,4 +1507,14 @@ describe("the CLI envelope", () => {
     expect(JSON.parse(r.stdout)).toMatchObject({ status: "error", code: "failed" });
     expect(r.status).toBe(1);
   });
+});
+
+
+test("recall mode flags are explicit and mutually exclusive", async () => {
+  expect(parseArgs(["--context", "question"]).context).toBe(true);
+  expect(() => parseArgs(["--answer", "--context", "question"])).toThrow("cannot be used together");
+  expect(() => parseArgs(["--context", "--answer", "question"])).toThrow("cannot be used together");
+  await expect(runRecall({ projectRoot: project }, args({ answer: true, context: true })))
+    .rejects.toThrow("--answer and --context cannot be used together");
+  expect(requests).toEqual([]);
 });

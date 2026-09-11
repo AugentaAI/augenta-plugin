@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "api" && "${2:-}" == "graphql" ]]; then
+  thread_id=""
+  previous=""
+  for arg in "$@"; do
+    if [[ "$previous" == "-F" && "$arg" == threadId=* ]]; then
+      thread_id="${arg#threadId=}"
+    fi
+    previous="$arg"
+  done
+
+  if [[ -n "$thread_id" ]]; then
+    printf '%s\n' "$thread_id" >> "$GH_STUB_LOG"
+    printf '{"data":{"resolveReviewThread":{"thread":{"id":"%s","isResolved":true}}}}\n' "$thread_id"
+  else
+    printf '%s\n' "$GH_STUB_THREADS"
+  fi
+  exit 0
+fi
+
+# The resolver asks the PR which branch its head is, so it can check what actually reached
+# origin rather than trusting the local checkout.
+if [[ "${1:-}" == "api" && "${2:-}" == repos/*/pulls/* ]]; then
+  printf '%s\n' "$GH_STUB_PR_HEAD_REF"
+  exit 0
+fi
+
+echo "unexpected gh invocation: $*" >&2
+exit 2

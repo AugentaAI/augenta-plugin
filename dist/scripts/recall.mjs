@@ -689,10 +689,11 @@ function describeError(error) {
 }
 
 // scripts/recall.ts
-var DEFAULT_TIMEOUT_SECONDS = 75;
+var CONTEXT_TIMEOUT_SECONDS = 75;
 var ANSWER_TIMEOUT_SECONDS = 75;
 var MAX_TIMEOUT_SECONDS = 600;
 var MAX_QUERY_CHARS = 4096;
+var MODE_CONFLICT_MESSAGE = "--answer and --context cannot be used together";
 function parseArgs(argv) {
   const args = { words: [] };
   const valueFor = (flag, i) => {
@@ -708,6 +709,8 @@ function parseArgs(argv) {
       args.json = true;
     } else if (flag === "--answer") {
       args.answer = true;
+    } else if (flag === "--context") {
+      args.context = true;
     } else if (flag === "--query") {
       args.query = valueFor(flag, i++);
     } else if (flag === "--workspace") {
@@ -729,6 +732,8 @@ function parseArgs(argv) {
       args.words.push(flag);
     }
   }
+  if (args.answer && args.context)
+    throw new Error(MODE_CONFLICT_MESSAGE);
   return args;
 }
 function questionFrom(args) {
@@ -903,7 +908,7 @@ async function askDestination(ctx, destination) {
     } catch {
       parsed = undefined;
     }
-    return classifyRecallResponse({
+    const outcome = classifyRecallResponse({
       status: response.status,
       body: parsed,
       text,
@@ -911,6 +916,13 @@ async function askDestination(ctx, destination) {
       renderer: response.headers.get("x-augenta-renderer") ?? undefined,
       retryAfter: response.headers.get("retry-after")
     });
+    const url = new URL(ctx.url);
+    if (response.status === 503 && url.searchParams.get("mode") === "answer" && outcome.kind === "failed" && (outcome.code === "answerer_unavailable" || outcome.code === "consent_required")) {
+      url.searchParams.set("mode", "context");
+      const fallback = await askDestination({ ...ctx, url: url.toString(), timeoutMs: ctx.contextTimeoutMs }, destination);
+      return { ...fallback, fallback: { requested: "answer", reason: outcome.code } };
+    }
+    return outcome;
   } catch (error) {
     if (error instanceof ReLoginRequiredError) {
       return { kind: "failed", code: "need_login", message: error.message };
@@ -955,6 +967,8 @@ function recallEnvironment(gateway, cfg) {
   return gateway === DEFAULT_GATEWAY ? "prod" : gateway;
 }
 async function runRecall(resolved, args) {
+  if (args.answer && args.context)
+    throw new Error(MODE_CONFLICT_MESSAGE);
   const startedAt = Date.now();
   const query = questionFrom(args);
   let environment = recallEnvironment(DEFAULT_GATEWAY);
@@ -999,8 +1013,10 @@ async function runRecall(resolved, args) {
   let names = Promise.resolve([]);
   let destinations = [];
   let ctx;
-  const timeoutMs = (args.timeoutSeconds ?? (args.answer ? ANSWER_TIMEOUT_SECONDS : DEFAULT_TIMEOUT_SECONDS)) * 1000;
-  const url = `${gateway}/v1/recall${args.answer ? "?mode=answer" : ""}`;
+  const mode = args.context ? "context" : "answer";
+  const contextTimeoutMs = (args.timeoutSeconds ?? CONTEXT_TIMEOUT_SECONDS) * 1000;
+  const timeoutMs = mode === "context" ? contextTimeoutMs : (args.timeoutSeconds ?? ANSWER_TIMEOUT_SECONDS) * 1000;
+  const url = `${gateway}/v1/recall?mode=${mode}`;
   if (cfg.authMode === "oauth") {
     const profileId = cfg.profileId;
     if (!getAuthProfile(profileId)) {
@@ -1039,7 +1055,7 @@ async function runRecall(resolved, args) {
     if (destinations.length > 0) {
       names = fetchAllWorkspaces(profileId, gateway).catch(() => []);
     }
-    ctx = { url, query, timeoutMs, profileId };
+    ctx = { url, query, timeoutMs, contextTimeoutMs, profileId };
   } else {
     if (args.workspaces?.length) {
       return bail("error", "workspace_not_selectable", "this project uses a platform key, whose Connector fixes the Workspace; --workspace selects nothing");
@@ -1049,7 +1065,7 @@ async function runRecall(resolved, args) {
       return bail("error", "unreadable_config", "this project's platform key is missing from its Augenta config; reconnect");
     }
     destinations = [{}];
-    ctx = { url, query, timeoutMs, apiKey };
+    ctx = { url, query, timeoutMs, contextTimeoutMs, apiKey };
   }
   if (destinations.length === 0 && failed.length === 0) {
     return bail("error", "no_destination", unresolvedConnectorIds.length > 0 ? `this project lists ${unresolvedConnectorIds.join(", ")}, but their links are disabled, inaccessible, or no longer match the saved Workspaces; reconnect` : "this project has no destination to ask; reconnect with the connect skill", unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {});
@@ -1072,7 +1088,8 @@ async function runRecall(resolved, args) {
       const { kind: _answered, ...fields } = outcome;
       answers.push({ ...destination, ...fields });
     } else if (outcome.kind === "nothing_remembered") {
-      nothingRemembered.push({ ...destination });
+      const { kind: _nothing, ...fields } = outcome;
+      nothingRemembered.push({ ...destination, ...fields });
     } else {
       const { kind: _failed, ...fields } = outcome;
       failed.push({ ...destination, ...fields });
@@ -1093,6 +1110,13 @@ async function runRecall(resolved, args) {
   };
 }
 function printPayload(payload) {
+  for (const entry of [...payload.answers, ...payload.nothingRemembered, ...payload.failed]) {
+    if (entry.fallback) {
+      const label = entry.workspaceName ?? entry.workspaceId ?? "Augenta";
+      const reason = entry.fallback.reason === "consent_required" ? `Model access is not acknowledged in ${label}; an administrator must acknowledge external-model access to enable answers` : `Augenta's model was unavailable in ${label}`;
+      console.log(`${reason} (${entry.fallback.reason}); requested memory instead.`);
+    }
+  }
   for (const answer of payload.answers) {
     const label = answer.workspaceName ?? answer.workspaceId ?? "Augenta";
     console.log(`— ${label} —`);

@@ -68,6 +68,8 @@ const RELEASE_VERSION = "0.10.2";
  *  test below asserts its count is this one. */
 const RELEASE_SURFACES = 8;
 const PORTABLE_SKILL_FRONTMATTER_KEYS = new Set(["name", "description", "allowed-tools"]);
+// Claude renders argument-hint; Codex accepts it and gets usage syntax from the description.
+const OPTIONAL_SKILL_FRONTMATTER_KEYS = new Set(["argument-hint"]);
 
 interface Frontmatter {
   raw: string;
@@ -182,8 +184,16 @@ describe("skill frontmatter", () => {
         expect((fm!.fields.description ?? "").trim().length).toBeGreaterThan(0);
       });
 
-      test("uses exactly the portable frontmatter keys", () => {
-        expect(new Set(Object.keys(fm!.fields))).toEqual(PORTABLE_SKILL_FRONTMATTER_KEYS);
+      test("uses the required and optional portable frontmatter keys", () => {
+        for (const key of PORTABLE_SKILL_FRONTMATTER_KEYS) expect(fm!.fields).toHaveProperty(key);
+        for (const key of Object.keys(fm!.fields)) {
+          expect(PORTABLE_SKILL_FRONTMATTER_KEYS.has(key) || OPTIONAL_SKILL_FRONTMATTER_KEYS.has(key)).toBe(true);
+        }
+      });
+
+      test("only recall exposes a positional mode argument hint", () => {
+        if (dir === "recall") expect(fm!.fields["argument-hint"]).toBe("[answer | context] <question>");
+        else expect(fm!.fields).not.toHaveProperty("argument-hint");
       });
 
       test("name is the exact skill directory name", () => {
@@ -421,7 +431,7 @@ describe("the recall skill drives recall itself", () => {
   test("drives every flag the CLI exposes, and none it does not", () => {
     // Word-boundary, not substring: a renamed `--workspaces` would satisfy
     // `toContain("--workspace")` VACUOUSLY while the CLI flag no longer exists.
-    const flags = ["--json", "--query", "--workspace", "--timeout", "--project", "--answer"];
+    const flags = ["--json", "--query", "--workspace", "--timeout", "--project", "--answer", "--context"];
     for (const flag of flags) {
       expect(skill).toMatch(new RegExp(`${flag}(?![\\w-])`));
     }
@@ -432,17 +442,17 @@ describe("the recall skill drives recall itself", () => {
   });
 
   test("says which mode wrote the text, because the two need different wording", () => {
-    /* The default mode returns the MEMORY and this agent answers from it; the
-       `--answer` mode returns prose a model on Augenta's side wrote. Relaying
+    /* Context mode returns the MEMORY and this agent answers from it; the
+       default answer mode returns prose a model on Augenta's side wrote. Relaying
        remembered notes as though Augenta had answered attributes a claim to a
        summariser that never ran, so the skill has to branch on `mode` — a rule
        that lives only in the script would constrain nothing the model generates. */
     expect(flat).toMatch(/Check `mode` on each entry before you present it/i);
     expect(flat).toMatch(/answer the user's question yourself from that memory/i);
     expect(flat).toMatch(/notesTruncated/);
-    // And the default is presented as the default, not as an optimization the
-    // agent may skip: it is faster and costs the user no model turn.
-    expect(flat).toMatch(/By default nothing writes an answer for you/i);
+    expect(flat).toMatch(/fallback/);
+    // The skill exposes the default and the fallback explicitly.
+    expect(flat).toMatch(/By default Augenta's model writes the answer/i);
   });
 
   test("resolves the script from the skill's own directory, never from $CLAUDE_PLUGIN_ROOT", () => {
@@ -527,9 +537,30 @@ describe("the recall skill drives recall itself", () => {
 
   test("gives each mode a Bash timeout the script's own wait fits inside", () => {
     const source = readFileSync(join(PLUGIN_ROOT, "scripts", "recall.ts"), "utf8");
-    expect(source).toContain("const DEFAULT_TIMEOUT_SECONDS = 75");
-    expect(flat).toMatch(/at least 90 seconds/i);
-    expect(source).toContain("const ANSWER_TIMEOUT_SECONDS = 75");
+    const contextCeiling = Number(source.match(/const CONTEXT_TIMEOUT_SECONDS = (\d+)/)?.[1]);
+    const answerCeiling = Number(source.match(/const ANSWER_TIMEOUT_SECONDS = (\d+)/)?.[1]);
+    expect(contextCeiling).toBe(75);
+    expect(answerCeiling).toBe(75);
+    const instructions = skill.split("## 2. Ask")[1]!.split("```bash")[0]!.replace(/\*\*/g, "");
+    const answerBudget = Number(instructions.match(/Answer[^\n]*at least (\d+) seconds/)?.[1]);
+    const contextBudget = Number(instructions.match(/Context[^\n]*at least (\d+) seconds/)?.[1]);
+    expect(answerBudget).toBeGreaterThan(answerCeiling + contextCeiling);
+    expect(contextBudget).toBeGreaterThan(contextCeiling);
+    expect(flat).not.toMatch(/either mode[^.]*90 seconds/i);
+    expect(flat).toContain("ceiling **per request**, not for the whole command");
+  });
+
+  test("the usage hint and mode selection are explicit in both harnesses", () => {
+    const description = readFrontmatter(join(SKILLS_DIR, "recall", "SKILL.md"))!.fields.description;
+    expect(description).toContain("/augenta:recall [answer | context] <question> in Claude Code");
+    expect(description).toContain("$augenta:recall [answer | context] <question> in Codex");
+    expect(flat).toContain("state the selected mode and remaining question before sending it");
+  });
+
+  test("fallback guidance distinguishes missing consent from an unavailable model", () => {
+    expect(flat).toContain("`consent_required` means external-model access has not been acknowledged");
+    expect(flat).toContain("an administrator must acknowledge it to enable answers");
+    expect(flat).toContain("Do not describe a consent refusal as an outage or change consent yourself");
   });
 
   test("keeps the agent's own constraints explicit", () => {
