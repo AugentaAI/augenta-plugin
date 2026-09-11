@@ -420,13 +420,28 @@ describe("the recall skill drives recall itself", () => {
   test("drives every flag the CLI exposes, and none it does not", () => {
     // Word-boundary, not substring: a renamed `--workspaces` would satisfy
     // `toContain("--workspace")` VACUOUSLY while the CLI flag no longer exists.
-    for (const flag of ["--json", "--query", "--workspace", "--timeout", "--project"]) {
+    const flags = ["--json", "--query", "--workspace", "--timeout", "--project", "--answer"];
+    for (const flag of flags) {
       expect(skill).toMatch(new RegExp(`${flag}(?![\\w-])`));
     }
     const source = readFileSync(join(PLUGIN_ROOT, "scripts", "recall.ts"), "utf8");
-    for (const flag of ["--json", "--query", "--workspace", "--timeout", "--project"]) {
+    for (const flag of flags) {
       expect(source, `scripts/recall.ts no longer accepts ${flag}`).toContain(`"${flag}"`);
     }
+  });
+
+  test("says which mode wrote the text, because the two need different wording", () => {
+    /* The default mode returns the MEMORY and this agent answers from it; the
+       `--answer` mode returns prose a model on Augenta's side wrote. Relaying
+       remembered notes as though Augenta had answered attributes a claim to a
+       summariser that never ran, so the skill has to branch on `mode` — a rule
+       that lives only in the script would constrain nothing the model generates. */
+    expect(flat).toMatch(/Check `mode` on each entry before you present it/i);
+    expect(flat).toMatch(/answer the user's question yourself from that memory/i);
+    expect(flat).toMatch(/notesTruncated/);
+    // And the default is presented as the default, not as an optimization the
+    // agent may skip: it is faster and costs the user no model turn.
+    expect(flat).toMatch(/By default nothing writes an answer for you/i);
   });
 
   test("resolves the script from the skill's own directory, never from $CLAUDE_PLUGIN_ROOT", () => {
@@ -510,13 +525,11 @@ describe("the recall skill drives recall itself", () => {
     expect(flat).toMatch(/there is nothing to retry/i);
   });
 
-  test("waits long enough for a model turn instead of killing it early", () => {
-    // The script waits 75s to clear the platform's own 60s deadline. A Bash call
-    // that gives up at 30 would report a timeout the platform never saw.
+  test("gives each mode a Bash timeout the script's own wait fits inside", () => {
+    const source = readFileSync(join(PLUGIN_ROOT, "scripts", "recall.ts"), "utf8");
+    expect(source).toContain("const DEFAULT_TIMEOUT_SECONDS = 75");
     expect(flat).toMatch(/at least 90 seconds/i);
-    expect(readFileSync(join(PLUGIN_ROOT, "scripts", "recall.ts"), "utf8")).toContain(
-      "const DEFAULT_TIMEOUT_SECONDS = 75",
-    );
+    expect(source).toContain("const ANSWER_TIMEOUT_SECONDS = 75");
   });
 
   test("keeps the agent's own constraints explicit", () => {

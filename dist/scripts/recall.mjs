@@ -657,6 +657,7 @@ function resolveTargetProject(args, cwd) {
 
 // scripts/recall.ts
 var DEFAULT_TIMEOUT_SECONDS = 75;
+var ANSWER_TIMEOUT_SECONDS = 75;
 var MAX_TIMEOUT_SECONDS = 600;
 var MAX_QUERY_CHARS = 4096;
 function parseArgs(argv) {
@@ -672,6 +673,8 @@ function parseArgs(argv) {
     const flag = argv[i];
     if (flag === "--json") {
       args.json = true;
+    } else if (flag === "--answer") {
+      args.answer = true;
     } else if (flag === "--query") {
       args.query = valueFor(flag, i++);
     } else if (flag === "--workspace") {
@@ -702,6 +705,24 @@ function questionFrom(args) {
     throw new Error("pass the question with --query or as plain words, not both");
   }
   return flag || words;
+}
+function blocksOf(body, type) {
+  const content = body?.content;
+  if (!Array.isArray(content))
+    return [];
+  return content.filter((block) => !!block && typeof block === "object" && block.type === type);
+}
+function textOf(block) {
+  return typeof block?.text === "string" ? block.text : "";
+}
+function renderContext(body) {
+  const parts = [
+    ...blocksOf(body, "engram").map(textOf),
+    ...blocksOf(body, "note").map(textOf)
+  ].filter((text) => text.trim());
+  return parts.join(`
+
+`);
 }
 function errorFields(body, text) {
   const error = body?.error;
@@ -737,18 +758,24 @@ function retryAfterSeconds(raw) {
 function classifyRecallResponse(parts) {
   const { status, body, text } = parts;
   if (status === 200) {
-    const answer = typeof body?.answer === "string" ? body.answer : "";
+    const declared = body?.mode;
+    const answerBlock = textOf(blocksOf(body, "answer")[0]);
+    const legacyAnswer = typeof body?.answer === "string" ? body.answer : "";
+    const mode = declared === "context" ? "context" : declared === "answer" || answerBlock || legacyAnswer ? "answer" : "context";
+    const answer = mode === "answer" ? answerBlock || legacyAnswer : renderContext(body);
     if (!answer.trim()) {
       return {
         kind: "failed",
         code: "invalid_response",
-        message: "Augenta answered without an answer"
+        message: mode === "answer" ? "Augenta answered without an answer" : "Augenta returned no memory to read"
       };
     }
     const scope = body.scope;
     return {
       kind: "answered",
       answer,
+      mode,
+      ...body.notes_truncated === true ? { notesTruncated: true } : {},
       ...typeof scope === "string" ? { scope } : {},
       ...parts.model ? { model: parts.model } : {},
       ...parts.renderer ? { renderer: parts.renderer } : {}
@@ -965,8 +992,8 @@ async function runRecall(resolved, args) {
   let unresolvedConnectorIds = [];
   let destinations = [];
   let ctx;
-  const timeoutMs = (args.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS) * 1000;
-  const url = `${gateway}/v1/recall`;
+  const timeoutMs = (args.timeoutSeconds ?? (args.answer ? ANSWER_TIMEOUT_SECONDS : DEFAULT_TIMEOUT_SECONDS)) * 1000;
+  const url = `${gateway}/v1/recall${args.answer ? "?mode=answer" : ""}`;
   if (cfg.authMode === "oauth") {
     const profileId = cfg.profileId;
     if (!getAuthProfile(profileId)) {
@@ -1099,6 +1126,7 @@ if (isMain(import.meta.url)) {
 }
 export {
   runRecall,
+  renderContext,
   recallEnvironment,
   questionFrom,
   parseArgs,

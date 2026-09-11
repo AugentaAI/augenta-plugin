@@ -1,8 +1,8 @@
 # How the plugin works
 
 The plugin has three jobs: connect a project, save its activity, and ask about
-past work. It runs on your machine. Augenta stores the memory and answers
-recall questions.
+past work. It runs on your machine. Augenta stores the memory and returns
+matching context; `--answer` optionally asks its model to write an answer.
 
 ## The two paths
 
@@ -22,14 +22,14 @@ flowchart LR
     end
     Sender -->|Saved records| Saved
     Recall -->|Question text| Saved
-    Saved -->|Answer from each Workspace| Recall
+    Saved -->|Memory from each Workspace| Recall
     Recall -->|Past context| Agent
 ```
 
 Saving happens through **hooks**: small scripts your coding app runs at points
 such as the end of a turn. Recall happens when you or your agent calls the
 recall skill. The hooks do not fetch answers or add remembered context to each
-new chat. The recall skill brings answers back into the task.
+new chat. The recall skill brings remembered context back into the task.
 
 This repository contains those scripts and two skills, `connect` and `recall`.
 It does not contain the hosted memory engine or train your coding model.
@@ -109,7 +109,9 @@ id. No transcript or file content is attached. The API decides the allowed
 organization and memory scope from the signed-in identity. An API key already
 fixes the Workspace, so that request needs only the question.
 
-The script reports answers, empty Workspaces, and failures separately. An
+By default the script returns the matched summary and supporting notes for
+your agent to answer from. `--answer` requests model-written prose instead.
+It reports results, empty Workspaces, and failures separately. An
 empty Workspace is a normal result. A failure in one is not presented as a
 successful answer from all of them.
 

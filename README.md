@@ -117,8 +117,11 @@ $augenta:recall what did we decide about sign-in?
 ```
 
 Your agent can also use recall when a task needs past context. Each connected
-Workspace is asked, and each answer shows where it came from. An AI writes
-the answer using saved memory. It can take up to a minute.
+Workspace is asked, and each result shows where it came from. Recall hands your
+agent the saved memory and your agent answers from it, without an Augenta
+answer-model call. Your agent can pass `--answer` when
+you want Augenta's own AI to write the answer instead; that takes up to a
+minute.
 
 A new Workspace may have nothing to recall yet. If recall is not available,
 the plugin will say so.
