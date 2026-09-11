@@ -63,7 +63,7 @@ import { resolveProject, type ResolvedProject } from "../capture/project";
  * platforms that ignore the explicit mode and still run a model. The current
  * platform enforces its own 15s context deadline.
  */
-const DEFAULT_TIMEOUT_SECONDS = 75;
+const CONTEXT_TIMEOUT_SECONDS = 75;
 
 /**
  * The wait for `--answer`, in seconds. Clears the platform's own 60s deadline on
@@ -92,6 +92,7 @@ const MAX_TIMEOUT_SECONDS = 600;
  *  over-long question costs one local error instead of one rejected round trip
  *  per destination. */
 const MAX_QUERY_CHARS = 4096;
+const MODE_CONFLICT_MESSAGE = "--answer and --context cannot be used together";
 
 export interface RecallArgs {
   json?: boolean;
@@ -154,7 +155,7 @@ export function parseArgs(argv: string[]): RecallArgs {
       args.words.push(flag);
     }
   }
-  if (args.answer && args.context) throw new Error("--answer and --context cannot be used together");
+  if (args.answer && args.context) throw new Error(MODE_CONFLICT_MESSAGE);
   return args;
 }
 
@@ -638,6 +639,7 @@ export async function runRecall(
   resolved: ResolvedProject,
   args: RecallArgs,
 ): Promise<RecallPayload> {
+  if (args.answer && args.context) throw new Error(MODE_CONFLICT_MESSAGE);
   const startedAt = Date.now();
   const query = questionFrom(args);
   /* Environment is reported on EVERY payload, including the ones that never got
@@ -716,9 +718,8 @@ export async function runRecall(
   let destinations: Destination[] = [];
   let ctx: Parameters<typeof askDestination>[0];
 
-  if (args.answer && args.context) throw new Error("--answer and --context cannot be used together");
   const mode = args.context ? "context" : "answer";
-  const contextTimeoutMs = (args.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS) * 1000;
+  const contextTimeoutMs = (args.timeoutSeconds ?? CONTEXT_TIMEOUT_SECONDS) * 1000;
   const timeoutMs = mode === "context" ? contextTimeoutMs : (args.timeoutSeconds ?? ANSWER_TIMEOUT_SECONDS) * 1000;
   const url = `${gateway}/v1/recall?mode=${mode}`;
 
@@ -880,7 +881,10 @@ function printPayload(payload: RecallPayload): void {
   for (const entry of [...payload.answers, ...payload.nothingRemembered, ...payload.failed]) {
     if (entry.fallback) {
       const label = entry.workspaceName ?? entry.workspaceId ?? "Augenta";
-      console.log(`Augenta's model was unavailable in ${label} (${entry.fallback.reason}); requested memory instead.`);
+      const reason = entry.fallback.reason === "consent_required"
+        ? `Model access is not acknowledged in ${label}; an administrator must acknowledge external-model access to enable answers`
+        : `Augenta's model was unavailable in ${label}`;
+      console.log(`${reason} (${entry.fallback.reason}); requested memory instead.`);
     }
   }
   for (const answer of payload.answers) {

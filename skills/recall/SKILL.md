@@ -1,7 +1,7 @@
 ---
 name: recall
 argument-hint: "[answer | context] <question>"
-description: Use /augenta:recall [answer | context] <question>. Ask the Augenta Workspaces this project feeds what they remember about a topic, and bring the answer into the conversation. Use when the user runs /augenta:recall or $augenta:recall; asks what was decided, tried, learned, or seen before, why something is the way it is, or what the team or Augenta already knows about something; or when you are about to work on a topic this session has no context for and the project is connected to Augenta. Sends only the question text. Do not use for the current file contents, git history, or general programming knowledge.
+description: Use /augenta:recall [answer | context] <question> in Claude Code or $augenta:recall [answer | context] <question> in Codex. Ask the Augenta Workspaces this project feeds what they remember about a topic, and bring the answer into the conversation. Use when the user runs /augenta:recall or $augenta:recall; asks what was decided, tried, learned, or seen before, why something is the way it is, or what the team or Augenta already knows about something; or when you are about to work on a topic this session has no context for and the project is connected to Augenta. Sends only the question text. Do not use for the current file contents, git history, or general programming knowledge.
 allowed-tools: Bash, Read
 ---
 
@@ -67,6 +67,10 @@ If the first word after the command is exactly `answer` or `context` (any case),
 strip it from the question and use that mode. Pass `--context` for context;
 `--answer` is the explicit spelling of the default. Do not treat later occurrences
 of either word as a mode. If no question remains, ask for the question before running.
+Whenever you strip a leading mode word, state the selected mode and remaining
+question before sending it. To ask a question that itself begins with `answer`
+or `context`, prefix the desired mode explicitly: `answer context switching,
+what did we decide?` keeps `context switching, what did we decide?` as the question.
 
 Use the remaining question, or — when you invoked this yourself —
 the one question you actually need answered. One clear sentence works best:
@@ -79,9 +83,15 @@ the user marked private.
 ## 2. Ask
 
 Say one line before you run it: that you are asking the Augenta Workspaces this
-project feeds. Then run it with a Bash timeout of **at least 90 seconds**.
-The script retains a 75-second ceiling for older answer-only environments
-during rollout; context responses return as soon as they are available:
+project feeds. Choose the Bash timeout by mode:
+
+- Answer (default or `--answer`): **at least 180 seconds**.
+- Context (`--context`): **at least 90 seconds**.
+
+Each request has a 75-second client ceiling. Answer mode can make two requests
+when it falls back to context, so its Bash budget covers both legs plus overhead.
+Context retains the 75-second ceiling for older platforms that ignore the mode;
+healthy responses return as soon as they are available:
 
 ```bash
 node "$RECALL" --json --query "<question>"
@@ -89,7 +99,9 @@ node "$RECALL" --json --query "<question>"
 
 Add `--workspace <id>` once per Workspace to ask only some of them; with no
 `--workspace` every destination is asked. `--project <path>` picks a different
-project, and `--timeout <seconds>` changes the wait.
+project, and `--timeout <seconds>` changes the ceiling **per request**, not for the
+whole command. With an override, give Bash more than twice that ceiling for
+answer mode, or more than that ceiling for explicit context, allowing overhead.
 
 ### `context`, and when to reach for it
 
@@ -101,12 +113,10 @@ from that memory in the current conversation:
 node "$RECALL" --json --context --query "<question>"
 ```
 
-`--answer` explicitly selects the default. Give either mode a Bash timeout of
-**at least 90 seconds**; the script's per-request ceiling remains 75 seconds.
+`--answer` explicitly selects the default.
 When answer mode returns `503 answerer_unavailable` or `consent_required`, the
 script retries once as context and marks the entry with `fallback`. Do not repeat
-that retry yourself. A fallback can require a second request; allow at least
-**180 seconds** for an answer call if both requests reach their client ceilings.
+that retry yourself; use the mode-specific Bash budget above.
 
 Every payload carries `environment`, `projectRoot` and `elapsedMs`. **When
 `environment` is not `prod`, say so** when you present the answers: an answer
@@ -135,9 +145,12 @@ config lives there, so the worktree has nothing to ask on its own.
   means a model on Augenta's side wrote the text, and you may relay it as that
   Workspace's answer.
 
-  When an entry carries `fallback`, say Augenta's model was unavailable in that
-  Workspace and you are answering from memory. If the fallback returned no
-  memory or failed, report that outcome instead of claiming to have an answer.
+  When an entry carries `fallback`, explain its `reason`: `answerer_unavailable`
+  means Augenta's model was unavailable there; `consent_required` means external-model
+  access has not been acknowledged there and an administrator must acknowledge it
+  to enable answers. Do not describe a consent refusal as an outage or change
+  consent yourself. Say you are answering from memory only if the fallback returned
+  memory; if it returned none or failed, report that outcome instead.
 
   When an entry carries `notesTruncated: true` the Workspace sent only its most
   recent notes for that memory, so say your answer is based on part of it rather

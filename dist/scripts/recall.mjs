@@ -690,10 +690,11 @@ function resolveTargetProject(args, cwd) {
 }
 
 // scripts/recall.ts
-var DEFAULT_TIMEOUT_SECONDS = 75;
+var CONTEXT_TIMEOUT_SECONDS = 75;
 var ANSWER_TIMEOUT_SECONDS = 75;
 var MAX_TIMEOUT_SECONDS = 600;
 var MAX_QUERY_CHARS = 4096;
+var MODE_CONFLICT_MESSAGE = "--answer and --context cannot be used together";
 function parseArgs(argv) {
   const args = { words: [] };
   const valueFor = (flag, i) => {
@@ -733,7 +734,7 @@ function parseArgs(argv) {
     }
   }
   if (args.answer && args.context)
-    throw new Error("--answer and --context cannot be used together");
+    throw new Error(MODE_CONFLICT_MESSAGE);
   return args;
 }
 function questionFrom(args) {
@@ -967,6 +968,8 @@ function recallEnvironment(gateway, cfg) {
   return gateway === DEFAULT_GATEWAY ? "prod" : gateway;
 }
 async function runRecall(resolved, args) {
+  if (args.answer && args.context)
+    throw new Error(MODE_CONFLICT_MESSAGE);
   const startedAt = Date.now();
   const query = questionFrom(args);
   let environment = recallEnvironment(DEFAULT_GATEWAY);
@@ -1011,10 +1014,8 @@ async function runRecall(resolved, args) {
   let names = Promise.resolve([]);
   let destinations = [];
   let ctx;
-  if (args.answer && args.context)
-    throw new Error("--answer and --context cannot be used together");
   const mode = args.context ? "context" : "answer";
-  const contextTimeoutMs = (args.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS) * 1000;
+  const contextTimeoutMs = (args.timeoutSeconds ?? CONTEXT_TIMEOUT_SECONDS) * 1000;
   const timeoutMs = mode === "context" ? contextTimeoutMs : (args.timeoutSeconds ?? ANSWER_TIMEOUT_SECONDS) * 1000;
   const url = `${gateway}/v1/recall?mode=${mode}`;
   if (cfg.authMode === "oauth") {
@@ -1113,7 +1114,8 @@ function printPayload(payload) {
   for (const entry of [...payload.answers, ...payload.nothingRemembered, ...payload.failed]) {
     if (entry.fallback) {
       const label = entry.workspaceName ?? entry.workspaceId ?? "Augenta";
-      console.log(`Augenta's model was unavailable in ${label} (${entry.fallback.reason}); requested memory instead.`);
+      const reason = entry.fallback.reason === "consent_required" ? `Model access is not acknowledged in ${label}; an administrator must acknowledge external-model access to enable answers` : `Augenta's model was unavailable in ${label}`;
+      console.log(`${reason} (${entry.fallback.reason}); requested memory instead.`);
     }
   }
   for (const answer of payload.answers) {

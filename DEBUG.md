@@ -5,6 +5,9 @@ or `--answer` to spell the default explicitly; combining them is an error. A 503
 `answerer_unavailable` or `consent_required` causes one context retry. Inspect each
 entry's `fallback: {requested: "answer", reason: ...}` and returned `mode`; other
 errors do not trigger this fallback. The retry gets a fresh idempotency key.
+`--timeout` applies separately to each request, including the fallback. Allow a
+Bash budget of at least 180 seconds for answer and 90 seconds for explicit context
+with the default ceilings; increase the budget when overriding them.
 
 Contributor notes. Nothing here is user-facing, and `README.md` deliberately does
 not link this file: every lever below either points a real project at a

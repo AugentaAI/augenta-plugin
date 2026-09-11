@@ -826,6 +826,23 @@ describe("the fan-out", () => {
     }
   });
 
+  test("a timeout override gives each fallback leg its own request ceiling", async () => {
+    writeConfig({ authMode: "api-key", apiKey: "platform-test-key", endpoint: GATEWAY });
+    route({ [`POST ${GATEWAY}/v1/recall`]: (_init, url) => url.searchParams.get("mode") === "answer"
+      ? Response.json({ error: { code: "consent_required", message: "Not acknowledged" } }, { status: 503 })
+      : memoryResponse("remembered context"),
+    });
+    const timeout = spyOn(AbortSignal, "timeout");
+    try {
+      const payload = await runRecall({ projectRoot: project }, args({ timeoutSeconds: 12 }));
+      expect(payload.status).toBe("answered");
+      expect(timeout.mock.calls).toEqual([[12_000], [12_000]]);
+      expect(recallModes()).toEqual(["answer", "context"]);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
   test("every idempotency key is a fresh UUID, per destination and per call", async () => {
     // The door namespaces an activation by (principal, key), so a key reused
     // across destinations is a 409 on a perfectly valid second question.
@@ -1366,6 +1383,40 @@ describe("recallEnvironment", () => {
 });
 
 describe("the CLI envelope", () => {
+  test.each(["answerer_unavailable", "consent_required"])("bare mode explains %s distinctly", async (reason) => {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: request => new URL(request.url).searchParams.get("mode") === "answer"
+        ? Response.json({ error: { code: reason, message: "Cannot answer" } }, { status: 503 })
+        : memoryResponse("The remembered deployment target."),
+    });
+    try {
+      writeConfig({ authMode: "api-key", apiKey: "platform-test-key", endpoint: server.url.origin });
+      const child = Bun.spawn(["node", join(import.meta.dir, "../dist/scripts/recall.mjs"), "--project", project, "anything"], {
+        cwd: project,
+        env: { ...process.env, AUGENTA_AUTH_HOME: authHome },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(await child.exited).toBe(0);
+      expect(stdout).toContain("requested memory instead");
+      expect(stdout).toContain("The remembered deployment target.");
+      expect(stdout + stderr).not.toContain("platform-test-key");
+      if (reason === "consent_required") {
+        expect(stdout).toContain("Model access is not acknowledged");
+        expect(stdout).toContain("an administrator must acknowledge external-model access");
+        expect(stdout).not.toContain("model was unavailable");
+      } else {
+        expect(stdout).toContain("Augenta's model was unavailable");
+        expect(stdout).not.toContain("not acknowledged");
+      }
+    } finally {
+      server.stop(true);
+    }
+  });
+
   // Spawned for real, because the envelope fields are added by the entrypoint
   // block and no in-process call exercises them.
   test("reports the project it resolved, the environment, and how long it took", () => {
@@ -1456,8 +1507,11 @@ describe("the CLI envelope", () => {
 });
 
 
-test("recall mode flags are explicit and mutually exclusive", () => {
+test("recall mode flags are explicit and mutually exclusive", async () => {
   expect(parseArgs(["--context", "question"]).context).toBe(true);
   expect(() => parseArgs(["--answer", "--context", "question"])).toThrow("cannot be used together");
   expect(() => parseArgs(["--context", "--answer", "question"])).toThrow("cannot be used together");
+  await expect(runRecall({ projectRoot: project }, args({ answer: true, context: true })))
+    .rejects.toThrow("--answer and --context cannot be used together");
+  expect(requests).toEqual([]);
 });

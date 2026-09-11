@@ -121,8 +121,10 @@ Your agent can also use recall when a task needs past context. Each connected
 Workspace is asked, and each result shows where it came from. **Augenta's model
 writes the answer by default**, taking up to a minute. Say `context` before the
 question to get the saved memory for your agent to answer from without an Augenta
-answer-model call. If the model is unavailable, the plugin tries context once and
-your agent explains that it is answering from memory.
+answer-model call. If the model is unavailable or external-model access has not
+been acknowledged, the plugin tries context once and your agent explains why it
+is using memory instead. An administrator can acknowledge model access to enable
+answers after a consent refusal.
 
 A new Workspace may have nothing to recall yet. If recall is not available,
 the plugin will say so.
