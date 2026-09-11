@@ -1331,9 +1331,8 @@ describe("the CLI envelope", () => {
     expect(r.status).toBe(0);
   });
 
-  test("a linked worktree reports the redirect instead of retargeting silently", () => {
-    // capture only walks UPWARD from cwd, so the config lives in the main
-    // checkout and the worktree has nothing to ask on its own.
+  test("a linked worktree does not read main checkout consent", () => {
+    // A connected main checkout must not authorize its linked worktree.
     const scratch = realpathSync(mkdtempSync(join(tmpdir(), "aug-recall-wt-")));
     const main = join(scratch, "main");
     // NOT an mkdtemp path: `git worktree add` wants to create this itself, and
@@ -1360,16 +1359,20 @@ describe("the CLI envelope", () => {
       git(main, "init", "-q");
       git(main, "commit", "-q", "--allow-empty", "-m", "root");
       git(main, "worktree", "add", "-q", "--detach", worktree);
+      mkdirSync(join(main, ".augenta"));
+      writeFileSync(join(main, ".augenta/config.json"), JSON.stringify({
+        authMode: "api-key", apiKey: "main-only", endpoint: "http://127.0.0.1:1",
+      }));
 
       const r = spawnSync("bun", [RECALL, "--json", "anything"], {
         cwd: worktree,
         encoding: "utf8",
         env: { ...process.env, AUGENTA_AUTH_HOME: authHome },
       });
-      const payload = JSON.parse(r.stdout) as { projectRoot: string; worktreeRedirect?: unknown };
-      const realMain = realpathSync(main);
-      expect(payload.projectRoot).toBe(realMain);
-      expect(payload.worktreeRedirect).toEqual({ from: realpathSync(worktree), to: realMain });
+      const payload = JSON.parse(r.stdout) as { projectRoot: string; status: string; worktreeRedirect?: unknown };
+      expect(payload.projectRoot).toBe(realpathSync(worktree));
+      expect(payload.status).toBe("not_connected");
+      expect(payload.worktreeRedirect).toBeUndefined();
     } finally {
       spawnSync("git", ["worktree", "remove", "--force", worktree], { cwd: main });
       rmSync(scratch, { recursive: true, force: true });

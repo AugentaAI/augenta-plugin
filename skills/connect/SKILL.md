@@ -47,8 +47,14 @@ ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/augenta/*/dist/scrip
 Every verb below is then:
 
 ```bash
-node "$CONNECT" --json <verb>
+node "$CONNECT" --harness <harness> --json <verb>
 ```
+
+Replace `<harness>` with `codex` when running in Codex or `claude-code` when
+running in Claude Code, in every invocation (including a printed command).
+Pass it explicitly even when shell environment variables are missing or the
+command needs elevated filesystem access. Never infer Claude Code merely from
+the absence of Codex environment variables.
 
 `$CONNECT` stands for the absolute path you just resolved — substitute it
 literally into each command. Do not assign it as a shell variable: each Bash call
@@ -72,7 +78,7 @@ Decide this **before step 1**. If the turn cannot sign in:
    absolute path, no `$CONNECT`, no `~`, no variables:
 
    ```
-   node /absolute/path/to/dist/scripts/connect.mjs
+   node /absolute/path/to/dist/scripts/connect.mjs --harness <harness>
    ```
 
 3. Say in one sentence what it does: connects this project to Augenta
@@ -93,15 +99,15 @@ project to a dev or staging Workspace by accident is silent otherwise.
 When `environmentChange` is present, say the project is moving from `from` to
 `to` before the destination question and in the confirmation.
 
-When a payload includes `worktreeRedirect`, tell the user that cwd is a linked
-worktree and that the main checkout at `projectRoot` is being connected instead —
-capture only searches upward from the working directory, so connecting the
-worktree would silently capture nothing.
+A Git worktree is a separate project consent boundary. Connect writes to the
+current worktree, not the main checkout or its siblings. Name `projectRoot`
+before the destination question; a worktree must be connected explicitly even
+when its main checkout is already connected.
 
 ## 1. Probe
 
 ```bash
-node "$CONNECT" --json --probe
+node "$CONNECT" --harness <harness> --json --probe
 ```
 
 Read-only. It starts no sign-in, so nothing has happened yet and you can still
@@ -136,7 +142,7 @@ reference, environment URLs, organization and chosen destinations. If the user d
 stop.
 
 ```bash
-node "$CONNECT" --json --login
+node "$CONNECT" --harness <harness> --json --login
 ```
 
 Give the user `verificationUri` as a plain URL on its own line so their terminal
@@ -147,7 +153,7 @@ authorizing on a different device.
 Then wait:
 
 ```bash
-node "$CONNECT" --json --await-login
+node "$CONNECT" --harness <harness> --json --await-login
 ```
 
 - `login_pending` — the link is still valid. Tell the user you are still waiting
@@ -210,7 +216,7 @@ request, so do not add a second yes/no confirmation. Then shell-escape the name
 as one argument and run:
 
 ```bash
-node "$CONNECT" --json --create-workspace <name>
+node "$CONNECT" --harness <harness> --json --create-workspace <name>
 ```
 
 If `--probe` returned `need_profile`, add `--profile <profileId>`. On
@@ -223,7 +229,7 @@ not create the Workspace again. On `status: "error"`, report `message`; do not
 claim creation succeeded.
 
 ```bash
-node "$CONNECT" --json --workspace <id> --workspace <id>
+node "$CONNECT" --harness <harness> --json --workspace <id> --workspace <id>
 ```
 
 Repeat `--workspace` once per selected Workspace. Pass the `id`s, never the

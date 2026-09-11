@@ -17,6 +17,7 @@
  * A platform key stays single-destination (`verifyApiKeyConnection`).
  */
 import { captureHealth } from "../capture/health";
+import { detectedHarness } from "../capture/harness";
 import { chmodSync, existsSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -87,6 +88,8 @@ interface Args {
   verifyOnly?: boolean;
   probe?: boolean;
   health?: boolean;
+  /** Correct only the selected Connectors' metadata; never rewrite consent. */
+  repairHarness?: boolean;
   login?: boolean;
   awaitLogin?: boolean;
   waitSeconds?: number;
@@ -165,6 +168,8 @@ export function parseArgs(argv: string[]): Args {
       args.json = true;
     } else if (flag === "--health") {
       args.health = true;
+    } else if (flag === "--repair-harness") {
+      args.repairHarness = true;
     } else if (flag === "--probe") {
       args.probe = true;
     } else if (flag === "--login") {
@@ -255,15 +260,6 @@ export function writeOAuthConfig(
   );
   chmodSync(path, 0o600);
   return path;
-}
-
-function detectedHarness(args: Args): "claude-code" | "codex" {
-  return (
-    args.harness ??
-    (process.env.CODEX_SANDBOX || process.env.CODEX_HOME
-      ? "codex"
-      : "claude-code")
-  );
 }
 
 /**
@@ -632,7 +628,7 @@ async function linkForWorkspace(
     direction: "inbound",
     name,
     projectName: name,
-    harness: detectedHarness(args),
+    harness: detectedHarness(args.harness),
     client: "augenta-plugin",
     description: `Agent activity and project memory from ${name}`,
     metadata: { pluginVersion: PLUGIN_VERSION },
@@ -1379,8 +1375,8 @@ export async function runJsonVerb(
 ): Promise<JsonPayload> {
   const cfg = loadProjectConfig(resolved.projectRoot);
   const metadata = {
-    environment: environmentLabel(controlUrl(cfg, args.controlUrl)),
-    ...environmentChange(cfg, args),
+    environment: environmentLabel(args.repairHarness ? cfg?.controlUrl : controlUrl(cfg, args.controlUrl)),
+    ...(args.repairHarness ? {} : environmentChange(cfg, args)),
     ...(args.probe && cfg ? { current: savedConnection(cfg) } : {}),
   };
   try {
@@ -1390,10 +1386,55 @@ export async function runJsonVerb(
   }
 }
 
+/** The config selects the exact repair set. This verb neither reconnects nor
+ * rewrites config/cursors, and refuses environment/profile overrides. */
+async function repairHarness(projectRoot: string, args: Args): Promise<JsonPayload> {
+  if (!args.harness) return { status: "error", code: "harness_required", message: "--repair-harness requires an explicit --harness codex or --harness claude-code" };
+  const cfg = loadProjectConfig(projectRoot);
+  if (cfg?.authMode !== "oauth") return { status: "error", code: "oauth_connection_required", message: "repair requires a readable browser-connected project config" };
+  // Use the saved endpoint only: ambient overrides must not select another
+  // environment while repairing ids taken from this configuration.
+  const savedGateway = cfg.endpoint || cfg.discoveredGateway;
+  if (!savedGateway) return { status: "error", code: "endpoint_required", message: "repair requires a saved project endpoint" };
+  const gateway = savedGateway.replace(/\/+$/, "");
+  const repaired: string[] = [];
+  const failed: Array<{ connectorId: string; message: string }> = [];
+  for (const destination of cfg.destinations!) {
+    const connectorId = destination.connectorId;
+    try {
+      const url = `${gateway}/v1/connectors/${encodeURIComponent(connectorId)}`;
+      const { connector } = await bearerJson<{ connector: Connector }>(cfg.profileId!, url);
+      if (connector.id !== connectorId || connector.kind !== "agent" || connector.status !== "active" ||
+          connector.workspaceId !== destination.workspaceId || !connector._etag) {
+        throw new Error("Connector must be an active agent in the recorded Workspace with a current revision; nothing changed");
+      }
+      const { connector: updated }: { connector: Connector } = await bearerJson<{ connector: Connector }>(cfg.profileId!, url, {
+        method: "PATCH", headers: { "if-match": connector._etag },
+        body: JSON.stringify({ harness: args.harness, _etag: connector._etag }),
+      });
+      if (updated.id !== connectorId || updated.workspaceId !== destination.workspaceId || updated.harness !== args.harness) {
+        throw new Error("Repair response did not confirm the requested label and route; inspect the Connector before retrying");
+      }
+      repaired.push(connectorId);
+    } catch (error) { failed.push({ connectorId, message: describeError(error) }); }
+  }
+  return { status: failed.length ? "error" : "harness_repaired",
+    ...(failed.length ? { code: "harness_repair_incomplete", message: "Some Connector labels were not repaired; see repaired and failed" } : {}),
+    harness: args.harness, repaired, failed };
+}
+
 async function dispatchJsonVerb(
   resolved: ResolvedProject,
   args: Args,
 ): Promise<JsonPayload> {
+  if (args.repairHarness) {
+    if (args.health || args.probe || args.login || args.awaitLogin || args.verifyOnly ||
+        args.workspaces !== undefined || args.createWorkspace !== undefined || args.apiKey ||
+        args.endpoint || args.controlUrl || args.profile) {
+      return { status: "error", code: "conflicting_verbs", message: "--repair-harness uses the saved project connection; combine it only with --json, --project and --harness" };
+    }
+    return repairHarness(resolved.projectRoot, args);
+  }
   if (args.health && (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe)) {
     return { status: "error", code: "conflicting_verbs", message: "--health is a local read-only operation; run it by itself with --json" };
   }
@@ -1583,6 +1624,7 @@ if (isMain(import.meta.url)) {
   // stack trace.
   try {
     const args = parseArgs(argv);
+    if (args.repairHarness && !args.json) throw new Error("--repair-harness requires --json and an explicit --harness");
     // The terminal flow offers creation inside its own menu, so this flag has no
     // meaning here. Silently ignoring it would look like a Workspace was created.
     if (args.createWorkspace !== undefined && !args.json) {
@@ -1599,9 +1641,6 @@ if (isMain(import.meta.url)) {
           {
             ...payload,
             projectRoot,
-            ...(resolved.worktreeRedirect
-              ? { worktreeRedirect: resolved.worktreeRedirect }
-              : {}),
           },
           null,
           2,

@@ -381,8 +381,9 @@ describe("the connect skill drives connect itself", () => {
     expect(flat).toMatch(/not `prod`, say so/);
   });
 
-  test("explains the worktree redirect instead of retargeting silently", () => {
-    expect(skill).toContain("worktreeRedirect");
+  test("explains worktree-local consent", () => {
+    expect(skill).toContain("separate project consent boundary");
+    expect(skill).toContain("--harness <harness>");
   });
 
   test("stays environment-agnostic — no environment selection reaches the agent", () => {

@@ -113,8 +113,17 @@ case $payload in
     project=${rest%%'"'*}
     ;;
 esac
-if [ -n "$project" ] && [ -f "$project/.augenta/config.json" ]; then
-  echo "Augenta hook: Node.js 20 or newer was not found; install or repair Node.js, or set AUGENTA_NODE to a working executable" >&2
-  exit 1
-fi
+# Mirror the bounded project lookup without requiring Git or Node. Only absolute
+# paths are usable here; malformed payload paths must not inspect this shell's cwd.
+case $project in /*) ;; *) exit 0 ;; esac
+while [ -n "$project" ]; do
+  if [ -f "$project/.augenta/config.json" ]; then
+    echo "Augenta hook: Node.js 20 or newer was not found; install or repair Node.js, or set AUGENTA_NODE to a working executable" >&2
+    exit 1
+  fi
+  [ -e "$project/.git" ] && break
+  [ "$project" = / ] && break
+  project=${project%/*}
+  [ -n "$project" ] || project=/
+done
 exit 0

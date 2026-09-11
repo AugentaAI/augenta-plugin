@@ -20,8 +20,10 @@
  * destinations replaces connectorIds. Older OAuth configs are unparseable and
  * prompt a reconnect; routing choices are never read forward or migrated.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { resolveProjectRoot } from "./project";
+export { resolveProjectRoot } from "./project";
 
 export const DEFAULT_GATEWAY =
   "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
@@ -89,18 +91,6 @@ function parseDestinations(raw: unknown): Destination[] | undefined {
 
 export function configPath(projectRoot: string): string {
   return join(projectRoot, ".augenta", "config.json");
-}
-
-export function resolveProjectRoot(cwd: string | undefined): string | undefined {
-  if (!cwd) return undefined;
-  let dir = cwd;
-  for (let i = 0; i < 30; i++) {
-    if (existsSync(configPath(dir))) return dir;
-    const parent = dirname(dir);
-    if (parent === dir) return undefined;
-    dir = parent;
-  }
-  return undefined;
 }
 
 export function loadProjectConfig(

@@ -241,14 +241,36 @@ node <plugin-root>/dist/scripts/connect.mjs --project <project-root> --json --he
 ```
 
 This command makes no network request and prints no credentials, transcript
-contents, local paths or Connector IDs. `configured` means the config parsed;
+contents or Connector IDs. The CLI prints `projectRoot`, the directory whose
+configuration and activity it inspected. It uses the same nearest-config lookup
+as capture and never substitutes the main checkout for a worktree. `configuration`
+distinguishes missing, invalid and valid configuration. `configured` means the config parsed;
 `dispatch` means a Node hook entrypoint ran; `capture` records the latest local
 capture result; `pendingBytes` is the current queue depth; `delivery` records API
 acceptance/retry/rejection. Success counters count observed successful capture
 passes and accepted HTTP requests, not unique turns or lifetime deliveries.
 `lastSuccessAt` survives a later failure and spool compaction. Ingestion into the
 lake remains `unverified`: accepting an HTTP request is a different boundary.
-The counters are local best-effort diagnostics, not a billing ledger.
+The counters are local best-effort diagnostics, not a billing ledger. Their
+`activityScope` is `project`: concurrent sessions and manual invocations share
+them. `hostDispatch` stays `unverified`; a dispatch counter cannot prove which
+host or invocation caused it.
+
+For a verified mislabeled project, repair only its current active agent links:
+
+```bash
+node <plugin-root>/dist/scripts/connect.mjs --json --repair-harness --harness codex
+```
+
+Use `claude-code` for a verified Claude Code project. The explicit value is
+required; the command uses the saved profile and endpoint, ignoring ambient URL
+overrides, and checks each link's recorded Workspace and revision before PATCH.
+It never reconnects, changes routes, rewrites config, or resets `captureSince`.
+Partial failure returns an error with separate `repaired` and `failed` lists;
+successful repairs remain applied. A missing or obsolete config must be connected
+through the normal consent flow first. For new connections, pass `--harness`
+explicitly; absent or conflicting process signals leave harness metadata unset
+on creation and preserve existing metadata on adoption.
 
 If there is no dispatch, inspect the host's hook approval and plugin activation
 UI first, then its runtime launcher errors. This plugin cannot infer approval
@@ -265,13 +287,16 @@ endpoint and a local ingestion receiver:
 
 ```bash
 bun scripts/codex-lifecycle-e2e.ts /absolute/path/to/codex
+bun scripts/codex-lifecycle-e2e.ts /absolute/path/to/codex --worktree
 ```
 
 It exercises connection after an existing task, a fresh connected task, a tool
 call followed by a text-only turn, final assistant persistence, process restart,
 offline retry, disabled capture and accepted-step deduplication. Tool failures
 from a nested sandbox still exercise the tool lifecycle. No capture or shipper
-function is called manually. The invocation-only hook-trust flag is used solely
+function is called manually. The worktree variant uses a real external Git
+worktree, a separately connected main checkout, and the installed connect command
+without a `--project` override. The invocation-only hook-trust flag is used solely
 for these vetted repository hooks in the disposable profile. It does **not**
 prove a user's approval flow. It never edits an installed cache or trust record.
 
@@ -279,8 +304,8 @@ Measured 2026-09-11 with Node 20+ bundles built by the pinned Bun:
 
 | Host | Installed lifecycle fixture | Active desktop approval/activation | Hosted ingestion |
 | --- | --- | --- | --- |
-| Shell Codex CLI 0.144.4 | Passed full regression | Not applicable | Not tested |
-| Desktop-embedded Codex 0.153.4, launched as CLI | Passed full regression | Not tested | Not tested |
+| Shell Codex CLI 0.144.4 | Passed ordinary-project and external-worktree regressions | Not applicable | Not tested |
+| Desktop-embedded Codex 0.153.4, launched as CLI | Passed external-worktree regression | Not tested | Not tested |
 | Active desktop session using the embedded runtime | Not established | Unresolved | Not tested |
 
 Read-only process inspection confirmed the embedded executable differs from the
@@ -289,10 +314,10 @@ shell CLI. Local native rollout schemas include `turn_id` on `task_started`,
 its envelope `timestamp` preserves the subsecond consent boundary. Fixtures use
 synthetic text and identifiers in those observed shapes.
 
-**Release acceptance remains open:** the affected active desktop's first failing
-boundary has not been established. Its control socket was unavailable and the
-computer-use tool refused access to the Codex app. An independently launched host
-or a successful direct bundle test cannot close that gap. Complete two short
+**Release acceptance remains open:** the worktree configuration mismatch is
+fixed and covered by the installed lifecycle regression, but active Desktop
+approval/activation has not been verified. An independently launched embedded
+executable or a successful direct bundle test cannot close that gap. Complete two short
 turns in the actual desktop after supported approval/activation, correlate hook
 execution with local health and destination ingestion, and repeat both fresh and
 mid-task connection before claiming the desktop defect fixed. Do not broaden

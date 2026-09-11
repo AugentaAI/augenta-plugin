@@ -9,13 +9,10 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export interface ResolvedProject {
   projectRoot: string;
-  /** Set when cwd was a linked worktree and the main checkout was used instead.
-   *  Reported rather than applied silently — the caller tells the user. */
-  worktreeRedirect?: { from: string; to: string };
 }
 
 /** The only argument shape this module needs. Both CLIs pass their own parsed
@@ -38,33 +35,36 @@ function gitRevParse(cwd: string, arg: string): string | undefined {
   }
 }
 
-/**
- * Pick the project a command is about: `--project` > main checkout > git toplevel > cwd.
- *
- * The main-checkout step exists because `--show-toplevel` returns the LINKED
- * WORKTREE's root, and capture only ever walks UPWARD from cwd looking for
- * `.augenta/config.json` (capture/config.ts → resolveProjectRoot). Connect from
- * an out-of-tree worktree such as `~/.codex/worktrees/<id>/<name>` and the config
- * lands somewhere the real repo can never see, so every hook keeps silently
- * no-opping — the user completes the whole flow and captures nothing. Recall has
- * the mirror-image problem: the config the project really has is invisible from
- * the worktree, so recall would report an opted-in project as `not_connected`.
- *
- * `--git-common-dir` prints relative to cwd in a normal repo (`../.git`) and
- * absolute in a linked worktree, which `resolve` handles either way.
- */
+/** Shared consent lookup. A Git checkout/worktree is a boundary, even when
+ * nested under a connected checkout. Invalid local configs stop lookup too:
+ * parsing failure must never fall through to a different project's consent.
+ * The .git marker also works when Git is absent from the host's PATH. */
+export function resolveProjectRoot(cwd: string | undefined): string | undefined {
+  if (!cwd) return undefined;
+  let dir = resolve(cwd);
+  // Each iteration removes a path component, so this is bounded by the input
+  // path. An arbitrary depth cap would let connect's Git fallback find a config
+  // that a deeply nested hook still could not discover.
+  while (true) {
+    if (existsSync(join(dir, ".augenta", "config.json"))) return dir;
+    if (existsSync(join(dir, ".git"))) return undefined;
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
+/** Explicit target > nearest local config > current Git checkout > cwd.
+ * Connecting a worktree consents only that worktree, never its main checkout
+ * or siblings. Existing nested project configs have the same precedence here
+ * as they do in hooks, recall and health. */
 export function resolveProject(args: ProjectArgs, cwd: string): ResolvedProject {
   if (args.project) return { projectRoot: resolve(cwd, args.project) };
+  const configured = resolveProjectRoot(cwd);
+  if (configured) return { projectRoot: configured };
   const top = gitRevParse(cwd, "--show-toplevel");
   // A non-git directory is still a valid explicitly connected project.
   if (!top) return { projectRoot: cwd };
-  const commonDir = gitRevParse(cwd, "--git-common-dir");
-  if (commonDir) {
-    const mainRoot = dirname(resolve(cwd, commonDir));
-    if (mainRoot !== top && existsSync(mainRoot)) {
-      return { projectRoot: mainRoot, worktreeRedirect: { from: top, to: mainRoot } };
-    }
-  }
   return { projectRoot: top };
 }
 

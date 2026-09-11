@@ -42,7 +42,7 @@ import {
   type WorkspacePrompts,
 } from "./connect";
 import { Outbox } from "../capture/outbox";
-import { loadProjectConfig } from "../capture/config";
+import { loadProjectConfig, projectConfig, resolveProjectRoot } from "../capture/config";
 import {
   profileIdFor,
   readPendingLogin,
@@ -200,13 +200,7 @@ describe("resolveTargetProject", () => {
   });
 });
 
-/**
- * Worktrees. `--show-toplevel` returns the LINKED WORKTREE's root, while capture
- * only ever walks UPWARD from cwd looking for `.augenta/config.json`. Connecting
- * from an out-of-tree worktree (`~/.codex/worktrees/<id>/<name>`) therefore wrote
- * a config the real repo could never see: the user completed the whole flow and
- * every hook kept silently no-opping.
- */
+/** Commands and capture agree on worktree-local consent. */
 describe("resolveProject in a linked worktree", () => {
   let worktree: string;
 
@@ -227,21 +221,57 @@ describe("resolveProject in a linked worktree", () => {
   beforeEach(initRepoWithWorktree);
   afterEach(() => rmSync(worktree, { recursive: true, force: true }));
 
-  test("redirects to the main checkout and reports the redirect", () => {
+  test("uses the current worktree without redirecting", () => {
     const resolved = resolveProject({}, worktree);
 
-    expect(realpathSync(resolved.projectRoot)).toBe(project);
-    expect(resolved.worktreeRedirect).toBeDefined();
-    expect(realpathSync(resolved.worktreeRedirect!.from)).toBe(
-      realpathSync(worktree),
-    );
-    expect(realpathSync(resolved.worktreeRedirect!.to)).toBe(project);
+    expect(realpathSync(resolved.projectRoot)).toBe(realpathSync(worktree));
   });
 
-  test("redirects from a subdirectory of the worktree too", () => {
+  test("writing the resolved connection enables only that worktree's capture lookup", () => {
+    writeApiKeyConfig(project, "main-only");
+    expect(projectConfig(worktree)).toBeUndefined();
+    const deep = join(worktree, "src"); mkdirSync(deep);
+    const resolved = resolveProject({}, deep);
+    writeApiKeyConfig(resolved.projectRoot, "worktree-only");
+    expect(projectConfig(deep)?.apiKey).toBe("worktree-only");
+    expect(projectConfig(project)?.apiKey).toBe("main-only");
+    expect(resolveProject({}, deep)).toEqual({ projectRoot: resolveProjectRoot(deep)! });
+  });
+
+  test("nested project config takes precedence, including invalid local config", () => {
+    writeApiKeyConfig(worktree, "outer");
+    const nested = join(worktree, "service"); mkdirSync(nested);
+    writeApiKeyConfig(nested, "inner");
+    const deep = join(nested, "src"); mkdirSync(deep);
+    expect(resolveProject({}, deep).projectRoot).toBe(nested);
+    expect(projectConfig(deep)?.apiKey).toBe("inner");
+    writeFileSync(join(nested, ".augenta/config.json"), "broken");
+    expect(resolveProject({}, deep).projectRoot).toBe(nested);
+    expect(projectConfig(deep)).toBeUndefined();
+  });
+
+  test("deeply nested hooks discover the same config as the command", () => {
+    const deep = join(worktree, ...Array(35).fill("d")); mkdirSync(deep, { recursive: true });
+    writeApiKeyConfig(resolveProject({}, deep).projectRoot, "deep-project");
+    expect(projectConfig(deep)?.apiKey).toBe("deep-project");
+    expect(resolveProject({}, deep).projectRoot).toBe(resolveProjectRoot(deep)!);
+  });
+
+  test("a nested Git checkout or worktree does not inherit outer consent", () => {
+    writeApiKeyConfig(project, "outer");
+    for (const marker of ["file", "directory"]) {
+      const inner = join(project, marker); mkdirSync(inner);
+      if (marker === "file") writeFileSync(join(inner, ".git"), "gitdir: /missing");
+      else mkdirSync(join(inner, ".git"));
+      const deep = join(inner, "src"); mkdirSync(deep);
+      expect(projectConfig(deep)).toBeUndefined();
+    }
+  });
+
+  test("uses the worktree from its subdirectories too", () => {
     const deep = join(worktree, "src", "deep");
     mkdirSync(deep, { recursive: true });
-    expect(realpathSync(resolveProject({}, deep).projectRoot)).toBe(project);
+    expect(realpathSync(resolveProject({}, deep).projectRoot)).toBe(realpathSync(worktree));
   });
 
   test("a plain repo is never redirected", () => {
@@ -250,14 +280,12 @@ describe("resolveProject in a linked worktree", () => {
     const resolved = resolveProject({}, sub);
 
     expect(realpathSync(resolved.projectRoot)).toBe(project);
-    expect(resolved.worktreeRedirect).toBeUndefined();
   });
 
   test("--project still wins, so connecting a worktree stays possible", () => {
     const resolved = resolveProject({ project: worktree }, worktree);
 
     expect(resolved.projectRoot).toBe(worktree);
-    expect(resolved.worktreeRedirect).toBeUndefined();
   });
 });
 
@@ -585,6 +613,7 @@ describe("JSON verbs", () => {
       direction: "inbound",
       status: "active",
       workspaceId,
+      _etag: "revision-1",
     });
 
   beforeEach(() => {
@@ -610,7 +639,7 @@ describe("JSON verbs", () => {
    *  handler separately, so the exact-string routes below keep matching now that
    *  `GET /v1/workspaces` carries `?limit=` and `?cursor=`. `requests` still
    *  records the FULL url — several assertions read the query off it. */
-  function route(extra: Record<string, (query: URLSearchParams) => Response> = {}) {
+  function route(extra: Record<string, (query: URLSearchParams, init?: RequestInit) => Response> = {}) {
     globalThis.fetch = (async (url, init) => {
       const full = String(url);
       const parsed = new URL(full);
@@ -619,7 +648,7 @@ describe("JSON verbs", () => {
       const method = (init as RequestInit | undefined)?.method ?? "GET";
       requests.push(`${method} ${full}`);
       const custom = extra[`${method} ${path}`] ?? extra[path];
-      if (custom) return custom(query);
+      if (custom) return custom(query, init);
       if (path === `${CONTROL}/.well-known/augenta.json`) {
         return Response.json({
           issuer: ISSUER,
@@ -691,6 +720,7 @@ describe("JSON verbs", () => {
         if (method === "PATCH") {
           const body = JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>;
           expect(body).not.toHaveProperty("workspaceId");
+          Object.assign(existing, body);
         }
         return Response.json({ connector: existing });
       }
@@ -708,6 +738,96 @@ describe("JSON verbs", () => {
       },
       { userId: "user_1", orgId: "org_1" },
     );
+
+  test("metadata-only repair preserves config, cursor and route, ignoring ambient endpoint overrides", async () => {
+    const { profileId } = await signIn();
+    const file = writeOAuthConfig(project, connectionRecord(profileId, ["connector_new"]));
+    const original = readFileSync(file, "utf8");
+    const box = new Outbox(project);
+    box.advance(17, "connector_new");
+    const beforeCursor = readFileSync(box.cursorPath, "utf8");
+    process.env.AUGENTA_API_URL = "https://wrong.example.com";
+    process.env.AUGENTA_CONTROL_URL = "https://wrong.example.com";
+    route({ [`PATCH ${GATEWAY}/v1/connectors/connector_new`]: (_query, init) => {
+      expect(JSON.parse(String(init?.body))).toEqual({ harness: "codex", _etag: "revision-1" });
+      expect(new Headers(init?.headers).get("if-match")).toBe("revision-1");
+      return Response.json({ connector: { ...links.get("connector_new"), harness: "codex" } });
+    } });
+    seedLink("connector_new", "ws-default");
+    const payload = await runJsonVerb({ projectRoot: project }, { json: true, repairHarness: true, harness: "codex" });
+    expect(payload).toMatchObject({ status: "harness_repaired", repaired: ["connector_new"], failed: [] });
+    expect(payload).not.toHaveProperty("environmentChange");
+    expect(readFileSync(file, "utf8")).toBe(original);
+    expect(readFileSync(box.cursorPath, "utf8")).toBe(beforeCursor);
+    expect(requests).toEqual([`GET ${GATEWAY}/v1/connectors/connector_new`, `PATCH ${GATEWAY}/v1/connectors/connector_new`]);
+  });
+
+  test("repair refuses ambiguous commands before any network or write", async () => {
+    route();
+    expect(parseArgs(["--json", "--repair-harness", "--harness", "codex"]).repairHarness).toBe(true);
+    for (const extra of [{ health: true }, { workspaces: [] }, { probe: true }, { profile: "other" }, { endpoint: GATEWAY }, { controlUrl: CONTROL }, { verifyOnly: true }]) {
+      expect(await runJsonVerb({ projectRoot: project }, { json: true, repairHarness: true, harness: "codex", ...extra })).toMatchObject({ status: "error", code: "conflicting_verbs" });
+    }
+    expect(await runJsonVerb({ projectRoot: project }, { json: true, repairHarness: true })).toMatchObject({ code: "harness_required" });
+    expect(await runJsonVerb({ projectRoot: project }, { json: true, repairHarness: true, harness: "codex" })).toMatchObject({ code: "oauth_connection_required" });
+    expect(requests).toEqual([]);
+  });
+
+  test("repair rejects retargeted, disabled, non-agent and unversioned Connectors", async () => {
+    const { profileId } = await signIn();
+    writeOAuthConfig(project, connectionRecord(profileId, ["connector_new"]));
+    for (const change of [{ workspaceId: "other" }, { status: "disabled" }, { kind: "service" }, { _etag: undefined }, { id: "other" }]) {
+      route(); seedLink("connector_new", "ws-default");
+      Object.assign(links.get("connector_new")!, change);
+      const payload = await runJsonVerb({ projectRoot: project }, { json: true, repairHarness: true, harness: "codex" });
+      expect(payload).toMatchObject({ status: "error", repaired: [], failed: [expect.objectContaining({ connectorId: "connector_new" })] });
+    }
+    expect(requests.every(r => r.startsWith("GET "))).toBe(true);
+  });
+
+  test("repair reports partial success and keeps failed destinations for retry", async () => {
+    const { profileId } = await signIn();
+    const file = writeOAuthConfig(project, connectionRecord(profileId, ["connector_new", "connector_ws-scratch"]));
+    const original = readFileSync(file, "utf8");
+    route({ [`PATCH ${GATEWAY}/v1/connectors/connector_ws-scratch`]: () => new Response("conflict", { status: 412 }) });
+    seedLink("connector_new", "ws-default"); seedLink("connector_ws-scratch", "ws-scratch");
+    const payload = await runJsonVerb({ projectRoot: project }, { json: true, repairHarness: true, harness: "codex" });
+    expect(payload).toMatchObject({ status: "error", repaired: ["connector_new"], failed: [expect.objectContaining({ connectorId: "connector_ws-scratch" })] });
+    expect(readFileSync(file, "utf8")).toBe(original);
+  });
+
+  test("repair does not report success when the server fails to confirm the label", async () => {
+    const { profileId } = await signIn();
+    writeOAuthConfig(project, connectionRecord(profileId, ["connector_new"]));
+    route({ [`PATCH ${GATEWAY}/v1/connectors/connector_new`]: () => Response.json({ connector: links.get("connector_new") }) });
+    seedLink("connector_new", "ws-default");
+    expect(await runJsonVerb({ projectRoot: project }, { json: true, repairHarness: true, harness: "codex" })).toMatchObject({ status: "error", repaired: [] });
+  });
+
+  for (const adopt of [false, true]) for (const harness of [undefined, "codex", "claude-code"] as const) {
+    test(`registration ${adopt ? "PATCH" : "POST"} preserves explicit or unknown identity: ${harness}`, async () => {
+      const keys = ["CODEX_THREAD_ID", "CODEX_SANDBOX", "CODEX_HOME", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "CLAUDECODE"];
+      const saved = keys.map(key => process.env[key]);
+      try {
+        for (const key of keys) delete process.env[key];
+        const { profileId } = await signIn();
+        if (adopt) writeOAuthConfig(project, connectionRecord(profileId, ["connector_new"]));
+        let inspected = false;
+        route({ [`${adopt ? "PATCH" : "POST"} ${GATEWAY}/v1/connectors${adopt ? "/connector_new" : ""}`]: (_query, init) => {
+          const body = JSON.parse(String(init?.body));
+          if (harness) expect(body.harness).toBe(harness);
+          else expect(body).not.toHaveProperty("harness");
+          inspected = true;
+          return Response.json({ connector: { ...links.get("connector_new"), harness: harness ?? "codex" } });
+        } });
+        seedLink("connector_new", "ws-default");
+        expect(await runJsonVerb({ projectRoot: project }, { ...baseArgs, harness, workspaces: ["ws-default"] })).toMatchObject({ status: "connected" });
+        expect(inspected).toBe(true);
+      } finally {
+        keys.forEach((key, index) => { if (saved[index] === undefined) delete process.env[key]; else process.env[key] = saved[index]; });
+      }
+    });
+  }
 
   test("probe reports need_login and starts no authorization", async () => {
     route();

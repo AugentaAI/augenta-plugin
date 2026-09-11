@@ -106,5 +106,16 @@ cat
       expect(result.stderr).toContain("Node.js 20 or newer was not found");
       expect(result.stderr).toContain("AUGENTA_NODE");
     });
+
+    test("diagnoses nested folders but stops at another checkout boundary", () => {
+      const project = mkdtempSync(join(tmpdir(), "augenta-node-runner-project-"));
+      temporaryDirectories.push(project);
+      mkdirSync(join(project, ".augenta"));
+      writeFileSync(join(project, ".augenta/config.json"), "{}");
+      const nested = join(project, "nested"); mkdirSync(nested);
+      expect(runWithout(JSON.stringify({ cwd: nested })).exitCode).toBe(1);
+      writeFileSync(join(nested, ".git"), "gitdir: /fixture");
+      expect(runWithout(JSON.stringify({ cwd: nested }))).toEqual({ exitCode: 0, stderr: "" });
+    });
   });
 });

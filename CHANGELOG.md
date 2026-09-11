@@ -11,6 +11,21 @@ release a user can read.
 
 ## [Unreleased]
 
+### Fixed
+
+- Connecting from a Git worktree now connects that worktree, where its hooks
+  read configuration. Main and sibling checkouts are separate consent boundaries,
+  including nested worktrees. If an earlier connection was redirected to main,
+  connect once from the worktree and choose its destinations. Main stays unchanged.
+- Codex connection instructions pass the harness explicitly, including commands
+  requiring elevated access. Missing environment hints no longer label an agent
+  as Claude Code or overwrite an existing label during reconnect.
+- `connect --json --repair-harness --harness codex` repairs only the current
+  project’s verified active agent Connectors, without reconnecting or changing
+  destinations, capture baseline, cursors or history.
+- Capture health reports missing versus invalid configuration and labels its
+  activity as project-wide. Local activity alone does not verify host dispatch.
+
 ### Changed
 
 - **Reconnect required for browser-connected projects.** Routing is now recorded

@@ -116,9 +116,9 @@ headings start from names in the project config; a successful live listing
 overrides renamed labels for this output only. Otherwise retain the saved name,
 falling back to the Workspace id. Recall never rewrites the config.
 
-When a payload includes `worktreeRedirect`, say that cwd is a linked worktree
-and that the main checkout at `projectRoot` was asked instead — the project
-config lives there, so the worktree has nothing to ask on its own.
+Recall uses the current worktree’s own project configuration. It never falls
+back to the main checkout or sibling worktrees. An unconnected worktree returns
+`not_connected`, even when the main checkout is connected.
 
 ## 3. Use `status`
 
