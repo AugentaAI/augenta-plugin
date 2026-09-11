@@ -1412,8 +1412,9 @@ async function repairHarness(projectRoot: string, args: Args): Promise<JsonPaylo
         method: "PATCH", headers: { "if-match": connector._etag },
         body: JSON.stringify({ harness: args.harness, _etag: connector._etag }),
       });
-      if (updated.id !== connectorId || updated.workspaceId !== destination.workspaceId || updated.harness !== args.harness) {
-        throw new Error("Repair response did not confirm the requested label and route; inspect the Connector before retrying");
+      if (updated.id !== connectorId || updated.kind !== "agent" || updated.status !== "active" ||
+          updated.workspaceId !== destination.workspaceId || updated.harness !== args.harness) {
+        throw new Error("Repair response did not confirm an active agent with the requested label and route; inspect the Connector before retrying");
       }
       repaired.push(connectorId);
     } catch (error) { failed.push({ connectorId, message: describeError(error) }); }

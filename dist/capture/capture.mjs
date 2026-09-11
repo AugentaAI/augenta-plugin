@@ -989,7 +989,7 @@ import { join as join6 } from "node:path";
 
 // capture/project.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync4 } from "node:fs";
+import { existsSync as existsSync4, realpathSync } from "node:fs";
 import { dirname as dirname2, join as join5, resolve } from "node:path";
 function gitRevParse(cwd, arg) {
   try {
@@ -1005,7 +1005,12 @@ function gitRevParse(cwd, arg) {
 function resolveProjectRoot(cwd) {
   if (!cwd)
     return;
-  let dir = resolve(cwd);
+  let dir;
+  try {
+    dir = realpathSync(cwd);
+  } catch {
+    return;
+  }
   while (true) {
     if (existsSync4(join5(dir, ".augenta", "config.json")))
       return dir;
@@ -1687,7 +1692,7 @@ function sniffHarness(line) {
 
 // runtime/node.ts
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { realpathSync as realpathSync2 } from "node:fs";
 import { resolve as resolve3 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 async function readStdin() {
@@ -1706,7 +1711,7 @@ function isMain(metaUrl) {
 function canonical(path) {
   const absolute = resolve3(path);
   try {
-    return realpathSync.native(absolute);
+    return realpathSync2.native(absolute);
   } catch {
     return absolute;
   }

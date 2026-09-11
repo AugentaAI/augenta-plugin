@@ -8,7 +8,7 @@
  * module like this one.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 export interface ResolvedProject {
@@ -41,7 +41,10 @@ function gitRevParse(cwd: string, arg: string): string | undefined {
  * The .git marker also works when Git is absent from the host's PATH. */
 export function resolveProjectRoot(cwd: string | undefined): string | undefined {
   if (!cwd) return undefined;
-  let dir = resolve(cwd);
+  // Hosts can supply a logical cwd through a symlink into another checkout.
+  // Walk physical parents so the alias cannot borrow its parent's consent.
+  let dir: string;
+  try { dir = realpathSync(cwd); } catch { return undefined; }
   // Each iteration removes a path component, so this is bounded by the input
   // path. An arbitrary depth cap would let connect's Git fallback find a config
   // that a deeply nested hook still could not discover.

@@ -16,6 +16,7 @@ import {
   rmSync,
   readFileSync,
   statSync,
+  symlinkSync,
   mkdirSync,
   realpathSync,
   writeFileSync,
@@ -266,6 +267,17 @@ describe("resolveProject in a linked worktree", () => {
       const deep = join(inner, "src"); mkdirSync(deep);
       expect(projectConfig(deep)).toBeUndefined();
     }
+  });
+
+  test("a symlink into a worktree subdirectory keeps the physical checkout boundary", () => {
+    writeApiKeyConfig(project, "main-only");
+    const deep = join(worktree, "src"); mkdirSync(deep);
+    const alias = join(project, "linked-src"); symlinkSync(deep, alias, "dir");
+    expect(projectConfig(alias)).toBeUndefined();
+    expect(realpathSync(resolveProject({}, alias).projectRoot)).toBe(realpathSync(worktree));
+    writeApiKeyConfig(worktree, "worktree-only");
+    expect(projectConfig(alias)?.apiKey).toBe("worktree-only");
+    expect(realpathSync(resolveProject({}, alias).projectRoot)).toBe(realpathSync(worktree));
   });
 
   test("uses the worktree from its subdirectories too", () => {
@@ -802,6 +814,17 @@ describe("JSON verbs", () => {
     route({ [`PATCH ${GATEWAY}/v1/connectors/connector_new`]: () => Response.json({ connector: links.get("connector_new") }) });
     seedLink("connector_new", "ws-default");
     expect(await runJsonVerb({ projectRoot: project }, { json: true, repairHarness: true, harness: "codex" })).toMatchObject({ status: "error", repaired: [] });
+  });
+
+  test("repair rejects a response whose Connector became disabled during the update", async () => {
+    const { profileId } = await signIn();
+    writeOAuthConfig(project, connectionRecord(profileId, ["connector_new"]));
+    route({ ["PATCH " + GATEWAY + "/v1/connectors/connector_new"]: () => Response.json({
+      connector: { ...links.get("connector_new"), harness: "codex", status: "disabled" },
+    }) });
+    seedLink("connector_new", "ws-default");
+    expect(await runJsonVerb({ projectRoot: project }, { json: true, repairHarness: true, harness: "codex" }))
+      .toMatchObject({ status: "error", repaired: [], failed: [expect.objectContaining({ connectorId: "connector_new" })] });
   });
 
   for (const adopt of [false, true]) for (const harness of [undefined, "codex", "claude-code"] as const) {

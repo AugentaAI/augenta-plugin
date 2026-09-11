@@ -85,7 +85,7 @@ import { join as join2 } from "node:path";
 
 // capture/project.ts
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync as realpathSync2 } from "node:fs";
 import { dirname, join, resolve as resolve2 } from "node:path";
 function gitRevParse(cwd, arg) {
   try {
@@ -101,7 +101,12 @@ function gitRevParse(cwd, arg) {
 function resolveProjectRoot(cwd) {
   if (!cwd)
     return;
-  let dir = resolve2(cwd);
+  let dir;
+  try {
+    dir = realpathSync2(cwd);
+  } catch {
+    return;
+  }
   while (true) {
     if (existsSync(join(dir, ".augenta", "config.json")))
       return dir;

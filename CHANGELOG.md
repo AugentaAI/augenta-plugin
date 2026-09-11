@@ -17,6 +17,7 @@ release a user can read.
   read configuration. Main and sibling checkouts are separate consent boundaries,
   including nested worktrees. If an earlier connection was redirected to main,
   connect once from the worktree and choose its destinations. Main stays unchanged.
+  Symlinked subdirectories follow their physical checkout’s consent boundary.
 - Codex connection instructions pass the harness explicitly, including commands
   requiring elevated access. Missing environment hints no longer label an agent
   as Claude Code or overwrite an existing label during reconnect.

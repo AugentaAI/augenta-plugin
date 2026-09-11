@@ -116,6 +116,9 @@ esac
 # Mirror the bounded project lookup without requiring Git or Node. Only absolute
 # paths are usable here; malformed payload paths must not inspect this shell's cwd.
 case $project in /*) ;; *) exit 0 ;; esac
+# Resolve symlinks before walking parents, matching the Node lookup. Both cd and
+# pwd are shell builtins, so this still works with the unusable PATH above.
+project=$(CDPATH= cd -P "$project" 2>/dev/null && pwd -P) || exit 0
 while [ -n "$project" ]; do
   if [ -f "$project/.augenta/config.json" ]; then
     echo "Augenta hook: Node.js 20 or newer was not found; install or repair Node.js, or set AUGENTA_NODE to a working executable" >&2
