@@ -14,8 +14,7 @@ triage summary as a comment.
 
 > **This is contributor tooling, not a shipped plugin skill.** It lives under `.claude/`
 > on purpose — `skills/` at the repo root is the plugin's product surface and is asserted
-> to contain exactly the shipped skills (`connect` and `recall`). See the same note in
-> `.claude/skills/review-github-pr/SKILL.md`.
+> to contain exactly the shipped skills (`connect` and `recall`).
 
 ## Prerequisites
 

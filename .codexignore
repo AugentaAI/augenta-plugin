@@ -6,15 +6,16 @@ bun.lock
 *.log
 .DS_Store
 
-# Contributor tooling: the repo's own dev skills (PR review, issue triage) that the
-# agentic CI workflows run. Neither manifest reaches .claude/ — both declare
+# Contributor tooling: the repo's own dev skill (issue triage) that the agentic CI
+# workflows run. Neither manifest reaches .claude/ — both declare
 # "skills": "./skills/" — so this is bundle hygiene, not a correctness fix.
 .claude/
 
 # Policy and process for humans on GitHub, none of it reachable from an installed
 # plugin. README.md and AGENTS.md deliberately still ship — they are what someone
 # inspecting an installed copy reads — but nothing below is addressed to that
-# reader, and .github/ is now three issue/PR templates that only GitHub renders.
+# reader, and .github/ is issue/PR templates plus the CI-only workflows, gates and
+# scripts, none of which a user runs.
 SECURITY.md
 CONTRIBUTING.md
 CHANGELOG.md
