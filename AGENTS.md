@@ -249,6 +249,10 @@ and the differences are deliberate:
   normal caller of `--json`, so everything it can read must be safe to paste into
   a transcript. The platform key travels in the request from the project config
   and appears in no output.
+- **Answer is the default, with one bounded fallback.** Every request sends an
+  explicit mode. Only 503 `answerer_unavailable` / `consent_required` in answer
+  mode retries as context: same question, same destination, once, with a fresh
+  idempotency key and a `fallback` marker. No new disclosure or destination.
 - **A young Workspace is not an error.** `empty_scope` means "nothing remembered
   yet"; reporting it as a failure sends a user to look for a fault that is not
   there, and invites a reconnect that would change nothing.
