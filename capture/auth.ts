@@ -202,14 +202,9 @@ async function refreshTokens(profile: AuthProfile): Promise<TokenResponse> {
   throw new Error(`Augenta token refresh failed (${response.status})`);
 }
 
-/** Production issuer/client/gateway discovery. Overridden per environment by
- *  `--control-url` or `AUGENTA_CONTROL_URL`; exported so callers can tell a
- *  non-production connection apart and say so. */
-export const DEFAULT_CONTROL_URL = "https://augenta.ai";
-
 /** Public environment discovery; this endpoint exposes no credential. */
 export async function augentaOAuthConfig(
-  controlUrl = process.env.AUGENTA_CONTROL_URL || DEFAULT_CONTROL_URL,
+  controlUrl: string,
 ): Promise<OAuthConfig> {
   const response = await fetch(
     `${controlUrl.replace(/\/+$/, "")}/.well-known/augenta.json`,

@@ -209,7 +209,9 @@ try {
       {
         authMode: "oauth",
         profileId: cfg.profileId,
-        connectorIds: destinations,
+        controlUrl,
+        org: cfg.org,
+        destinations: cfg.destinations,
         endpoint: gateway,
       },
       null,

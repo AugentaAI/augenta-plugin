@@ -45,20 +45,57 @@ For browser sign-in, the project file looks like this:
 {
   "authMode": "oauth",
   "profileId": "profile_…",
-  "connectorIds": ["connector_…", "connector_…"]
+  "controlUrl": "https://augenta.ai",
+  "endpoint": "https://gateway.example.com",
+  "org": { "id": "org_…", "name": "Example" },
+  "destinations": [
+    { "connectorId": "connector_…", "workspaceId": "ws-…", "workspaceName": "Platform" }
+  ]
 }
 ```
 
-`profileId` points to your saved sign-in. `connectorIds` lists the links for
-the Workspaces you chose. It must be a non-empty array. The project file has
-no sign-in token, organization id, or Workspace id.
+`profileId` points to your saved sign-in. `destinations` lists the links and
+Workspaces you chose. It must be a non-empty array; each entry requires
+`connectorId` and `workspaceId`, while `workspaceName` is optional. The project
+file has no sign-in token; it records the organization and Workspaces you chose
+so the plugin can name them without asking the server. The server still decides
+where each Connector routes and who may read a Workspace.
+
+Recall checks each selected link live before sending the question. Disabled or
+inaccessible Connectors, and links whose Workspace no longer matches the saved
+choice, are skipped and reported; reconnect to review those destinations.
+
+Older `connectorIds` configs require a single reconnect per project. They are
+not converted automatically.
 
 Sign-in tokens stay in `~/.augenta/auth.json`. The directory uses mode `0700`
 and the file uses `0600`, so only your OS account can access them. Tokens are
 not printed into the chat.
 
-An optional `endpoint` stores the gateway URL used for this connection.
-Normal browser setup writes the needed values; you do not need to edit them.
+Connect records the control URL and gateway used for this connection. Reconnecting
+defaults to the recorded environment. Normal browser setup writes the needed values.
+
+Changing connect's control URL selects the new environment's discovered gateway,
+not the previous environment's saved endpoint. An explicit `--endpoint` or
+`AUGENTA_API_URL` still takes precedence.
+
+For an automatically discovered endpoint, connect also records `discoveredGateway`.
+When it still matches `endpoint`, reconnect refreshes both from discovery so gateway
+rotations are picked up. A hand-edited endpoint, or one explicitly selected with
+`--endpoint` or `AUGENTA_API_URL`, remains an override within the saved environment.
+The marker is local bookkeeping, not another routing setting; capture and recall
+continue using `endpoint` until reconnect updates it.
+
+| Setting in `config.json` | Environment override | What it selects |
+| --- | --- | --- |
+| `controlUrl` | `AUGENTA_CONTROL_URL` | Sign-in discovery; defaults to `https://augenta.ai` |
+| `endpoint` | `AUGENTA_API_URL` | API gateway; defaults to production |
+| `ingestUrl` | `AUGENTA_INGEST_URL` | Optional full capture URL; defaults to the gateway's `/v1/experiences` |
+
+An explicit command flag wins over an environment variable, then the file, then
+the default. Connect preserves a hand-set `ingestUrl` when it rewrites the file.
+Recall uses saved Workspace names immediately and refreshes names for its output
+when the live list is available; it does not update the file.
 
 ## CI or a service
 
@@ -86,6 +123,13 @@ The plugin reads the file directly. It sets the directory to `0700` and adds a
 self-ignoring `.gitignore` on its next capture write. Set these protections
 yourself during setup, before that first write. The plugin does not change
 the permissions of a config file it did not write.
+
+Only `authMode` and `apiKey` are required. `controlUrl`, `endpoint`, `ingestUrl`,
+`org` (an `id` and optional `name`), and `destinations` are optional. If supplied,
+`destinations` must contain exactly one entry. The key's server-side assignment
+still determines its route. The terminal `connect --api-key` path records the
+verified organization id and destination; never run that secret-bearing command
+through an agent.
 
 If your job calls the API directly, it does not need this file. Send
 `Authorization: AugentaKey <key>` with each request. See the

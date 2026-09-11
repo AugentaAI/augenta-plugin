@@ -42,19 +42,26 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
-function parseConnectorIds(value) {
-  const raw = Array.isArray(value.connectorIds) ? value.connectorIds : [];
-  const ids = [];
+var DEFAULT_CONTROL_URL = "https://augenta.ai";
+function parseDestinations(raw) {
+  if (!Array.isArray(raw) || raw.length === 0)
+    return;
+  const destinations = [];
   for (const item of raw) {
-    if (typeof item !== "string")
-      return [];
-    const id = item.trim();
-    if (!id)
-      return [];
-    if (!ids.includes(id))
-      ids.push(id);
+    if (!item || typeof item !== "object")
+      return;
+    const connectorId = typeof item.connectorId === "string" ? item.connectorId.trim() : "";
+    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
+    if (!connectorId || !workspaceId)
+      return;
+    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
+      return;
+    if (destinations.some((destination) => destination.connectorId === connectorId))
+      continue;
+    const workspaceName = item.workspaceName?.trim();
+    destinations.push({ connectorId, workspaceId, ...workspaceName ? { workspaceName } : {} });
   }
-  return ids;
+  return destinations;
 }
 function configPath(projectRoot) {
   return join(projectRoot, ".augenta", "config.json");
@@ -79,30 +86,50 @@ function loadProjectConfig(projectRoot) {
     if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
       return;
     const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
-    const endpoint = typeof value.endpoint === "string" && value.endpoint.trim() ? value.endpoint.trim() : undefined;
+    const settings = {};
+    for (const key of ["endpoint", "controlUrl", "ingestUrl", "discoveredGateway"]) {
+      const raw = value[key];
+      if (raw !== undefined && typeof raw !== "string")
+        return;
+      if (typeof raw === "string" && raw.trim()) {
+        settings[key] = raw.trim().replace(/\/+$/, "");
+      }
+    }
+    if (value.org !== undefined) {
+      if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
+        return;
+      if (value.org.name !== undefined && typeof value.org.name !== "string")
+        return;
+      settings.org = { id: value.org.id.trim(), ...value.org.name?.trim() ? { name: value.org.name.trim() } : {} };
+    }
+    const destinations = value.destinations === undefined ? undefined : parseDestinations(value.destinations);
+    if (value.destinations !== undefined && !destinations)
+      return;
+    if (destinations) {
+      settings.destinations = destinations;
+      settings.connectorIds = destinations.map((destination) => destination.connectorId);
+    }
     if (value.authMode === "oauth") {
       const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
-      const connectorIds = parseConnectorIds(value);
-      if (!profileId || connectorIds.length === 0)
+      if (!profileId || !destinations)
         return;
       return {
+        ...settings,
         authMode: "oauth",
         ...captureSince ? { captureSince } : {},
         profileId,
-        connectorIds,
-        ...endpoint ? { endpoint } : {},
         projectRoot
       };
     }
     if (value.authMode === "api-key") {
       const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
-      if (!apiKey)
+      if (!apiKey || Array.isArray(value.destinations) && value.destinations.length !== 1)
         return;
       return {
+        ...settings,
         authMode: "api-key",
         ...captureSince ? { captureSince } : {},
         apiKey,
-        ...endpoint ? { endpoint } : {},
         projectRoot
       };
     }
@@ -115,11 +142,14 @@ function projectConfig(cwd) {
   const root = resolveProjectRoot(cwd);
   return root ? loadProjectConfig(root) : undefined;
 }
-function gatewayBase(cfg) {
-  return (process.env.AUGENTA_API_URL || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+function controlUrl(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_CONTROL_URL?.trim() || cfg?.controlUrl || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
+}
+function gatewayBase(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
 }
 function experiencesUrl(cfg) {
-  return process.env.AUGENTA_INGEST_URL || `${gatewayBase(cfg)}/v1/experiences`;
+  return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
 }
 function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
@@ -675,9 +705,8 @@ async function refreshTokens(profile) {
   }
   throw new Error(`Augenta token refresh failed (${response.status})`);
 }
-var DEFAULT_CONTROL_URL = "https://augenta.ai";
-async function augentaOAuthConfig(controlUrl = process.env.AUGENTA_CONTROL_URL || DEFAULT_CONTROL_URL) {
-  const response = await fetch(`${controlUrl.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+async function augentaOAuthConfig(controlUrl2) {
+  const response = await fetch(`${controlUrl2.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   if (!response.ok) {
     throw new Error("Augenta sign-in is not configured for this environment");
   }
@@ -964,8 +993,8 @@ async function currentConnector(profileId, gateway, id) {
   }
   return (await response.json()).connector;
 }
-function environmentLabel(controlUrl) {
-  const url = (controlUrl?.trim() || process.env.AUGENTA_CONTROL_URL || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
+function environmentLabel(controlUrl2) {
+  const url = (controlUrl2?.trim() || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
   return url === DEFAULT_CONTROL_URL ? "prod" : url;
 }
 function describeError(error) {
@@ -1076,21 +1105,25 @@ function parseArgs(argv) {
   }
   return args;
 }
-function writeApiKeyConfig(projectRoot, apiKey, endpoint2) {
+function writeApiKeyConfig(projectRoot, apiKey, endpoint2, details = {}) {
   const dir = ensureAugentaDir(projectRoot);
   const path = join6(dir, "config.json");
   writeFileSync5(path, `${JSON.stringify({
     authMode: "api-key",
     captureSince: new Date().toISOString(),
     apiKey,
+    org: details.org ? { id: details.org.id, name: details.org.name } : undefined,
+    destinations: details.destinations?.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+    controlUrl: details.controlUrl,
+    ingestUrl: details.ingestUrl,
     ...endpoint2 ? { endpoint: endpoint2 } : {}
   }, null, 2)}
 `, { mode: 384 });
   chmodSync3(path, 384);
   return path;
 }
-function writeOAuthConfig(projectRoot, profileId, connectorIds, endpoint2) {
-  if (connectorIds.length === 0) {
+function writeOAuthConfig(projectRoot, connection) {
+  if (connection.destinations.length === 0) {
     throw new Error("an OAuth connection requires at least one Connector");
   }
   const dir = ensureAugentaDir(projectRoot);
@@ -1098,9 +1131,13 @@ function writeOAuthConfig(projectRoot, profileId, connectorIds, endpoint2) {
   writeFileSync5(path, `${JSON.stringify({
     authMode: "oauth",
     captureSince: new Date().toISOString(),
-    profileId,
-    connectorIds: [...connectorIds],
-    ...endpoint2 ? { endpoint: endpoint2 } : {}
+    profileId: connection.profileId,
+    controlUrl: connection.controlUrl,
+    endpoint: connection.endpoint,
+    discoveredGateway: connection.discoveredGateway,
+    org: { id: connection.org.id, name: connection.org.name },
+    destinations: connection.destinations.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+    ingestUrl: connection.ingestUrl
   }, null, 2)}
 `, { mode: 384 });
   chmodSync3(path, 384);
@@ -1322,22 +1359,26 @@ async function linkForWorkspace(projectRoot, args, profileId, gateway, workspace
   const connector = (await bearerJson(profileId, `${gateway}/v1/connectors`, { method: "POST", body: JSON.stringify(fields) })).connector;
   return { connector, action: "created" };
 }
-async function resolveOAuth(args) {
-  const discovered = await augentaOAuthConfig(args.controlUrl);
-  const gateway = (args.endpoint?.trim() || discovered.gateway).replace(/\/+$/, "");
-  return { oauth: { ...discovered, gateway }, gateway };
+async function resolveOAuth(args, projectRoot = args.project ?? process.cwd()) {
+  const prior = loadProjectConfig(projectRoot);
+  const control = controlUrl(prior, args.controlUrl);
+  const discovered = await augentaOAuthConfig(control);
+  const savedEndpoint = control === (prior?.controlUrl ?? DEFAULT_CONTROL_URL) && prior?.endpoint !== prior?.discoveredGateway ? prior?.endpoint : undefined;
+  const gateway = gatewayBase({ endpoint: savedEndpoint || discovered.gateway }, args.endpoint);
+  const discoveredGateway = args.endpoint?.trim() || process.env.AUGENTA_API_URL?.trim() || savedEndpoint ? undefined : discovered.gateway;
+  return { oauth: { ...discovered, gateway }, gateway, control, discoveredGateway };
 }
 function priorConnection(projectRoot) {
   if (!existsSync6(join6(projectRoot, ".augenta", "config.json")))
     return;
   try {
     const existing = loadProjectConfig(projectRoot);
-    return existing?.authMode === "oauth" ? { profileId: existing.profileId, connectorIds: existing.connectorIds } : undefined;
+    return existing?.authMode === "oauth" ? existing : undefined;
   } catch {
     return;
   }
 }
-async function establishConnectors(projectRoot, args, profileId, gateway, workspaces, priorConnectorIds, available = workspaces, preresolved) {
+async function establishConnectors(projectRoot, args, profileId, gateway, connection, workspaces, priorConnectorIds, available = workspaces, preresolved) {
   const adoptable = preresolved ?? await priorLinks(profileId, gateway, priorConnectorIds);
   const unresolvedConnectorIds = priorConnectorIds.filter((id) => !adoptable.some((link) => link.id === id));
   const priorWorkspaceIds = adoptable.map((link) => link.workspaceId);
@@ -1378,7 +1419,13 @@ async function establishConnectors(projectRoot, args, profileId, gateway, worksp
   });
   if (verifiedIds.length === 0)
     return { results, removed, unresolvedConnectorIds };
-  const configPath2 = writeOAuthConfig(projectRoot, profileId, verifiedIds, gateway === DEFAULT_GATEWAY ? undefined : gateway);
+  const configPath2 = writeOAuthConfig(projectRoot, {
+    profileId,
+    ...connection,
+    endpoint: gateway,
+    destinations: results.filter((result) => Boolean(result.connectorId)).map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+    ingestUrl: loadProjectConfig(projectRoot)?.ingestUrl
+  });
   try {
     const freshKeys = results.filter((result) => result.action === "created" && result.connectorId).map((result) => result.connectorId);
     new Outbox(projectRoot).registerDestinations(verifiedIds, { freshKeys });
@@ -1386,24 +1433,27 @@ async function establishConnectors(projectRoot, args, profileId, gateway, worksp
   return { results, removed, unresolvedConnectorIds, configPath: configPath2 };
 }
 async function connectProject(projectRoot, args) {
-  const { oauth, gateway } = await resolveOAuth(args);
+  const { oauth, gateway, control, discoveredGateway } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
   const selected = await selectOrCreateProfile(oauth, prior?.profileId);
   console.log(`Signed in as ${selected.me.user.name || selected.me.user.email} to ${selected.me.org.name} (${selected.me.org.id}).`);
   const priorIds = prior?.connectorIds ?? [];
   const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds);
   const available = await listWorkspaces(selected.profileId, gateway);
-  const environment = environmentLabel(args.controlUrl);
+  const environment = environmentLabel(control);
   console.log("Every Workspace you select receives the FULL record — this project's agent activity, its raw transcript lines (structurally sanitized, but NOT secret-scrubbed), and its project memory, complete, in each.");
   console.log("So anyone with access to ANY Workspace you select can read this project's captured activity: the audience is the union of all of them.");
   if (environment !== "prod") {
     console.log(`This is the ${environment} environment, not production.`);
   }
+  if (prior?.controlUrl && prior.controlUrl !== control) {
+    console.log(`This project is moving from ${environmentLabel(prior.controlUrl)} to ${environment}.`);
+  }
   const workspaces = await selectedWorkspaces(selected.profileId, gateway, selected.me.org.name, resolvedPrior.map((link) => link.workspaceId), available);
   if (workspaces.length === 0) {
     throw new Error("choose at least one Workspace");
   }
-  const { results, removed, unresolvedConnectorIds, configPath: written } = await establishConnectors(projectRoot, args, selected.profileId, gateway, workspaces, priorIds, available, resolvedPrior);
+  const { results, removed, unresolvedConnectorIds, configPath: written } = await establishConnectors(projectRoot, args, selected.profileId, gateway, { controlUrl: control, org: selected.me.org, discoveredGateway }, workspaces, priorIds, available, resolvedPrior);
   const live = results.filter((result) => result.connectorId);
   const failed = results.filter((result) => !result.connectorId);
   if (live.length > 0) {
@@ -1463,10 +1513,13 @@ async function priorDestinations(profileId, gateway, ids, workspaces) {
   return { destinations, unresolvedConnectorIds };
 }
 async function probeConnection(resolved, args) {
-  const { oauth, gateway } = await resolveOAuth(args);
+  const cfg = loadProjectConfig(resolved.projectRoot);
+  const current = savedConnection(cfg);
+  const change = environmentChange(cfg, args);
+  const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
   const priorIds = prior?.connectorIds ?? [];
-  const alreadyConnected = { alreadyConnected: priorIds.length > 0 };
+  const alreadyConnected = { alreadyConnected: Boolean(cfg), ...current ? { current } : {}, ...change };
   const usable = await usableProfiles(oauth, prior?.profileId);
   if (usable.length === 0)
     return { status: "need_login", ...alreadyConnected };
@@ -1555,7 +1608,7 @@ async function createWorkspaceForSelection(resolved, args) {
       message: "a non-empty Workspace name is required"
     };
   }
-  const { oauth, gateway } = await resolveOAuth(args);
+  const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
   const usable = await usableProfiles(oauth, args.profile ?? prior?.profileId);
   if (usable.length === 0) {
@@ -1595,7 +1648,7 @@ async function createWorkspaceForSelection(resolved, args) {
   }
 }
 async function connectToWorkspaces(resolved, args) {
-  const { oauth, gateway } = await resolveOAuth(args);
+  const { oauth, gateway, control, discoveredGateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
   const usable = await usableProfiles(oauth, args.profile ?? prior?.profileId);
   if (usable.length === 0) {
@@ -1639,7 +1692,7 @@ async function connectToWorkspaces(resolved, args) {
     };
   }
   const workspaces = available.filter((item) => requested.includes(item.id));
-  const { results, removed, unresolvedConnectorIds, configPath: configPath2 } = await establishConnectors(resolved.projectRoot, args, picked.profileId, gateway, workspaces, prior?.connectorIds ?? [], available);
+  const { results, removed, unresolvedConnectorIds, configPath: configPath2 } = await establishConnectors(resolved.projectRoot, args, picked.profileId, gateway, { controlUrl: control, org: picked.me.org, discoveredGateway }, workspaces, prior?.connectorIds ?? [], available);
   const destinations = results.filter((result) => result.connectorId);
   const failed = results.filter((result) => !result.connectorId);
   if (destinations.length === 0) {
@@ -1664,10 +1717,38 @@ async function connectToWorkspaces(resolved, args) {
     ...removed.length > 0 ? { removed } : {},
     ...unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {},
     organization: picked.me.org.name,
+    ...environmentChange(prior, args),
     configPath: configPath2
   };
 }
+function environmentChange(cfg, args) {
+  const next = controlUrl(cfg, args.controlUrl);
+  return cfg?.controlUrl && cfg.controlUrl !== next ? { environmentChange: { from: environmentLabel(cfg.controlUrl), to: environmentLabel(next) } } : {};
+}
+function savedConnection(cfg) {
+  if (!cfg)
+    return;
+  return {
+    authMode: cfg.authMode,
+    environment: environmentLabel(cfg.controlUrl),
+    organization: cfg.org?.name ?? cfg.org?.id,
+    destinations: cfg.destinations ?? []
+  };
+}
 async function runJsonVerb(resolved, args) {
+  const cfg = loadProjectConfig(resolved.projectRoot);
+  const metadata = {
+    environment: environmentLabel(controlUrl(cfg, args.controlUrl)),
+    ...environmentChange(cfg, args),
+    ...args.probe && cfg ? { current: savedConnection(cfg) } : {}
+  };
+  try {
+    return { ...await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot }), ...metadata };
+  } catch (error) {
+    return { status: "error", code: "failed", message: describeError(error), ...metadata };
+  }
+}
+async function dispatchJsonVerb(resolved, args) {
   if (args.health && (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe)) {
     return { status: "error", code: "conflicting_verbs", message: "--health is a local read-only operation; run it by itself with --json" };
   }
@@ -1714,6 +1795,9 @@ async function verifyApiKeyConnection(apiKey, gateway) {
     throw new Error(`Augenta rejected the platform key (${response.status})${detail ? `: ${detail}` : ""}`);
   }
   const connectors = (await response.json()).connectors ?? [];
+  if (!Array.isArray(connectors)) {
+    throw new Error("Augenta returned an invalid Connector assignment");
+  }
   if (connectors.length === 0) {
     throw new Error("the platform key is not assigned to a Connector");
   }
@@ -1721,6 +1805,12 @@ async function verifyApiKeyConnection(apiKey, gateway) {
     throw new Error(`the platform key is assigned to ${connectors.length} Connectors; capture requires exactly one`);
   }
   const connector = connectors[0];
+  if (!connector || ["id", "orgId", "workspaceId"].some((field) => {
+    const value = connector[field];
+    return typeof value !== "string" || !value.trim();
+  })) {
+    throw new Error("the assigned Connector must have non-empty id, orgId, and workspaceId fields");
+  }
   if (connector.status !== "active" || connector.direction !== "inbound" && connector.direction !== "bidirectional") {
     throw new Error("the platform key requires an active inbound Connector");
   }
@@ -1738,14 +1828,20 @@ async function verifyProjectKey(projectRoot, endpointOverride) {
   if (!apiKey) {
     throw new Error("the project config has no platform key to verify");
   }
-  const gateway = endpointOverride?.trim() ? endpointOverride.trim().replace(/\/+$/, "") : gatewayBase(cfg);
+  const gateway = gatewayBase(cfg, endpointOverride);
   return { connector: await verifyApiKeyConnection(apiKey, gateway), gateway };
 }
 async function connectWithApiKey(projectRoot, apiKey, endpoint2) {
-  const gateway = (endpoint2?.trim() || DEFAULT_GATEWAY).replace(/\/+$/, "");
+  const prior = loadProjectConfig(projectRoot);
+  const gateway = gatewayBase(prior, endpoint2);
   const connector = await verifyApiKeyConnection(apiKey, gateway);
   return {
-    path: writeApiKeyConfig(projectRoot, apiKey, gateway === DEFAULT_GATEWAY ? undefined : gateway),
+    path: writeApiKeyConfig(projectRoot, apiKey, gateway === DEFAULT_GATEWAY ? undefined : gateway, {
+      org: { id: connector.orgId },
+      destinations: [{ connectorId: connector.id, workspaceId: connector.workspaceId }],
+      ...prior?.controlUrl ? { controlUrl: prior.controlUrl } : {},
+      ...prior?.ingestUrl ? { ingestUrl: prior.ingestUrl } : {}
+    }),
     connector
   };
 }
@@ -1763,7 +1859,6 @@ if (isMain(import.meta.url)) {
       const payload = await runJsonVerb(resolved, args);
       console.log(JSON.stringify({
         ...payload,
-        environment: environmentLabel(args.controlUrl),
         projectRoot,
         ...resolved.worktreeRedirect ? { worktreeRedirect: resolved.worktreeRedirect } : {}
       }, null, 2));

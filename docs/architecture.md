@@ -41,8 +41,13 @@ lists the Workspaces you can use and asks for the complete set this project
 should send to. Nothing is selected on your behalf.
 
 Each Workspace gets its own Connector. The project config stores those
-Connector ids and a reference to your saved sign-in. Tokens stay in a private
-file in your home folder. See [connection settings](configuration.md).
+Connector ids inside `destinations`, the chosen Workspace ids and names,
+organization, control URL, gateway, and a reference to your saved sign-in.
+Only Connector ids route capture; the server still authorizes every read.
+Recall checks each selected Connector is active and still points to its saved
+Workspace before asking it, and refreshes display names best-effort without
+rewriting config. Tokens stay in a
+private file in your home folder. See [connection settings](configuration.md).
 
 Capture checks for `.augenta/config.json` in the working folder and its
 parents. With no readable config, it saves and sends nothing. Session start
@@ -114,8 +119,9 @@ The queue is not a backup. See [outbox rules](../capture/outbox.ts).
 
 ## 4. Recall past work
 
-The [recall script](../scripts/recall.ts) resolves the project's Connectors to
-their Workspaces and sends a question to `POST /v1/recall`. By default it asks
+The [recall script](../scripts/recall.ts) checks the project's Connectors live
+and sends a question to `POST /v1/recall` only for active links that still match
+their recorded Workspaces. By default it asks
 all of them at once. A caller can narrow that set but cannot add an unconnected
 Workspace.
 
@@ -129,6 +135,17 @@ your agent to answer from. `--answer` requests model-written prose instead.
 It reports results, empty Workspaces, and failures separately. An
 empty Workspace is a normal result. A failure in one is not presented as a
 successful answer from all of them.
+
+Disabled, inaccessible, or retargeted links are reported as unresolved and are
+not used for recall. A failed Connector check also prevents its question from
+being sent, but is reported as a failure rather than a disabled link. Multiple
+active links to one Workspace produce only one recall request.
+
+A Workspace refusal after a successful link check retains its code and message
+in `failed` alongside the affected unresolved ids. This distinguishes entitlement
+denials and archived Workspaces from disabled links. Workspace names are fetched
+best-effort after link checks, concurrently with recall, so an all-disabled set
+does not trigger a name lookup and name listing never gates the recall POSTs.
 
 Recall uses the saved project config even when `AUGENTA_CAPTURE_ENABLED=0`.
 Deleting the config turns off both paths.

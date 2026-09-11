@@ -71,13 +71,12 @@ describe("environmentLabel", () => {
     expect(environmentLabel("https://control.example.com")).toBe("https://control.example.com");
   });
 
-  test("an explicit argument beats the environment variable", () => {
-    // Connect passes --control-url; recall passes nothing and reads the variable.
+  test("the resolved URL is independent of environment variables", () => {
     process.env.AUGENTA_CONTROL_URL = "https://from-env.example.com";
-    expect(environmentLabel()).toBe("https://from-env.example.com");
+    expect(environmentLabel()).toBe("prod");
     expect(environmentLabel("https://explicit.example.com")).toBe("https://explicit.example.com");
     // Blank is not a selection.
-    expect(environmentLabel("   ")).toBe("https://from-env.example.com");
+    expect(environmentLabel("   ")).toBe("prod");
   });
 });
 

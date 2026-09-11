@@ -14,6 +14,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   DEFAULT_GATEWAY,
+  DEFAULT_CONTROL_URL,
+  controlUrl,
   resolveProjectRoot,
   loadProjectConfig,
   projectConfig,
@@ -24,7 +26,7 @@ import {
   type ProjectConfig,
 } from "./config";
 
-const ENV_KEYS = ["AUGENTA_API_URL", "AUGENTA_INGEST_URL", "AUGENTA_CAPTURE_ENABLED"] as const;
+const ENV_KEYS = ["AUGENTA_CONTROL_URL", "AUGENTA_API_URL", "AUGENTA_INGEST_URL", "AUGENTA_CAPTURE_ENABLED"] as const;
 let saved: Record<string, string | undefined>;
 let project: string;
 
@@ -66,31 +68,81 @@ describe("resolveProjectRoot", () => {
 });
 
 describe("loadProjectConfig", () => {
+  test("api-key configs accept optional coordinates but exactly one destination", () => {
+    writeConfig(project, { authMode: "api-key", apiKey: "key" });
+    expect(loadProjectConfig(project)).toEqual({ authMode: "api-key", apiKey: "key", projectRoot: project });
+    const destination = { connectorId: "connector_one", workspaceId: "ws-one", workspaceName: " One " };
+    writeConfig(project, { authMode: "api-key", apiKey: "key", org: { id: " org_one ", name: " Example " }, destinations: [destination] });
+    expect(loadProjectConfig(project)).toMatchObject({ org: { id: "org_one", name: "Example" }, destinations: [{ ...destination, workspaceName: "One" }] });
+    for (const destinations of [[], [destination, destination], [null]]) {
+      writeConfig(project, { authMode: "api-key", apiKey: "key", destinations });
+      expect(loadProjectConfig(project)).toBeUndefined();
+    }
+  });
+
+  test("all URL settings use flag, env, file, then default precedence", () => {
+    writeConfig(project, {
+      authMode: "api-key", apiKey: "key",
+      controlUrl: " https://control.example.com/// ",
+      endpoint: " https://gateway.example.com/// ",
+      ingestUrl: " https://ingest.example.com/v1/experiences/ ",
+    });
+    const cfg = loadProjectConfig(project)!;
+    expect(controlUrl(cfg)).toBe("https://control.example.com");
+    expect(gatewayBase(cfg)).toBe("https://gateway.example.com");
+    expect(experiencesUrl(cfg)).toBe("https://ingest.example.com/v1/experiences");
+    process.env.AUGENTA_CONTROL_URL = "https://env-control.example.com/";
+    process.env.AUGENTA_API_URL = "https://env-gateway.example.com/";
+    process.env.AUGENTA_INGEST_URL = "https://env-ingest.example.com/experiences";
+    expect(controlUrl(cfg)).toBe("https://env-control.example.com");
+    expect(gatewayBase(cfg)).toBe("https://env-gateway.example.com");
+    expect(experiencesUrl(cfg)).toBe("https://env-ingest.example.com/experiences");
+    expect(controlUrl(cfg, " https://flag-control.example.com/ ")).toBe("https://flag-control.example.com");
+    expect(gatewayBase(cfg, " https://flag-gateway.example.com/ ")).toBe("https://flag-gateway.example.com");
+    for (const key of ENV_KEYS) delete process.env[key];
+    expect(controlUrl()).toBe(DEFAULT_CONTROL_URL);
+    expect(gatewayBase()).toBe(DEFAULT_GATEWAY);
+    expect(experiencesUrl()).toBe(`${DEFAULT_GATEWAY}/v1/experiences`);
+  });
+
   test("parses platform-key mode and optional endpoint", () => {
     writeConfig(project, { authMode: "api-key", apiKey: "key-test", endpoint: "https://gw.example.com/" });
     expect(loadProjectConfig(project)).toEqual({
       authMode: "api-key",
       apiKey: "key-test",
-      endpoint: "https://gw.example.com/",
+      endpoint: "https://gw.example.com",
       projectRoot: project,
     });
   });
 
-  test("parses oauth mode without organization or Workspace coordinates", () => {
+  test("parses recorded destinations and derives Connector ids", () => {
     writeConfig(project, {
       authMode: "oauth",
       profileId: "profile_1",
-      connectorIds: ["link_1", "link_2"],
+      destinations: [{ connectorId: "link_1", workspaceId: "ws-one" }, { connectorId: "link_2", workspaceId: "ws-two" }],
     });
     expect(loadProjectConfig(project)).toEqual({
       authMode: "oauth",
       profileId: "profile_1",
       connectorIds: ["link_1", "link_2"],
+      destinations: [{ connectorId: "link_1", workspaceId: "ws-one" }, { connectorId: "link_2", workspaceId: "ws-two" }],
       projectRoot: project,
     });
   });
 
-  describe("the destination set — `connectorIds` is the only routing key", () => {
+  describe("the destination set — destinations[].connectorId routes", () => {
+    test("normalizes the discovery marker without using it as a routing override", () => {
+      writeConfig(project, { authMode: "api-key", apiKey: "key-test", endpoint: "https://chosen.example.com", discoveredGateway: " https://discovered.example.com/// " });
+      const config = loadProjectConfig(project);
+      expect(config?.discoveredGateway).toBe("https://discovered.example.com");
+      expect(gatewayBase(config)).toBe("https://chosen.example.com");
+      writeConfig(project, { authMode: "api-key", apiKey: "key-test", discoveredGateway: 42 });
+      expect(loadProjectConfig(project)).toBeUndefined();
+    });
+    test("connectorIds-only configs require a reconnect", () => {
+      writeConfig(project, { authMode: "oauth", profileId: "profile_1", connectorIds: ["link_1"] });
+      expect(loadProjectConfig(project)).toBeUndefined();
+    });
     test("a scalar `connectorId` is NOT read forward", () => {
       // 0.7.0 renamed the routing surface end to end. Honouring a scalar would
       // be guessing at a routing decision made against the old surface, so it
@@ -118,7 +170,7 @@ describe("loadProjectConfig", () => {
       writeConfig(project, {
         authMode: "oauth",
         profileId: "profile_1",
-        connectorIds: ["link_1", " link_1 ", "link_2"],
+        destinations: ["link_1", " link_1 ", "link_2"].map((connectorId) => ({ connectorId, workspaceId: " ws-one " })),
       });
       expect(loadProjectConfig(project)?.connectorIds).toEqual(["link_1", "link_2"]);
     });
@@ -126,8 +178,9 @@ describe("loadProjectConfig", () => {
     test("an empty or partly-invalid set is unparseable, never a partial route", () => {
       // Shipping to a SUBSET of the destinations the user consented to, while
       // reporting success, is the outcome worth failing closed to avoid.
-      for (const connectorIds of [[], ["link_1", 42], ["link_1", ""], "link_1_not_array"]) {
-        writeConfig(project, { authMode: "oauth", profileId: "profile_1", connectorIds });
+      const valid = { connectorId: "link_1", workspaceId: "ws-one" };
+      for (const destinations of [[], [valid, 42], [valid, { connectorId: "link_2", workspaceId: "" }], [valid, null], [valid, { workspaceId: "ws-two" }], [valid, { ...valid, workspaceName: 42 }], "not_array"]) {
+        writeConfig(project, { authMode: "oauth", profileId: "profile_1", destinations });
         expect(loadProjectConfig(project)).toBeUndefined();
       }
     });
@@ -141,7 +194,7 @@ describe("loadProjectConfig", () => {
     writeConfig(project, {
       authMode: "workos",
       profileId: "profile_1",
-      connectorIds: ["link_1"],
+      destinations: [{ connectorId: "link_1", workspaceId: "ws-one" }],
     });
     expect(loadProjectConfig(project)).toBeUndefined();
   });

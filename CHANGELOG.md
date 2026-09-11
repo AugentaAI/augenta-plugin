@@ -13,6 +13,18 @@ release a user can read.
 
 ### Changed
 
+- **Reconnect required for browser-connected projects.** Routing is now recorded
+  in `destinations`, replacing `connectorIds`; run connect once per project.
+  The file also records the environment, organization and Workspace names.
+  Reconnect keeps the saved environment, URL overrides still work, and recall
+  checks links live before asking their Workspaces, skipping disabled links
+  while refreshing names for display. An older
+  cached Codex plugin cannot read the new shape and will ask to reconnect;
+  update that install before reconnecting. Two-key API-key configs still work.
+  Reconnect refreshes discovery-derived gateways while preserving explicit
+  overrides. Recall retains actionable Workspace refusal details, and a
+  malformed platform-key assignment fails before replacing the project config.
+
 - **Recall no longer waits for a model by default.** `/augenta:recall` now asks
   for the matching memory itself — the consolidated summary and the notes behind
   it — and your own agent answers from it. On an updated platform, default
@@ -21,7 +33,7 @@ release a user can read.
   model to write the answer instead; that path behaves exactly as recall did
   before, including the up-to-a-minute wait.
 
-  No reconnect is required. **This release pairs with a platform change** (the
+  The recall response change alone needs no reconnect. **It pairs with a platform change** (the
   `/v1/recall` response is now an ordered list of typed content blocks): against
   an environment that has not rolled it yet, this client reads the older
   `{scope, answer}` response as before. Both modes retain a 75-second client

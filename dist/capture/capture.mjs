@@ -987,19 +987,26 @@ import { randomUUID } from "node:crypto";
 import { existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
 import { dirname as dirname2, join as join5 } from "node:path";
 var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
-function parseConnectorIds(value) {
-  const raw = Array.isArray(value.connectorIds) ? value.connectorIds : [];
-  const ids = [];
+var DEFAULT_CONTROL_URL = "https://augenta.ai";
+function parseDestinations(raw) {
+  if (!Array.isArray(raw) || raw.length === 0)
+    return;
+  const destinations = [];
   for (const item of raw) {
-    if (typeof item !== "string")
-      return [];
-    const id = item.trim();
-    if (!id)
-      return [];
-    if (!ids.includes(id))
-      ids.push(id);
+    if (!item || typeof item !== "object")
+      return;
+    const connectorId = typeof item.connectorId === "string" ? item.connectorId.trim() : "";
+    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
+    if (!connectorId || !workspaceId)
+      return;
+    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
+      return;
+    if (destinations.some((destination) => destination.connectorId === connectorId))
+      continue;
+    const workspaceName = item.workspaceName?.trim();
+    destinations.push({ connectorId, workspaceId, ...workspaceName ? { workspaceName } : {} });
   }
-  return ids;
+  return destinations;
 }
 function configPath(projectRoot) {
   return join5(projectRoot, ".augenta", "config.json");
@@ -1024,30 +1031,50 @@ function loadProjectConfig(projectRoot) {
     if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
       return;
     const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
-    const endpoint = typeof value.endpoint === "string" && value.endpoint.trim() ? value.endpoint.trim() : undefined;
+    const settings = {};
+    for (const key of ["endpoint", "controlUrl", "ingestUrl", "discoveredGateway"]) {
+      const raw = value[key];
+      if (raw !== undefined && typeof raw !== "string")
+        return;
+      if (typeof raw === "string" && raw.trim()) {
+        settings[key] = raw.trim().replace(/\/+$/, "");
+      }
+    }
+    if (value.org !== undefined) {
+      if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
+        return;
+      if (value.org.name !== undefined && typeof value.org.name !== "string")
+        return;
+      settings.org = { id: value.org.id.trim(), ...value.org.name?.trim() ? { name: value.org.name.trim() } : {} };
+    }
+    const destinations = value.destinations === undefined ? undefined : parseDestinations(value.destinations);
+    if (value.destinations !== undefined && !destinations)
+      return;
+    if (destinations) {
+      settings.destinations = destinations;
+      settings.connectorIds = destinations.map((destination) => destination.connectorId);
+    }
     if (value.authMode === "oauth") {
       const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
-      const connectorIds = parseConnectorIds(value);
-      if (!profileId || connectorIds.length === 0)
+      if (!profileId || !destinations)
         return;
       return {
+        ...settings,
         authMode: "oauth",
         ...captureSince ? { captureSince } : {},
         profileId,
-        connectorIds,
-        ...endpoint ? { endpoint } : {},
         projectRoot
       };
     }
     if (value.authMode === "api-key") {
       const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
-      if (!apiKey)
+      if (!apiKey || Array.isArray(value.destinations) && value.destinations.length !== 1)
         return;
       return {
+        ...settings,
         authMode: "api-key",
         ...captureSince ? { captureSince } : {},
         apiKey,
-        ...endpoint ? { endpoint } : {},
         projectRoot
       };
     }
@@ -1060,11 +1087,14 @@ function projectConfig(cwd) {
   const root = resolveProjectRoot(cwd);
   return root ? loadProjectConfig(root) : undefined;
 }
-function gatewayBase(cfg) {
-  return (process.env.AUGENTA_API_URL || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+function controlUrl(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_CONTROL_URL?.trim() || cfg?.controlUrl || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
+}
+function gatewayBase(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
 }
 function experiencesUrl(cfg) {
-  return process.env.AUGENTA_INGEST_URL || `${gatewayBase(cfg)}/v1/experiences`;
+  return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
 }
 function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;

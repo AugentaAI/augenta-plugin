@@ -491,7 +491,6 @@ describe("the recall skill drives recall itself", () => {
       "not_entitled",
       "recall_timeout",
       "unknown_workspace",
-      "workspace_unverifiable",
       "workspace_archived",
       "workspace_not_selectable",
       "unreadable_config",
@@ -689,9 +688,7 @@ describe("the consent gate is plural, explicit, and fully disclosed", () => {
       /left in place and idle/,
       /subset of the set the user just confirmed/,
       /platform-key path stays single-destination/i,
-      // 0.7.0 replaced the read-forward with a hard break: `connectorIds` is
-      // the only routing key read, and only as an array.
-      /`connectorIds` is the \*\*only\*\* routing key read/i,
+      /`destinations\[\]\.connectorId` is the \*\*only\*\* routing key read/i,
       /a scalar is not read forward/i,
     ]) {
       expect(agents).toMatch(phrase);

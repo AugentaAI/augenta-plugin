@@ -25,7 +25,7 @@ hook events and the connect and recall scripts. Reports can cover:
 | Area | What should be protected |
 | --- | --- |
 | Saved sign-in | Tokens stay in `~/.augenta/auth.json`, with file mode `0600` inside a `0700` directory |
-| Project config | Browser connections store a profile reference and Connector ids; API-key connections store the key |
+| Project config | Browser connections store a profile reference, URLs, organization and destinations, with no sign-in token; only Connector ids route capture, and the server authorizes Workspace reads. API-key connections store the key |
 | Local records | The plugin sets `.augenta/` to `0700` on its writes and adds a self-ignoring `.gitignore` |
 | Capture | Only connected projects send records, and only to the selected Workspaces |
 | Recall | Only the question text is sent as content, with no attached files or transcript, to Workspaces the project already feeds |

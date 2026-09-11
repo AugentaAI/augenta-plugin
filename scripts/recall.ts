@@ -45,6 +45,7 @@ import { randomUUID } from "node:crypto";
 import { isMain } from "../runtime/node";
 import {
   DEFAULT_GATEWAY,
+  controlUrl,
   gatewayBase,
   loadProjectConfig,
   resolveProjectRoot,
@@ -193,7 +194,7 @@ interface Destination {
 
 export interface RecallAnswer extends Destination {
   /** The retrieval service's own scope string, reported verbatim for an audit
-   *  trail. Never composed here — this client does not know the org id. */
+   *  trail. Never composed here — the recorded org id is for display only. */
   scope?: string;
   /**
    * What this Workspace returned, as text to read.
@@ -231,13 +232,13 @@ export interface RecallPayload {
   answers: RecallAnswer[];
   nothingRemembered: NothingRemembered[];
   failed: RecallFailure[];
-  /** Destinations the project config lists whose Connector this sign-in cannot
-   *  read at all. Reported rather than dropped: the project is still SHIPPING to
-   *  them, so their silence is a fact about the sign-in, not about the Workspace. */
+  /** Recorded links that failed live validation or whose Workspace refused recall.
+   *  Reported rather than dropped; the project still lists them for capture. */
   unresolvedConnectorIds?: string[];
   code?: string;
   message?: string;
   environment: string;
+  organization?: string;
   /**
    * The directory whose `.augenta/config.json` was used — NOT the directory the
    * search started from.
@@ -595,91 +596,36 @@ export function aggregateStatus(payload: {
   answers: unknown[];
   nothingRemembered: unknown[];
   failed: Array<{ code: string }>;
+  unresolvedConnectorIds?: string[];
 }): string {
   const { answers, nothingRemembered, failed } = payload;
-  const total = answers.length + nothingRemembered.length + failed.length;
+  const total = answers.length + nothingRemembered.length + failed.length + (payload.unresolvedConnectorIds?.length ?? 0);
   if (total === 0) return "error";
   if (answers.length === total) return "answered";
   if (nothingRemembered.length === total) return "nothing_remembered";
-  if (failed.length === total) {
+  if (answers.length + nothingRemembered.length === 0) {
     // Every destination refused for the same reason, so the reason IS the
     // verdict — the caller should act on it once, not once per Workspace.
+    if (failed.length === 0) return "error";
     if (failed.every((f) => f.code === "need_login")) return "need_login";
     if (failed.every((f) => f.code === "recall_unavailable")) return "recall_unavailable";
+    if (failed.every((f) => f.code === "recall_timeout")) return "recall_timeout";
     return "error";
   }
   return "partially_answered";
 }
 
 /**
- * Resolve the project's destinations from its config.
- *
- * A Connector id is what the config stores; a Workspace id is what the recall
- * door needs. The two are only connected on the platform, so each id costs one
- * GET — done in parallel, and with three distinct outcomes that must not be
- * collapsed. `undefined` means 403/404, i.e. this sign-in cannot see the link at
- * all (reported as unresolved). A THROW means the request itself failed, which
- * is a destination that could not be asked (reported as failed) — treating a
- * network blip as "the Connector is gone" would quietly narrow the fan-out.
- */
-async function resolveDestinations(
-  profileId: string,
-  gateway: string,
-  connectorIds: readonly string[],
-): Promise<{
-  destinations: Destination[];
-  unresolvedConnectorIds: string[];
-  failed: RecallFailure[];
-  needLogin: boolean;
-}> {
-  const destinations: Destination[] = [];
-  const unresolvedConnectorIds: string[] = [];
-  const failed: RecallFailure[] = [];
-  let needLogin = false;
-  const resolved = await Promise.all(
-    connectorIds.map(async (id) => {
-      try {
-        return { id, link: await currentConnector(profileId, gateway, id) };
-      } catch (error) {
-        return { id, error };
-      }
-    }),
-  );
-  for (const entry of resolved) {
-    if ("error" in entry && entry.error !== undefined) {
-      if (entry.error instanceof ReLoginRequiredError) {
-        needLogin = true;
-        continue;
-      }
-      failed.push({
-        connectorId: entry.id,
-        code: "network",
-        message: describeError(entry.error),
-      });
-      continue;
-    }
-    const link = (entry as { link?: { id: string; workspaceId: string } }).link;
-    if (!link) {
-      unresolvedConnectorIds.push(entry.id);
-      continue;
-    }
-    destinations.push({ connectorId: link.id, workspaceId: link.workspaceId });
-  }
-  return { destinations, unresolvedConnectorIds, failed, needLogin };
-}
-
-/**
  * Name the environment honestly.
  *
- * `environmentLabel` reads the control URL, which is what connect selects an
+ * `environmentLabel` takes the resolved control URL, which is what connect selects an
  * environment with. Recall never touches the control plane: it posts to the
  * GATEWAY the project config points at. So a project connected to dev, run
- * without `AUGENTA_CONTROL_URL` set, would be reported as `prod` while its
- * question goes somewhere else entirely. Either coordinate being non-default is
- * enough to say so.
+ * without an override, uses its recorded control URL. Either coordinate being
+ * non-default is enough to say so.
  */
-export function recallEnvironment(gateway: string): string {
-  const label = environmentLabel();
+export function recallEnvironment(gateway: string, cfg?: ProjectConfig): string {
+  const label = environmentLabel(controlUrl(cfg));
   if (label !== "prod") return label;
   return gateway === DEFAULT_GATEWAY ? "prod" : gateway;
 }
@@ -697,6 +643,7 @@ export async function runRecall(
   /* Likewise the project: until a config is found this is where the search
      STARTED, and afterwards the directory it was found in. See RecallPayload. */
   let projectRoot = resolved.projectRoot;
+  let organization: string | undefined;
 
   /** Every early return. A closure rather than a six-parameter helper: `query`,
    *  `environment`, `projectRoot` and `startedAt` are the same at all eight call
@@ -716,6 +663,7 @@ export async function runRecall(
     code,
     message,
     environment,
+    ...(organization ? { organization } : {}),
     projectRoot,
     elapsedMs: Date.now() - startedAt,
     ...extra,
@@ -753,12 +701,14 @@ export async function runRecall(
     );
   }
   const gateway = gatewayBase(cfg);
-  environment = recallEnvironment(gateway);
+  environment = recallEnvironment(gateway, cfg);
+  organization = cfg.org?.name ?? cfg.org?.id;
 
   const answers: RecallAnswer[] = [];
   const nothingRemembered: NothingRemembered[] = [];
   const failed: RecallFailure[] = [];
-  let unresolvedConnectorIds: string[] = [];
+  const unresolvedConnectorIds: string[] = [];
+  let names: Promise<Workspace[]> = Promise.resolve([]);
   let destinations: Destination[] = [];
   let ctx: { url: string; query: string; timeoutMs: number; profileId?: string; apiKey?: string };
 
@@ -776,74 +726,52 @@ export async function runRecall(
         "this project's Augenta sign-in is missing; sign in again with the connect skill",
       );
     }
-    /* Concurrent, because neither needs the other: the Connector lookups decide
-       WHERE the question goes and the Workspace list only decides what each
-       answer is CALLED. In series this cost a full extra round trip — plus the
-       auth lock's serialization — before the first question was even sent, on a
-       command whose entire budget is a person waiting on a model turn.
-
-       Names are a LABEL, not a routing input, so the list stays best effort: a
-       failed or slow listing costs the answers their human-readable heading,
-       never the answers themselves. */
-    const [resolution, named] = await Promise.all([
-      resolveDestinations(profileId, gateway, cfg.connectorIds ?? []),
-      fetchAllWorkspaces(profileId, gateway).catch(() => [] as Workspace[]),
-    ]);
-    if (resolution.needLogin) {
-      return bail(
-        "need_login",
-        "need_login",
-        "this project's Augenta sign-in has expired; sign in again with the connect skill",
-      );
-    }
-    /* One entry per WORKSPACE, not per Connector id. Two ids anchored to the
-       same Workspace are one destination: asking twice would bill two model
-       turns, record two reuse activations for one question, and render the same
-       Workspace twice as though two of them had answered. Nothing is lost — the
-       Workspace is still asked. */
-    destinations = [];
-    for (const destination of resolution.destinations) {
-      if (destinations.some((seen) => seen.workspaceId === destination.workspaceId)) continue;
-      destinations.push(destination);
-    }
-    unresolvedConnectorIds = resolution.unresolvedConnectorIds;
-    failed.push(...resolution.failed);
-    for (const destination of destinations) {
-      const name = named.find((workspace) => workspace.id === destination.workspaceId)?.name;
-      if (name) destination.workspaceName = name;
-    }
+    destinations = (cfg.destinations ?? []).map((destination) => ({ ...destination }));
     if (args.workspaces?.length) {
       const requested = new Set(args.workspaces);
       const unknown = args.workspaces.filter(
         (id) => !destinations.some((destination) => destination.workspaceId === id),
       );
       if (unknown.length > 0) {
-        /* Failing closed is right either way — never ask a Workspace this
-           project's config cannot be shown to feed. But WHY it is closed is a
-           different sentence, and the wrong one is worse than vague.
-
-           With every Connector resolved, "this project does not feed X" is a
-           fact about the project. With one unresolved — a 403/404, or a lookup
-           that threw — the run never learned which Workspace that Connector
-           points at, so X might well be a destination. Reporting that as "does
-           not feed" states a CONSENT conclusion the run never reached, and the
-           bail below would otherwise drop the network evidence that explains it. */
-        const unverifiable = failed.length > 0 || unresolvedConnectorIds.length > 0;
         return bail(
           "error",
-          unverifiable ? "workspace_unverifiable" : "unknown_workspace",
-          unverifiable
-            ? `could not resolve every destination this project feeds, so ${unknown.join(", ")} cannot be confirmed as one; nothing was asked`
-            : `this project does not feed ${unknown.join(", ")}; recall can only ask the Workspaces it sends to`,
-          {
-            ...(failed.length > 0 ? { failed: [...failed] } : {}),
-            ...(unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {}),
-          },
+          "unknown_workspace",
+          `this project does not feed ${unknown.join(", ")}; recall can only ask the Workspaces it sends to`,
         );
       }
       destinations = destinations.filter(
         (destination) => destination.workspaceId && requested.has(destination.workspaceId),
       );
+    }
+    const inspected = await Promise.all(destinations.map(async (destination) => {
+      try {
+        return { destination, connector: await currentConnector(profileId, gateway, destination.connectorId) };
+      } catch (error) {
+        return { destination, error };
+      }
+    }));
+    destinations = [];
+    for (const entry of inspected) {
+      if ("error" in entry) {
+        failed.push({
+          ...entry.destination,
+          code: entry.error instanceof ReLoginRequiredError ? "need_login" : "network",
+          message: describeError(entry.error),
+        });
+      } else if (
+        !entry.connector || entry.connector.status !== "active" ||
+        entry.connector.id !== entry.destination.connectorId ||
+        entry.connector.workspaceId !== entry.destination.workspaceId
+      ) {
+        unresolvedConnectorIds.push(entry.destination.connectorId!);
+      } else {
+        destinations.push(entry.destination);
+      }
+    }
+    if (destinations.length > 0) {
+      // Names do not authorize a read. Start their best-effort lookup only after
+      // link checks pass, then overlap it with recall instead of waiting on it.
+      names = fetchAllWorkspaces(profileId, gateway).catch(() => [] as Workspace[]);
     }
     ctx = { url, query, timeoutMs, profileId };
   } else {
@@ -880,11 +808,16 @@ export async function runRecall(
       "error",
       "no_destination",
       unresolvedConnectorIds.length > 0
-        ? `this project lists ${unresolvedConnectorIds.join(", ")}, but ${unresolvedConnectorIds.length === 1 ? "it is" : "they are"} not readable with this sign-in; reconnect`
+        ? `this project lists ${unresolvedConnectorIds.join(", ")}, but their links are disabled, inaccessible, or no longer match the saved Workspaces; reconnect`
         : "this project has no destination to ask; reconnect with the connect skill",
       unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {},
     );
   }
+
+  const linkedDestinations = destinations;
+  destinations = destinations.filter((destination, index) =>
+    destinations.findIndex((entry) => entry.workspaceId === destination.workspaceId) === index,
+  );
 
   /* Parallel on purpose. Each answer is a full model turn behind the door, so
      asking three Workspaces in series would cost three deadlines and routinely
@@ -895,7 +828,18 @@ export async function runRecall(
       outcome: await askDestination(ctx, destination),
     })),
   );
+  const named = await names;
   for (const { destination, outcome } of outcomes) {
+    const liveName = named.find((workspace) => workspace.id === destination.workspaceId)?.name;
+    if (liveName) destination.workspaceName = liveName;
+    // A verified link does not grant Workspace read access. Report affected link
+    // ids, but preserve the door's code and message in failed for actionable advice.
+    if (cfg.authMode === "oauth" && outcome.kind === "failed" &&
+        ["not_entitled", "not_found", "workspace_archived", "workspace_not_found", "workspace_forbidden"].includes(outcome.code)) {
+      unresolvedConnectorIds.push(...linkedDestinations
+        .filter((entry) => entry.workspaceId === destination.workspaceId)
+        .map((entry) => entry.connectorId!));
+    }
     // `kind` is the discriminator this loop branches on and has no meaning in the
     // payload, so it is destructured away rather than published as a second status.
     if (outcome.kind === "answered") {
@@ -909,7 +853,7 @@ export async function runRecall(
     }
   }
 
-  const status = aggregateStatus({ answers, nothingRemembered, failed });
+  const status = aggregateStatus({ answers, nothingRemembered, failed, unresolvedConnectorIds });
   return {
     status,
     query,
@@ -918,6 +862,7 @@ export async function runRecall(
     failed,
     ...(unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {}),
     environment,
+    ...(organization ? { organization } : {}),
     projectRoot,
     elapsedMs: Date.now() - startedAt,
   };
@@ -945,9 +890,8 @@ function printPayload(payload: RecallPayload): void {
     // so only the direct human path could lose them — and that is the path with
     // no agent to notice a destination quietly missing from the answers.
     console.error(
-      `Augenta recall: did not ask ${payload.unresolvedConnectorIds.join(", ")} — ` +
-        `this project lists ${payload.unresolvedConnectorIds.length === 1 ? "that Connector" : "those Connectors"} ` +
-        `but ${payload.unresolvedConnectorIds.length === 1 ? "it is" : "they are"} not readable with this sign-in.`,
+      `Augenta recall: no answer from ${payload.unresolvedConnectorIds.join(", ")} — ` +
+        "those links could not be used or their Workspaces refused recall; see any Workspace failure above before reconnecting.",
     );
   }
   if (payload.message && payload.answers.length === 0) {
@@ -982,7 +926,7 @@ if (isMain(import.meta.url)) {
     // environment without recall (`recall_unavailable`), or a partial result —
     // and making any of them non-zero would turn a normal answer into a broken
     // command for anyone who scripts this.
-    if (payload.status === "error") process.exitCode = 1;
+    if (payload.status === "error" || payload.status === "recall_timeout") process.exitCode = 1;
   } catch (error) {
     const message = describeError(error);
     if (wantsJson) {

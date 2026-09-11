@@ -163,8 +163,10 @@ has its config file.
 ## Configuration
 
 Connect handles setup for you. Your project stores its connection in
-`.augenta/config.json`. See [connection settings](docs/configuration.md) for
-file details and changing Workspaces.
+`.augenta/config.json`: sign-in profile reference, environment URLs, organization
+and chosen destinations. Sign-in tokens stay in your private global profile.
+Older `connectorIds` configs need one reconnect per project. See
+[connection settings](docs/configuration.md) for file details and changing Workspaces.
 
 ## Connecting CI or a service
 

@@ -3,7 +3,7 @@
  *
  * `scripts/connect.ts` owns the connection flow and `scripts/recall.ts` asks a
  * connected project's Workspaces what they remember; both have to list
- * Workspaces, resolve a Connector to the Workspace behind it, name their
+ * Workspaces, name their
  * environment, and turn a thrown fetch into a sentence. An entrypoint may not
  * import another entrypoint — bundling inlines the imported file's `isMain`
  * block into the importer, where it is TRUE and the wrong body runs first (see
@@ -11,10 +11,12 @@
  *
  * Nothing in this file prompts, prints, or writes. It is the request layer only:
  * callers decide what a failure means, which is what lets connect treat an
- * unreadable Connector as "drop it" while recall treats it as "one destination
- * of several is unavailable".
+ * unreadable Connector as a missing prior destination. Recall checks that each
+ * selected link is active and still matches its recorded Workspace before its
+ * request door separately authorizes the Workspace.
  */
-import { fetchWithProfile, DEFAULT_CONTROL_URL } from "./auth";
+import { fetchWithProfile } from "./auth";
+import { DEFAULT_CONTROL_URL } from "./config";
 
 export interface Workspace {
   id: string;
@@ -27,6 +29,7 @@ export interface Connector {
   direction: "inbound" | "outbound" | "bidirectional";
   status: "active" | "disabled";
   workspaceId: string;
+  orgId: string;
   _etag?: string;
 }
 
@@ -148,14 +151,12 @@ export async function currentConnector(
  * environment a project is about to feed — or which one just answered a
  * question — instead of connecting dev by accident.
  *
- * Takes a plain optional override rather than a parsed argument object: recall
- * has no `--control-url` flag at all (DEBUG.md records why the skills expose no
- * environment selection), so the two callers do not share an `Args` shape.
+ * Takes the resolved URL from config's controlUrl helper; this function never
+ * reads environment variables itself.
  */
 export function environmentLabel(controlUrl?: string): string {
   const url = (
     controlUrl?.trim() ||
-    process.env.AUGENTA_CONTROL_URL ||
     DEFAULT_CONTROL_URL
   ).replace(/\/+$/, "");
   return url === DEFAULT_CONTROL_URL ? "prod" : url;

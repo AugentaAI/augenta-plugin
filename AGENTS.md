@@ -204,7 +204,9 @@ change in words instead — "pairs with the platform change that pages
 Augenta remains opt-in per project. Do not change telemetry APIs, payloads,
 consent semantics, or capture behavior without an explicit product decision.
 OAuth tokens stay in the owner-only global `~/.augenta/auth.json`; a connected
-project stores only a profile reference and its Connector ids. Capture must stay a
+project stores a profile reference, URLs, organization and destinations. Only
+`destinations[].connectorId` routes; organization and Workspace coordinates
+record the user's choices for display and never become authorization inputs. Capture must stay a
 silent no-op without project config, and `AUGENTA_CAPTURE_ENABLED=0` remains the
 global kill switch.
 
@@ -223,12 +225,23 @@ and the differences are deliberate:
   everything else: a readable `.augenta/config.json`. Deleting it remains the one
   off switch for both, and README says so in those words.
 - **It needs no consent gate because it creates no new disclosure.** Recall asks
-  only the destinations the user already selected — `connectorIds`, resolved to
-  their Workspaces — and `--workspace` may only NARROW that set. A destination
+  only the destinations the user already selected — recorded in `destinations`
+  with their Workspaces — and `--workspace` may only NARROW that set. A destination
   the project does not feed is refused (`unknown_workspace`), never asked. If a
   future change would let recall reach a Workspace the project does not send to,
   that is a new consent question and belongs in front of the user first.
-- **The client never names an organization.** It sends `workspace`; the platform
+- **Check selected Connectors live before recall.** Only active links whose
+  Workspace still matches the recorded selection may be used. Disabled,
+  inaccessible or retargeted links are unresolved; failed checks prevent the
+  question from being sent and remain failures, not evidence of deletion.
+  Deduplicate by Workspace only after checking every selected link, so another
+  active link to the same Workspace can still be used. The recall API separately
+  authorizes Workspace membership; that alone does not detect a disabled link.
+  Keep a Workspace refusal's code and message in `failed` alongside affected
+  unresolved ids; an active link can still lack read access, and reconnecting
+  does not repair an entitlement denial or reopen an archived Workspace.
+- **The client never names an organization on the wire.** It knows the org id
+  locally for display. It sends only the existing `workspace` selector; the platform
   composes the retrieval `scope` from the authenticated identity. Do not add a
   `scope` field — the door refuses one, and the refusal is the tenant-isolation
   boundary rather than a validation detail.
@@ -311,7 +324,7 @@ its route. A non-production `environment` must be stated to the user before they
 answer.
 
 **The platform-key path stays single-destination.** `--api-key` has no consent
-gate, and the config format it writes has no place to express a route — the key's
+gate; its optional destination records the verified assignment — the key's
 server-side assignment *is* the routing decision, and the shipper sends no
 Connector header in that mode. `verifyApiKeyConnection` therefore continues to
 refuse a key assigned to more than one Connector. Fan-out exists because a human
@@ -348,12 +361,13 @@ outside a comment; keep it that way.
 **Stale configs are reconnected, never migrated.** Pre-release versions are not
 carried forward. A config this version cannot parse becomes session-start's
 one-time reconnect prompt, which is a clear ask; reusing an old credential or
-routing decision would instead surface later as an unexplained 401.
+routing decision would instead surface later as an unexplained 401. This release
+requires one reconnect per OAuth project because `destinations` replaces `connectorIds`.
 
-`connectorIds` is the **only** routing key read, and only as an array. A scalar
-is not read forward, and neither is any other spelling: 0.7.0 renamed the
-routing surface end to end, so an id written against the old surface is a guess,
-not a migration. A config keyed the old way is simply unparseable and becomes
-the reconnect prompt — as does a config whose *meaning* changed (the pre-0.4.0
-`authMode: "workos"` spelling, the pre-0.3.0 `{apiKey}` file) or that cannot be
-read at all. The write path emits only the plural form.
+`destinations[].connectorId` is the **only** routing key read. A scalar is not read
+forward, and `connectorIds` is not read either. `workspaceId`, `workspaceName` and
+`org` record the selected destinations for display and consent checking; org ids
+and names are never sent, and recall retains only its existing Workspace selector.
+A config keyed the old way is unparseable and becomes the reconnect prompt, as
+does an older `authMode` or an unreadable file. Only connect writes the file;
+recall refreshes names in its output without writing them back.
