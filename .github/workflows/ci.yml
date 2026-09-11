@@ -4,23 +4,61 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Nightly, because `install-smoke` installs the `claude` and `codex` CLIs
+  # UNPINNED from npm. Their next release can break a plugin this repo did not
+  # touch, and a no-change run against `main` is the only thing that catches
+  # that before a contributor's PR does.
+  schedule:
+    - cron: "0 7 * * *"
 
 # Least privilege: CI only needs to read the repo to install, typecheck, and test.
 permissions:
   contents: read
 
-# Cancel superseded runs on the same ref to save runner minutes.
+# Cancel superseded runs on the same ref to save runner minutes. The EVENT is part of
+# the key because the nightly cron and a push to `main` share `github.ref`: without it
+# the 07:00 run cancels the CI of a commit merged at 06:59 — losing the record that
+# the commit is green — or that merge cancels the only run watching the unpinned CLIs.
+# A PR's own runs still supersede each other: same event, same refs/pull/N/merge.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   plugin:
     name: typecheck + test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
+
+      # First, because it needs no toolchain and costs under a second — and because
+      # the thing it guards fails SILENTLY. A shredded agent allowlist never turns a
+      # check red; the agent just quietly loses a tool it was granted.
+      - name: Claude allowlist shape gate
+        run: bash .github/gates/claude-allowlist-shape.sh
+
+      # The fix agent cannot receive `gh api` without also receiving the
+      # approve/merge API surface. Prove the trusted post-step resolves exactly the
+      # fresh findings reported as fixed, while skipped findings, human threads, and
+      # older Claude threads stay open.
+      - name: Claude fix conversation-resolution gate
+        run: bash .github/gates/claude-fix-resolution.sh
+
+      # The fix agent's push starts a fresh review, which finds more, which the agent
+      # fixes, forever. The cap that ends it is decided by this counter, so its two
+      # readings — "a round" and "a human push" — are pinned offline.
+      - name: Claude fix round-cap gate
+        run: bash .github/gates/claude-fix-rounds.sh
+
+      # The other way an agent workflow fails silently. `claude-allowlist-shape.sh`
+      # guards a shredded or incomplete allowlist; this guards a pipeline that reports
+      # failure when its match SUCCEEDS. Both review asserts had it once, so as a PR
+      # accumulated comments they began reporting "the agent posted nothing" about
+      # reviews that had posted. One grep, no credentials.
+      - name: Workflow pipefail/grep -q gate
+        run: bash .github/gates/workflow-pipefail-grep.sh
 
       # Pinned via .bun-version — one authoritative number, and now genuinely
       # SHARED rather than just declared to be: scripts/build.ts reads the same
@@ -98,9 +136,10 @@ jobs:
   install-smoke:
     name: Claude + Codex marketplace install smoke test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # Pinned to the same floor as the `plugin` job, and it matters more here:
       # this job fires the shipped hooks with `node` from a real install, which is
