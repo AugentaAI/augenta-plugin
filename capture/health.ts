@@ -1,5 +1,5 @@
 /** Local, bounded diagnostics. No payloads, paths, tokens, IDs or error strings. */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { captureEnabled, loadProjectConfig } from "./config";
@@ -39,11 +39,14 @@ export function captureHealth(projectRoot: string) {
   const cfg = loadProjectConfig(projectRoot);
   const activity = Object.fromEntries(STAGES.map(stage => [stage, read(projectRoot, stage) ?? null])) as Record<Stage, Activity | null>;
   return { configured: !!cfg, enabled: captureEnabled(cfg),
+    configuration: cfg ? "valid" : existsSync(join(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    activityScope: "project", hostDispatch: "unverified",
     destinations: cfg?.authMode === "oauth" ? cfg.connectorIds!.length : cfg ? 1 : 0,
     pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
     ...activity,
     // Local plugin state cannot establish host approval or lake persistence.
     hostApproval: "unknown", ingestion: "unverified",
     nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch
-      ? "check_host_hook_approval_and_activation" : "complete_a_turn_then_check_activity" };
+      ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript"
+      ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity" };
 }

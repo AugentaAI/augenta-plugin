@@ -80,8 +80,60 @@ function isHttpsUrl(value) {
 }
 
 // capture/config.ts
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join as join2 } from "node:path";
+
+// capture/project.ts
+import { execFileSync } from "node:child_process";
+import { existsSync, realpathSync as realpathSync2 } from "node:fs";
+import { dirname, join, resolve as resolve2 } from "node:path";
+function gitRevParse(cwd, arg) {
+  try {
+    const value = execFileSync("git", ["rev-parse", arg], {
+      cwd,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).toString().trim();
+    return value || undefined;
+  } catch {
+    return;
+  }
+}
+function resolveProjectRoot(cwd) {
+  if (!cwd)
+    return;
+  let dir;
+  try {
+    dir = realpathSync2(cwd);
+  } catch {
+    return;
+  }
+  while (true) {
+    if (existsSync(join(dir, ".augenta", "config.json")))
+      return dir;
+    if (existsSync(join(dir, ".git")))
+      return;
+    const parent = dirname(dir);
+    if (parent === dir)
+      return;
+    dir = parent;
+  }
+}
+function resolveProject(args, cwd) {
+  if (args.project)
+    return { projectRoot: resolve2(cwd, args.project) };
+  const configured = resolveProjectRoot(cwd);
+  if (configured)
+    return { projectRoot: configured };
+  const top = gitRevParse(cwd, "--show-toplevel");
+  if (!top)
+    return { projectRoot: cwd };
+  return { projectRoot: top };
+}
+function resolveTargetProject(args, cwd) {
+  return resolveProject(args, cwd).projectRoot;
+}
+
+// capture/config.ts
 var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
 var DEFAULT_CONTROL_URL = "https://augenta.ai";
 function parseDestinations(raw) {
@@ -105,21 +157,7 @@ function parseDestinations(raw) {
   return destinations;
 }
 function configPath(projectRoot) {
-  return join(projectRoot, ".augenta", "config.json");
-}
-function resolveProjectRoot(cwd) {
-  if (!cwd)
-    return;
-  let dir = cwd;
-  for (let i = 0;i < 30; i++) {
-    if (existsSync(configPath(dir)))
-      return dir;
-    const parent = dirname(dir);
-    if (parent === dir)
-      return;
-    dir = parent;
-  }
-  return;
+  return join2(projectRoot, ".augenta", "config.json");
 }
 function loadProjectConfig(projectRoot) {
   try {
@@ -215,19 +253,19 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 
 // capture/augenta-dir.ts
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 import { chmodSync, mkdirSync, existsSync as existsSync2, writeFileSync } from "node:fs";
 function ensureAugentaDir(projectRoot) {
-  const dir = join2(projectRoot, ".augenta");
+  const dir = join3(projectRoot, ".augenta");
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
     try {
       chmodSync(dir, 448);
     } catch {}
-    const ignore = join2(dir, ".gitignore");
+    const ignore = join3(dir, ".gitignore");
     if (!existsSync2(ignore))
       writeFileSync(ignore, `*
 `);
@@ -244,9 +282,9 @@ class ReLoginRequiredError extends Error {
     this.reason = reason;
   }
 }
-var authRoot = () => process.env.AUGENTA_AUTH_HOME || join3(homedir(), ".augenta");
-var authPath = () => join3(authRoot(), "auth.json");
-var lockPath = () => join3(authRoot(), "auth.lock");
+var authRoot = () => process.env.AUGENTA_AUTH_HOME || join4(homedir(), ".augenta");
+var authPath = () => join4(authRoot(), "auth.json");
+var lockPath = () => join4(authRoot(), "auth.lock");
 var LOCK_WAIT_MS = 1e4;
 var STALE_LOCK_MS = 30000;
 var REQUEST_TIMEOUT_MS = 15000;
@@ -304,7 +342,7 @@ async function withAuthLock(fn) {
       if (Date.now() >= deadline) {
         throw new Error("another Augenta login or token refresh is still running");
       }
-      await new Promise((resolve2) => setTimeout(resolve2, 100));
+      await new Promise((resolve3) => setTimeout(resolve3, 100));
     }
   }
   try {
@@ -366,7 +404,7 @@ function browserCommand(url) {
     return ["cmd", "/c", "start", "", url];
   return ["xdg-open", url];
 }
-var pendingLoginPath = () => join3(authRoot(), "pending-login.json");
+var pendingLoginPath = () => join4(authRoot(), "pending-login.json");
 function savePendingLogin(pending) {
   ensureAuthRoot();
   const path = pendingLoginPath();
@@ -425,7 +463,7 @@ async function pollDeviceToken(pending, opts) {
   const deadline = Math.min(pending.expiresAt, Date.now() + opts.waitMs);
   let intervalMs = pending.intervalMs;
   while (Date.now() < deadline) {
-    await new Promise((resolve2) => setTimeout(resolve2, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
+    await new Promise((resolve3) => setTimeout(resolve3, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
     const response = await fetch(endpoint(pending.issuer, "/oauth2/token"), {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -559,7 +597,7 @@ async function fetchWithProfile(profileId, url, init = {}) {
 }
 var NOTICES = ["relogin", "badkey", "connect"];
 function noticePath(projectRoot, notice) {
-  return join3(projectRoot, ".augenta", `${notice}-required`);
+  return join4(projectRoot, ".augenta", `${notice}-required`);
 }
 function markAuthNotice(projectRoot, notice) {
   try {
@@ -653,40 +691,6 @@ function describeError(error) {
   }
   const detail = cause?.message ?? code;
   return detail ? `cannot reach Augenta: ${detail}` : "cannot reach Augenta: the network request failed. Check your connection.";
-}
-
-// capture/project.ts
-import { execFileSync } from "node:child_process";
-import { existsSync as existsSync4 } from "node:fs";
-import { dirname as dirname2, resolve as resolve2 } from "node:path";
-function gitRevParse(cwd, arg) {
-  try {
-    const value = execFileSync("git", ["rev-parse", arg], {
-      cwd,
-      stdio: ["ignore", "pipe", "ignore"]
-    }).toString().trim();
-    return value || undefined;
-  } catch {
-    return;
-  }
-}
-function resolveProject(args, cwd) {
-  if (args.project)
-    return { projectRoot: resolve2(cwd, args.project) };
-  const top = gitRevParse(cwd, "--show-toplevel");
-  if (!top)
-    return { projectRoot: cwd };
-  const commonDir = gitRevParse(cwd, "--git-common-dir");
-  if (commonDir) {
-    const mainRoot = dirname2(resolve2(cwd, commonDir));
-    if (mainRoot !== top && existsSync4(mainRoot)) {
-      return { projectRoot: mainRoot, worktreeRedirect: { from: top, to: mainRoot } };
-    }
-  }
-  return { projectRoot: top };
-}
-function resolveTargetProject(args, cwd) {
-  return resolveProject(args, cwd).projectRoot;
 }
 
 // scripts/recall.ts
@@ -1147,8 +1151,7 @@ if (isMain(import.meta.url)) {
     const resolved = resolveProject(args, process.cwd());
     const payload = await runRecall(resolved, args);
     const envelope = {
-      ...payload,
-      ...resolved.worktreeRedirect ? { worktreeRedirect: resolved.worktreeRedirect } : {}
+      ...payload
     };
     if (args.json) {
       console.log(JSON.stringify(envelope, null, 2));

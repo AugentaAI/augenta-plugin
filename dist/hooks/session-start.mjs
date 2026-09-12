@@ -34,13 +34,65 @@ var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, 
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // capture/health.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join4 } from "node:path";
+import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join5 } from "node:path";
 import { randomUUID } from "node:crypto";
 
 // capture/config.ts
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join as join2 } from "node:path";
+
+// capture/project.ts
+import { execFileSync } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+function gitRevParse(cwd, arg) {
+  try {
+    const value = execFileSync("git", ["rev-parse", arg], {
+      cwd,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).toString().trim();
+    return value || undefined;
+  } catch {
+    return;
+  }
+}
+function resolveProjectRoot(cwd) {
+  if (!cwd)
+    return;
+  let dir;
+  try {
+    dir = realpathSync(cwd);
+  } catch {
+    return;
+  }
+  while (true) {
+    if (existsSync(join(dir, ".augenta", "config.json")))
+      return dir;
+    if (existsSync(join(dir, ".git")))
+      return;
+    const parent = dirname(dir);
+    if (parent === dir)
+      return;
+    dir = parent;
+  }
+}
+function resolveProject(args, cwd) {
+  if (args.project)
+    return { projectRoot: resolve(cwd, args.project) };
+  const configured = resolveProjectRoot(cwd);
+  if (configured)
+    return { projectRoot: configured };
+  const top = gitRevParse(cwd, "--show-toplevel");
+  if (!top)
+    return { projectRoot: cwd };
+  return { projectRoot: top };
+}
+function resolveTargetProject(args, cwd) {
+  return resolveProject(args, cwd).projectRoot;
+}
+
+// capture/config.ts
 var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
 var DEFAULT_CONTROL_URL = "https://augenta.ai";
 function parseDestinations(raw) {
@@ -64,21 +116,7 @@ function parseDestinations(raw) {
   return destinations;
 }
 function configPath(projectRoot) {
-  return join(projectRoot, ".augenta", "config.json");
-}
-function resolveProjectRoot(cwd) {
-  if (!cwd)
-    return;
-  let dir = cwd;
-  for (let i = 0;i < 30; i++) {
-    if (existsSync(configPath(dir)))
-      return dir;
-    const parent = dirname(dir);
-    if (parent === dir)
-      return;
-    dir = parent;
-  }
-  return;
+  return join2(projectRoot, ".augenta", "config.json");
 }
 function loadProjectConfig(projectRoot) {
   try {
@@ -162,16 +200,16 @@ function captureEnabled(cfg) {
 }
 
 // capture/augenta-dir.ts
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 import { chmodSync, mkdirSync, existsSync as existsSync2, writeFileSync } from "node:fs";
 function ensureAugentaDir(projectRoot) {
-  const dir = join2(projectRoot, ".augenta");
+  const dir = join3(projectRoot, ".augenta");
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
     try {
       chmodSync(dir, 448);
     } catch {}
-    const ignore = join2(dir, ".gitignore");
+    const ignore = join3(dir, ".gitignore");
     if (!existsSync2(ignore))
       writeFileSync(ignore, `*
 `);
@@ -180,7 +218,7 @@ function ensureAugentaDir(projectRoot) {
 }
 
 // capture/outbox.ts
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 import { mkdirSync as mkdirSync2, existsSync as existsSync3, readFileSync as readFileSync2, writeFileSync as writeFileSync2, appendFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 var NEWLINE = 10;
 var MAX_SPOOL_BYTES = 50 * 1024 * 1024;
@@ -213,9 +251,9 @@ class Outbox {
   maxDestLagBytes;
   constructor(projectRoot, opts = {}) {
     this.projectRoot = projectRoot;
-    this.dir = join3(projectRoot, ".augenta", "outbox");
-    this.spoolPath = join3(this.dir, "spool.jsonl");
-    this.cursorPath = join3(this.dir, "cursor.json");
+    this.dir = join4(projectRoot, ".augenta", "outbox");
+    this.spoolPath = join4(this.dir, "spool.jsonl");
+    this.cursorPath = join4(this.dir, "cursor.json");
     this.maxSpoolBytes = opts.maxSpoolBytes ?? MAX_SPOOL_BYTES;
     this.maxDestLagBytes = opts.maxDestLagBytes ?? MAX_DEST_LAG_BYTES;
   }
@@ -245,7 +283,7 @@ class Outbox {
 `);
   }
   dropEpisodePath() {
-    return join3(this.dir, "dropped.json");
+    return join4(this.dir, "dropped.json");
   }
   markDropped() {
     this.ensure();
@@ -261,7 +299,7 @@ class Outbox {
     } catch {}
   }
   discardNoticePath() {
-    return join3(this.dir, "discarded.json");
+    return join4(this.dir, "discarded.json");
   }
   markDiscarded(entries) {
     if (entries.length === 0)
@@ -482,7 +520,7 @@ var STAGES = ["dispatch", "capture", "delivery"];
 var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
 function read(projectRoot, stage) {
   try {
-    const s = JSON.parse(readFileSync3(join4(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    const s = JSON.parse(readFileSync3(join5(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
     if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
       return;
     return {
@@ -498,7 +536,7 @@ function read(projectRoot, stage) {
 }
 function recordHealth(projectRoot, stage, outcome, count = 0) {
   try {
-    const dir = join4(ensureAugentaDir(projectRoot), "state");
+    const dir = join5(ensureAugentaDir(projectRoot), "state");
     mkdirSync3(dir, { recursive: true });
     const old = read(projectRoot, stage);
     const at = new Date().toISOString();
@@ -510,7 +548,7 @@ function recordHealth(projectRoot, stage, outcome, count = 0) {
       successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
       ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
     };
-    const file = join4(dir, `health-${stage}.json`);
+    const file = join5(dir, `health-${stage}.json`);
     const tmp = `${file}.${randomUUID()}.tmp`;
     writeFileSync3(tmp, JSON.stringify(value), { mode: 384 });
     renameSync2(tmp, file);
@@ -522,18 +560,21 @@ function captureHealth(projectRoot) {
   return {
     configured: !!cfg,
     enabled: captureEnabled(cfg),
+    configuration: cfg ? "valid" : existsSync4(join5(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    activityScope: "project",
+    hostDispatch: "unverified",
     destinations: cfg?.authMode === "oauth" ? cfg.connectorIds.length : cfg ? 1 : 0,
     pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
     ...activity,
     hostApproval: "unknown",
     ingestion: "unverified",
-    nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch ? "check_host_hook_approval_and_activation" : "complete_a_turn_then_check_activity"
+    nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
   };
 }
 
 // hooks/session-start.ts
 import { homedir as homedir3 } from "node:os";
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 import { mkdirSync as mkdirSync6, readFileSync as readFileSync6, writeFileSync as writeFileSync6, renameSync as renameSync5 } from "node:fs";
 
 // hooks/harness.ts
@@ -567,7 +608,7 @@ function sniffHarness(line) {
 // capture/auth.ts
 import {
   chmodSync as chmodSync2,
-  existsSync as existsSync4,
+  existsSync as existsSync5,
   mkdirSync as mkdirSync4,
   readFileSync as readFileSync4,
   renameSync as renameSync3,
@@ -577,12 +618,12 @@ import {
 } from "node:fs";
 import { createHash, randomUUID as randomUUID2 } from "node:crypto";
 import { homedir } from "node:os";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 
 // runtime/node.ts
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { realpathSync as realpathSync2 } from "node:fs";
+import { resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
 async function readStdin() {
   const chunks = [];
@@ -598,9 +639,9 @@ function isMain(metaUrl) {
   return canonical(fileURLToPath(metaUrl)) === canonical(entry);
 }
 function canonical(path) {
-  const absolute = resolve(path);
+  const absolute = resolve2(path);
   try {
-    return realpathSync.native(absolute);
+    return realpathSync2.native(absolute);
   } catch {
     return absolute;
   }
@@ -631,9 +672,9 @@ class ReLoginRequiredError extends Error {
     this.reason = reason;
   }
 }
-var authRoot = () => process.env.AUGENTA_AUTH_HOME || join5(homedir(), ".augenta");
-var authPath = () => join5(authRoot(), "auth.json");
-var lockPath = () => join5(authRoot(), "auth.lock");
+var authRoot = () => process.env.AUGENTA_AUTH_HOME || join6(homedir(), ".augenta");
+var authPath = () => join6(authRoot(), "auth.json");
+var lockPath = () => join6(authRoot(), "auth.lock");
 var LOCK_WAIT_MS = 1e4;
 var STALE_LOCK_MS = 30000;
 var REQUEST_TIMEOUT_MS = 15000;
@@ -644,7 +685,7 @@ function ensureAuthRoot() {
 function readAuthStore() {
   try {
     ensureAuthRoot();
-    if (existsSync4(authPath()))
+    if (existsSync5(authPath()))
       chmodSync2(authPath(), 384);
     const parsed = JSON.parse(readFileSync4(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
@@ -670,7 +711,7 @@ function writeAuthStore(store) {
     chmodSync2(path, 384);
   } finally {
     try {
-      if (existsSync4(tmp))
+      if (existsSync5(tmp))
         unlinkSync2(tmp);
     } catch {}
   }
@@ -691,7 +732,7 @@ async function withAuthLock(fn) {
       if (Date.now() >= deadline) {
         throw new Error("another Augenta login or token refresh is still running");
       }
-      await new Promise((resolve2) => setTimeout(resolve2, 100));
+      await new Promise((resolve3) => setTimeout(resolve3, 100));
     }
   }
   try {
@@ -753,7 +794,7 @@ function browserCommand(url) {
     return ["cmd", "/c", "start", "", url];
   return ["xdg-open", url];
 }
-var pendingLoginPath = () => join5(authRoot(), "pending-login.json");
+var pendingLoginPath = () => join6(authRoot(), "pending-login.json");
 function savePendingLogin(pending) {
   ensureAuthRoot();
   const path = pendingLoginPath();
@@ -812,7 +853,7 @@ async function pollDeviceToken(pending, opts) {
   const deadline = Math.min(pending.expiresAt, Date.now() + opts.waitMs);
   let intervalMs = pending.intervalMs;
   while (Date.now() < deadline) {
-    await new Promise((resolve2) => setTimeout(resolve2, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
+    await new Promise((resolve3) => setTimeout(resolve3, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
     const response = await fetch(endpoint(pending.issuer, "/oauth2/token"), {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -946,7 +987,7 @@ async function fetchWithProfile(profileId, url, init = {}) {
 }
 var NOTICES = ["relogin", "badkey", "connect"];
 function noticePath(projectRoot, notice) {
-  return join5(projectRoot, ".augenta", `${notice}-required`);
+  return join6(projectRoot, ".augenta", `${notice}-required`);
 }
 function markAuthNotice(projectRoot, notice) {
   try {
@@ -961,7 +1002,7 @@ function takeAuthNotice(projectRoot) {
   let found;
   for (const notice of NOTICES) {
     const path = noticePath(projectRoot, notice);
-    if (!existsSync4(path))
+    if (!existsSync5(path))
       continue;
     found ??= notice;
     try {
@@ -1044,15 +1085,15 @@ function describeError(error) {
 
 // capture/shipper.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync5 } from "node:fs";
-import { dirname as dirname2, join as join6 } from "node:path";
+import { existsSync as existsSync6 } from "node:fs";
+import { dirname as dirname2, join as join7 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function shipperEntry() {
   const self = fileURLToPath2(import.meta.url);
   const ext = self.endsWith(".ts") ? ".ts" : ".mjs";
   const here = dirname2(self);
-  const sibling = join6(here, `ship${ext}`);
-  return existsSync5(sibling) ? sibling : join6(here, "..", "capture", `ship${ext}`);
+  const sibling = join7(here, `ship${ext}`);
+  return existsSync6(sibling) ? sibling : join7(here, "..", "capture", `ship${ext}`);
 }
 function spawnShipper(projectRoot) {
   try {
@@ -1071,7 +1112,7 @@ function spawnShipper(projectRoot) {
 // capture/memory.ts
 import { createHash as createHash2 } from "node:crypto";
 import {
-  existsSync as existsSync6,
+  existsSync as existsSync7,
   lstatSync,
   mkdirSync as mkdirSync5,
   readFileSync as readFileSync5,
@@ -1081,7 +1122,7 @@ import {
   writeFileSync as writeFileSync5
 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { basename, dirname as dirname3, extname, isAbsolute, join as join7, relative, resolve as resolve2, sep } from "node:path";
+import { basename, dirname as dirname3, extname, isAbsolute, join as join8, relative, resolve as resolve3, sep } from "node:path";
 
 // capture/scrub.ts
 var MASK = (label) => `[redacted:${label}]`;
@@ -1138,7 +1179,7 @@ function sha256(input) {
   return createHash2("sha256").update(input).digest("hex");
 }
 function memoryStatePath(projectRoot) {
-  return join7(projectRoot, ".augenta", "state", "memory.json");
+  return join8(projectRoot, ".augenta", "state", "memory.json");
 }
 function validEntry(value) {
   const e = value;
@@ -1162,8 +1203,8 @@ function readMemoryIndex(projectRoot) {
   }
 }
 function writeMemoryIndex(projectRoot, index) {
-  const stateDir = join7(ensureAugentaDir(projectRoot), "state");
-  const path = join7(stateDir, "memory.json");
+  const stateDir = join8(ensureAugentaDir(projectRoot), "state");
+  const path = join8(stateDir, "memory.json");
   const tmp = path + ".tmp";
   try {
     mkdirSync5(stateDir, { recursive: true });
@@ -1187,9 +1228,9 @@ function normalizeLogicalPath(path) {
 function scanClaudeMemory(transcriptPath) {
   if (!transcriptPath)
     return { complete: false, documents: [] };
-  const root = join7(dirname3(transcriptPath), "memory");
+  const root = join8(dirname3(transcriptPath), "memory");
   try {
-    if (!existsSync6(root) || !lstatSync(root).isDirectory())
+    if (!existsSync7(root) || !lstatSync(root).isDirectory())
       return { complete: false, documents: [] };
   } catch {
     return { complete: false, documents: [] };
@@ -1211,7 +1252,7 @@ function scanClaudeMemory(transcriptPath) {
       return;
     }
     for (const entry of entries) {
-      const path = join7(dir, entry.name);
+      const path = join8(dir, entry.name);
       if (entry.isSymbolicLink())
         continue;
       if (entry.isDirectory()) {
@@ -1257,8 +1298,8 @@ function scanClaudeMemory(transcriptPath) {
 function isScopedToProject(scope, projectRoot) {
   if (!isAbsolute(scope))
     return false;
-  const root = resolve2(projectRoot);
-  const target = resolve2(scope);
+  const root = resolve3(projectRoot);
+  const target = resolve3(scope);
   const rel = relative(root, target);
   return rel === "" || !rel.startsWith(".." + sep) && rel !== ".." && !isAbsolute(rel);
 }
@@ -1320,10 +1361,10 @@ function parseCodexTaskGroups(text, projectRoot) {
   return documents;
 }
 function scanCodexMemory(projectRoot, codexHome) {
-  const root = codexHome ?? process.env.CODEX_HOME ?? join7(homedir2(), ".codex");
-  const path = join7(root, "memories", "MEMORY.md");
+  const root = codexHome ?? process.env.CODEX_HOME ?? join8(homedir2(), ".codex");
+  const path = join8(root, "memories", "MEMORY.md");
   try {
-    if (!existsSync6(path))
+    if (!existsSync7(path))
       return { complete: false, documents: [] };
     const linkBefore = lstatSync(path);
     const before = statSync3(path);
@@ -1346,7 +1387,7 @@ function scanCodexMemory(projectRoot, codexHome) {
 function documentId(source, projectRoot, candidate) {
   const taskGroup = candidate.taskGroup;
   const discriminator = taskGroup ? `\x00${taskGroup.header}\x00${taskGroup.scope}` : "";
-  return sha256(`${source}\x00${resolve2(projectRoot)}\x00${candidate.sourcePath}${discriminator}`);
+  return sha256(`${source}\x00${resolve3(projectRoot)}\x00${candidate.sourcePath}${discriminator}`);
 }
 function revision(text, deleted) {
   return sha256(`${deleted ? "deleted" : "live"}\x00${text}`);
@@ -1566,9 +1607,9 @@ if (connectedRoot) {
   process.exit(0);
 }
 var home = process.env.AUGENTA_HOME ?? homedir3();
-var stateDir = join8(home, ".augenta", "state");
-var markerPath = join8(stateDir, "connect-prompted.json");
-var legacyMarkerPath = join8(stateDir, "init-prompted.json");
+var stateDir = join9(home, ".augenta", "state");
+var markerPath = join9(stateDir, "connect-prompted.json");
+var legacyMarkerPath = join9(stateDir, "init-prompted.json");
 function readMarkers(path) {
   try {
     const parsed = JSON.parse(readFileSync6(path, "utf8"));

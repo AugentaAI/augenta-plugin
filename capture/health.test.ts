@@ -11,6 +11,7 @@ afterEach(() => { for (const p of dirs.splice(0)) rmSync(p, { recursive: true, f
 test("unconfigured read is local, honest and creates no state", () => {
   const p = project();
   expect(captureHealth(p)).toMatchObject({ configured: false, enabled: false, dispatch: null, ingestion: "unverified" });
+  expect(captureHealth(p)).toMatchObject({ configuration: "missing", activityScope: "project", hostDispatch: "unverified" });
   expect(existsSync(join(p, ".augenta"))).toBe(false);
 });
 test("configuration is not proof of dispatch; health excludes secrets and identifiers", () => {
@@ -19,9 +20,15 @@ test("configuration is not proof of dispatch; health excludes secrets and identi
   expect(captureHealth(p)).toMatchObject({ configured: true, dispatch: null, nextStep: "check_host_hook_approval_and_activation" });
   recordHealth(p, "dispatch", "started"); recordHealth(p, "capture", "missing_transcript");
   const value = captureHealth(p);
-  expect(value).toMatchObject({ capture: { outcome: "missing_transcript" } });
+  expect(value).toMatchObject({ configuration: "valid", capture: { outcome: "missing_transcript" }, nextStep: "check_host_transcript_payload", hostDispatch: "unverified" });
   expect(JSON.stringify(value)).not.toContain("secret-canary");
   expect(JSON.stringify(value)).not.toContain(p);
+});
+
+test("invalid configuration does not masquerade as an unconnected or enabled project", () => {
+  const p = project(); mkdirSync(join(p, ".augenta"));
+  writeFileSync(join(p, ".augenta/config.json"), "invalid");
+  expect(captureHealth(p)).toMatchObject({ configuration: "invalid", configured: false, enabled: false });
 });
 test("acceptance counters survive compaction and later transport failure", async () => {
   const p = project(); const box = new Outbox(p);

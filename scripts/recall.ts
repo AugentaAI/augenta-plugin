@@ -929,7 +929,6 @@ if (isMain(import.meta.url)) {
        ancestor of the one the search began in. */
     const envelope = {
       ...payload,
-      ...(resolved.worktreeRedirect ? { worktreeRedirect: resolved.worktreeRedirect } : {}),
     };
     if (args.json) {
       console.log(JSON.stringify(envelope, null, 2));

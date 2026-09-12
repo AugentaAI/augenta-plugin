@@ -34,13 +34,65 @@ var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, 
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // capture/health.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join4 } from "node:path";
+import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join5 } from "node:path";
 import { randomUUID } from "node:crypto";
 
 // capture/config.ts
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join as join2 } from "node:path";
+
+// capture/project.ts
+import { execFileSync } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+function gitRevParse(cwd, arg) {
+  try {
+    const value = execFileSync("git", ["rev-parse", arg], {
+      cwd,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).toString().trim();
+    return value || undefined;
+  } catch {
+    return;
+  }
+}
+function resolveProjectRoot(cwd) {
+  if (!cwd)
+    return;
+  let dir;
+  try {
+    dir = realpathSync(cwd);
+  } catch {
+    return;
+  }
+  while (true) {
+    if (existsSync(join(dir, ".augenta", "config.json")))
+      return dir;
+    if (existsSync(join(dir, ".git")))
+      return;
+    const parent = dirname(dir);
+    if (parent === dir)
+      return;
+    dir = parent;
+  }
+}
+function resolveProject(args, cwd) {
+  if (args.project)
+    return { projectRoot: resolve(cwd, args.project) };
+  const configured = resolveProjectRoot(cwd);
+  if (configured)
+    return { projectRoot: configured };
+  const top = gitRevParse(cwd, "--show-toplevel");
+  if (!top)
+    return { projectRoot: cwd };
+  return { projectRoot: top };
+}
+function resolveTargetProject(args, cwd) {
+  return resolveProject(args, cwd).projectRoot;
+}
+
+// capture/config.ts
 var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
 var DEFAULT_CONTROL_URL = "https://augenta.ai";
 function parseDestinations(raw) {
@@ -64,21 +116,7 @@ function parseDestinations(raw) {
   return destinations;
 }
 function configPath(projectRoot) {
-  return join(projectRoot, ".augenta", "config.json");
-}
-function resolveProjectRoot(cwd) {
-  if (!cwd)
-    return;
-  let dir = cwd;
-  for (let i = 0;i < 30; i++) {
-    if (existsSync(configPath(dir)))
-      return dir;
-    const parent = dirname(dir);
-    if (parent === dir)
-      return;
-    dir = parent;
-  }
-  return;
+  return join2(projectRoot, ".augenta", "config.json");
 }
 function loadProjectConfig(projectRoot) {
   try {
@@ -162,16 +200,16 @@ function captureEnabled(cfg) {
 }
 
 // capture/augenta-dir.ts
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 import { chmodSync, mkdirSync, existsSync as existsSync2, writeFileSync } from "node:fs";
 function ensureAugentaDir(projectRoot) {
-  const dir = join2(projectRoot, ".augenta");
+  const dir = join3(projectRoot, ".augenta");
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
     try {
       chmodSync(dir, 448);
     } catch {}
-    const ignore = join2(dir, ".gitignore");
+    const ignore = join3(dir, ".gitignore");
     if (!existsSync2(ignore))
       writeFileSync(ignore, `*
 `);
@@ -180,7 +218,7 @@ function ensureAugentaDir(projectRoot) {
 }
 
 // capture/outbox.ts
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 import { mkdirSync as mkdirSync2, existsSync as existsSync3, readFileSync as readFileSync2, writeFileSync as writeFileSync2, appendFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 var NEWLINE = 10;
 var MAX_SPOOL_BYTES = 50 * 1024 * 1024;
@@ -213,9 +251,9 @@ class Outbox {
   maxDestLagBytes;
   constructor(projectRoot, opts = {}) {
     this.projectRoot = projectRoot;
-    this.dir = join3(projectRoot, ".augenta", "outbox");
-    this.spoolPath = join3(this.dir, "spool.jsonl");
-    this.cursorPath = join3(this.dir, "cursor.json");
+    this.dir = join4(projectRoot, ".augenta", "outbox");
+    this.spoolPath = join4(this.dir, "spool.jsonl");
+    this.cursorPath = join4(this.dir, "cursor.json");
     this.maxSpoolBytes = opts.maxSpoolBytes ?? MAX_SPOOL_BYTES;
     this.maxDestLagBytes = opts.maxDestLagBytes ?? MAX_DEST_LAG_BYTES;
   }
@@ -245,7 +283,7 @@ class Outbox {
 `);
   }
   dropEpisodePath() {
-    return join3(this.dir, "dropped.json");
+    return join4(this.dir, "dropped.json");
   }
   markDropped() {
     this.ensure();
@@ -261,7 +299,7 @@ class Outbox {
     } catch {}
   }
   discardNoticePath() {
-    return join3(this.dir, "discarded.json");
+    return join4(this.dir, "discarded.json");
   }
   markDiscarded(entries) {
     if (entries.length === 0)
@@ -482,7 +520,7 @@ var STAGES = ["dispatch", "capture", "delivery"];
 var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
 function read(projectRoot, stage) {
   try {
-    const s = JSON.parse(readFileSync3(join4(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    const s = JSON.parse(readFileSync3(join5(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
     if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
       return;
     return {
@@ -498,7 +536,7 @@ function read(projectRoot, stage) {
 }
 function recordHealth(projectRoot, stage, outcome, count = 0) {
   try {
-    const dir = join4(ensureAugentaDir(projectRoot), "state");
+    const dir = join5(ensureAugentaDir(projectRoot), "state");
     mkdirSync3(dir, { recursive: true });
     const old = read(projectRoot, stage);
     const at = new Date().toISOString();
@@ -510,7 +548,7 @@ function recordHealth(projectRoot, stage, outcome, count = 0) {
       successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
       ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
     };
-    const file = join4(dir, `health-${stage}.json`);
+    const file = join5(dir, `health-${stage}.json`);
     const tmp = `${file}.${randomUUID()}.tmp`;
     writeFileSync3(tmp, JSON.stringify(value), { mode: 384 });
     renameSync2(tmp, file);
@@ -522,27 +560,30 @@ function captureHealth(projectRoot) {
   return {
     configured: !!cfg,
     enabled: captureEnabled(cfg),
+    configuration: cfg ? "valid" : existsSync4(join5(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    activityScope: "project",
+    hostDispatch: "unverified",
     destinations: cfg?.authMode === "oauth" ? cfg.connectorIds.length : cfg ? 1 : 0,
     pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
     ...activity,
     hostApproval: "unknown",
     ingestion: "unverified",
-    nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch ? "check_host_hook_approval_and_activation" : "complete_a_turn_then_check_activity"
+    nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
   };
 }
 
 // capture/turn-cursor.ts
-import { join as join5, dirname as dirname2 } from "node:path";
-import { mkdirSync as mkdirSync4, existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync4, renameSync as renameSync3 } from "node:fs";
+import { join as join6, dirname as dirname2 } from "node:path";
+import { mkdirSync as mkdirSync4, existsSync as existsSync5, readFileSync as readFileSync4, writeFileSync as writeFileSync4, renameSync as renameSync3 } from "node:fs";
 class TurnState {
   path;
   projectRoot;
   constructor(projectRoot) {
     this.projectRoot = projectRoot;
-    this.path = join5(projectRoot, ".augenta", "state", "turn.json");
+    this.path = join6(projectRoot, ".augenta", "state", "turn.json");
   }
   readAll() {
-    if (!existsSync4(this.path))
+    if (!existsSync5(this.path))
       return {};
     try {
       const parsed = JSON.parse(readFileSync4(this.path, "utf8"));
@@ -573,8 +614,8 @@ class TurnState {
 
 // runtime/node.ts
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { realpathSync as realpathSync2 } from "node:fs";
+import { resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
 async function readStdin() {
   const chunks = [];
@@ -590,9 +631,9 @@ function isMain(metaUrl) {
   return canonical(fileURLToPath(metaUrl)) === canonical(entry);
 }
 function canonical(path) {
-  const absolute = resolve(path);
+  const absolute = resolve2(path);
   try {
-    return realpathSync.native(absolute);
+    return realpathSync2.native(absolute);
   } catch {
     return absolute;
   }

@@ -34,8 +34,8 @@ var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, 
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // capture/capture.ts
-import { existsSync as existsSync8, openSync as openSync2, fstatSync, readSync, closeSync as closeSync2 } from "node:fs";
-import { basename as basename2, dirname as dirname6, join as join10 } from "node:path";
+import { existsSync as existsSync9, openSync as openSync2, fstatSync, readSync, closeSync as closeSync2 } from "node:fs";
+import { basename as basename2, dirname as dirname6, join as join11 } from "node:path";
 
 // capture/sanitize.ts
 function normalizedKey(key) {
@@ -979,13 +979,65 @@ function captureLock(projectRoot) {
 }
 
 // capture/health.ts
-import { mkdirSync as mkdirSync5, readFileSync as readFileSync5, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join6 } from "node:path";
+import { existsSync as existsSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync5, renameSync as renameSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join7 } from "node:path";
 import { randomUUID } from "node:crypto";
 
 // capture/config.ts
-import { existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname2, join as join5 } from "node:path";
+import { readFileSync as readFileSync4 } from "node:fs";
+import { join as join6 } from "node:path";
+
+// capture/project.ts
+import { execFileSync } from "node:child_process";
+import { existsSync as existsSync4, realpathSync } from "node:fs";
+import { dirname as dirname2, join as join5, resolve } from "node:path";
+function gitRevParse(cwd, arg) {
+  try {
+    const value = execFileSync("git", ["rev-parse", arg], {
+      cwd,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).toString().trim();
+    return value || undefined;
+  } catch {
+    return;
+  }
+}
+function resolveProjectRoot(cwd) {
+  if (!cwd)
+    return;
+  let dir;
+  try {
+    dir = realpathSync(cwd);
+  } catch {
+    return;
+  }
+  while (true) {
+    if (existsSync4(join5(dir, ".augenta", "config.json")))
+      return dir;
+    if (existsSync4(join5(dir, ".git")))
+      return;
+    const parent = dirname2(dir);
+    if (parent === dir)
+      return;
+    dir = parent;
+  }
+}
+function resolveProject(args, cwd) {
+  if (args.project)
+    return { projectRoot: resolve(cwd, args.project) };
+  const configured = resolveProjectRoot(cwd);
+  if (configured)
+    return { projectRoot: configured };
+  const top = gitRevParse(cwd, "--show-toplevel");
+  if (!top)
+    return { projectRoot: cwd };
+  return { projectRoot: top };
+}
+function resolveTargetProject(args, cwd) {
+  return resolveProject(args, cwd).projectRoot;
+}
+
+// capture/config.ts
 var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
 var DEFAULT_CONTROL_URL = "https://augenta.ai";
 function parseDestinations(raw) {
@@ -1009,21 +1061,7 @@ function parseDestinations(raw) {
   return destinations;
 }
 function configPath(projectRoot) {
-  return join5(projectRoot, ".augenta", "config.json");
-}
-function resolveProjectRoot(cwd) {
-  if (!cwd)
-    return;
-  let dir = cwd;
-  for (let i = 0;i < 30; i++) {
-    if (existsSync4(configPath(dir)))
-      return dir;
-    const parent = dirname2(dir);
-    if (parent === dir)
-      return;
-    dir = parent;
-  }
-  return;
+  return join6(projectRoot, ".augenta", "config.json");
 }
 function loadProjectConfig(projectRoot) {
   try {
@@ -1111,7 +1149,7 @@ var STAGES = ["dispatch", "capture", "delivery"];
 var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
 function read(projectRoot, stage) {
   try {
-    const s = JSON.parse(readFileSync5(join6(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    const s = JSON.parse(readFileSync5(join7(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
     if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
       return;
     return {
@@ -1127,7 +1165,7 @@ function read(projectRoot, stage) {
 }
 function recordHealth(projectRoot, stage, outcome, count = 0) {
   try {
-    const dir = join6(ensureAugentaDir(projectRoot), "state");
+    const dir = join7(ensureAugentaDir(projectRoot), "state");
     mkdirSync5(dir, { recursive: true });
     const old = read(projectRoot, stage);
     const at = new Date().toISOString();
@@ -1139,7 +1177,7 @@ function recordHealth(projectRoot, stage, outcome, count = 0) {
       successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
       ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
     };
-    const file = join6(dir, `health-${stage}.json`);
+    const file = join7(dir, `health-${stage}.json`);
     const tmp = `${file}.${randomUUID()}.tmp`;
     writeFileSync5(tmp, JSON.stringify(value), { mode: 384 });
     renameSync3(tmp, file);
@@ -1151,27 +1189,30 @@ function captureHealth(projectRoot) {
   return {
     configured: !!cfg,
     enabled: captureEnabled(cfg),
+    configuration: cfg ? "valid" : existsSync5(join7(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    activityScope: "project",
+    hostDispatch: "unverified",
     destinations: cfg?.authMode === "oauth" ? cfg.connectorIds.length : cfg ? 1 : 0,
     pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
     ...activity,
     hostApproval: "unknown",
     ingestion: "unverified",
-    nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch ? "check_host_hook_approval_and_activation" : "complete_a_turn_then_check_activity"
+    nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
   };
 }
 
 // capture/turn-cursor.ts
-import { join as join7, dirname as dirname3 } from "node:path";
-import { mkdirSync as mkdirSync6, existsSync as existsSync5, readFileSync as readFileSync6, writeFileSync as writeFileSync6, renameSync as renameSync4 } from "node:fs";
+import { join as join8, dirname as dirname3 } from "node:path";
+import { mkdirSync as mkdirSync6, existsSync as existsSync6, readFileSync as readFileSync6, writeFileSync as writeFileSync6, renameSync as renameSync4 } from "node:fs";
 class TurnState {
   path;
   projectRoot;
   constructor(projectRoot) {
     this.projectRoot = projectRoot;
-    this.path = join7(projectRoot, ".augenta", "state", "turn.json");
+    this.path = join8(projectRoot, ".augenta", "state", "turn.json");
   }
   readAll() {
-    if (!existsSync5(this.path))
+    if (!existsSync6(this.path))
       return {};
     try {
       const parsed = JSON.parse(readFileSync6(this.path, "utf8"));
@@ -1203,7 +1244,7 @@ class TurnState {
 // capture/memory.ts
 import { createHash } from "node:crypto";
 import {
-  existsSync as existsSync6,
+  existsSync as existsSync7,
   lstatSync,
   mkdirSync as mkdirSync7,
   readFileSync as readFileSync7,
@@ -1213,7 +1254,7 @@ import {
   writeFileSync as writeFileSync7
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname as dirname4, extname, isAbsolute, join as join8, relative, resolve, sep } from "node:path";
+import { basename, dirname as dirname4, extname, isAbsolute, join as join9, relative, resolve as resolve2, sep } from "node:path";
 var MAX_DOCUMENT_EXPERIENCE_BYTES = 512 * 1024;
 function sameSnapshot(before, after) {
   return before.dev === after.dev && before.ino === after.ino && before.mode === after.mode && before.size === after.size && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs;
@@ -1222,7 +1263,7 @@ function sha256(input) {
   return createHash("sha256").update(input).digest("hex");
 }
 function memoryStatePath(projectRoot) {
-  return join8(projectRoot, ".augenta", "state", "memory.json");
+  return join9(projectRoot, ".augenta", "state", "memory.json");
 }
 function validEntry(value) {
   const e = value;
@@ -1246,8 +1287,8 @@ function readMemoryIndex(projectRoot) {
   }
 }
 function writeMemoryIndex(projectRoot, index) {
-  const stateDir = join8(ensureAugentaDir(projectRoot), "state");
-  const path = join8(stateDir, "memory.json");
+  const stateDir = join9(ensureAugentaDir(projectRoot), "state");
+  const path = join9(stateDir, "memory.json");
   const tmp = path + ".tmp";
   try {
     mkdirSync7(stateDir, { recursive: true });
@@ -1271,9 +1312,9 @@ function normalizeLogicalPath(path) {
 function scanClaudeMemory(transcriptPath) {
   if (!transcriptPath)
     return { complete: false, documents: [] };
-  const root = join8(dirname4(transcriptPath), "memory");
+  const root = join9(dirname4(transcriptPath), "memory");
   try {
-    if (!existsSync6(root) || !lstatSync(root).isDirectory())
+    if (!existsSync7(root) || !lstatSync(root).isDirectory())
       return { complete: false, documents: [] };
   } catch {
     return { complete: false, documents: [] };
@@ -1295,7 +1336,7 @@ function scanClaudeMemory(transcriptPath) {
       return;
     }
     for (const entry of entries) {
-      const path = join8(dir, entry.name);
+      const path = join9(dir, entry.name);
       if (entry.isSymbolicLink())
         continue;
       if (entry.isDirectory()) {
@@ -1341,8 +1382,8 @@ function scanClaudeMemory(transcriptPath) {
 function isScopedToProject(scope, projectRoot) {
   if (!isAbsolute(scope))
     return false;
-  const root = resolve(projectRoot);
-  const target = resolve(scope);
+  const root = resolve2(projectRoot);
+  const target = resolve2(scope);
   const rel = relative(root, target);
   return rel === "" || !rel.startsWith(".." + sep) && rel !== ".." && !isAbsolute(rel);
 }
@@ -1404,10 +1445,10 @@ function parseCodexTaskGroups(text, projectRoot) {
   return documents;
 }
 function scanCodexMemory(projectRoot, codexHome) {
-  const root = codexHome ?? process.env.CODEX_HOME ?? join8(homedir(), ".codex");
-  const path = join8(root, "memories", "MEMORY.md");
+  const root = codexHome ?? process.env.CODEX_HOME ?? join9(homedir(), ".codex");
+  const path = join9(root, "memories", "MEMORY.md");
   try {
-    if (!existsSync6(path))
+    if (!existsSync7(path))
       return { complete: false, documents: [] };
     const linkBefore = lstatSync(path);
     const before = statSync3(path);
@@ -1430,7 +1471,7 @@ function scanCodexMemory(projectRoot, codexHome) {
 function documentId(source, projectRoot, candidate) {
   const taskGroup = candidate.taskGroup;
   const discriminator = taskGroup ? `\x00${taskGroup.header}\x00${taskGroup.scope}` : "";
-  return sha256(`${source}\x00${resolve(projectRoot)}\x00${candidate.sourcePath}${discriminator}`);
+  return sha256(`${source}\x00${resolve2(projectRoot)}\x00${candidate.sourcePath}${discriminator}`);
 }
 function revision(text, deleted) {
   return sha256(`${deleted ? "deleted" : "live"}\x00${text}`);
@@ -1597,15 +1638,15 @@ function captureAgentMemory(opts) {
 
 // capture/shipper.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync7 } from "node:fs";
-import { dirname as dirname5, join as join9 } from "node:path";
+import { existsSync as existsSync8 } from "node:fs";
+import { dirname as dirname5, join as join10 } from "node:path";
 import { fileURLToPath } from "node:url";
 function shipperEntry() {
   const self = fileURLToPath(import.meta.url);
   const ext = self.endsWith(".ts") ? ".ts" : ".mjs";
   const here = dirname5(self);
-  const sibling = join9(here, `ship${ext}`);
-  return existsSync7(sibling) ? sibling : join9(here, "..", "capture", `ship${ext}`);
+  const sibling = join10(here, `ship${ext}`);
+  return existsSync8(sibling) ? sibling : join10(here, "..", "capture", `ship${ext}`);
 }
 function spawnShipper(projectRoot) {
   try {
@@ -1651,8 +1692,8 @@ function sniffHarness(line) {
 
 // runtime/node.ts
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { resolve as resolve2 } from "node:path";
+import { realpathSync as realpathSync2 } from "node:fs";
+import { resolve as resolve3 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 async function readStdin() {
   const chunks = [];
@@ -1668,9 +1709,9 @@ function isMain(metaUrl) {
   return canonical(fileURLToPath2(metaUrl)) === canonical(entry);
 }
 function canonical(path) {
-  const absolute = resolve2(path);
+  const absolute = resolve3(path);
   try {
-    return realpathSync.native(absolute);
+    return realpathSync2.native(absolute);
   } catch {
     return absolute;
   }
@@ -1757,12 +1798,12 @@ function resolveCaptureTarget(payload) {
   const agentId = payload.agent_id;
   const agentType = payload.agent_type;
   const supplied = payload.agent_transcript_path;
-  if (supplied && existsSync8(supplied))
+  if (supplied && existsSync9(supplied))
     return { transcriptPath: supplied, agentId, agentType };
   if (!sessionTranscript || !agentId)
     return { transcriptPath: undefined };
-  const derived = join10(dirname6(sessionTranscript), basename2(sessionTranscript, ".jsonl"), "subagents", `agent-${agentId}.jsonl`);
-  return existsSync8(derived) ? { transcriptPath: derived, agentId, agentType } : { transcriptPath: undefined };
+  const derived = join11(dirname6(sessionTranscript), basename2(sessionTranscript, ".jsonl"), "subagents", `agent-${agentId}.jsonl`);
+  return existsSync9(derived) ? { transcriptPath: derived, agentId, agentType } : { transcriptPath: undefined };
 }
 function captureUnderLock(payload, opts = {}) {
   const projectRoot = opts.projectRoot ?? resolveProjectRoot(payload.cwd);
@@ -1790,7 +1831,7 @@ function captureUnderLock(payload, opts = {}) {
       spawnShipper(projectRoot);
     return { appended, flushed: flush };
   };
-  if (!transcriptPath || !existsSync8(transcriptPath)) {
+  if (!transcriptPath || !existsSync9(transcriptPath)) {
     recordHealth(projectRoot, "capture", "missing_transcript");
     return finish(0);
   }

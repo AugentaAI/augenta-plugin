@@ -53,11 +53,13 @@ Capture checks for `.augenta/config.json` in the working folder and its
 parents. With no readable config, it saves and sends nothing. Session start
 can offer to connect an unconnected project once.
 
-Connect and recall also handle Git worktrees: by default, their commands use
-the main checkout and report that choice. Capture only checks parent folders;
-it does not follow that redirect. A worktree outside a connected checkout
-does not gain capture just because the main checkout is connected. See
-[project resolution](../capture/project.ts) and [config lookup](../capture/config.ts).
+Connect, recall, capture and health use the same local config lookup. It stops
+at a Git checkout/worktree boundary, including worktrees nested below another
+checkout. Connect defaults to the current checkout, never its main checkout.
+Each worktree must be connected explicitly; sibling and main-checkout consent
+is not inherited. The nearest config wins, including an invalid config (which
+requires reconnecting rather than falling through to another project). An
+explicit `--project` targets that directory. See [project resolution](../capture/project.ts).
 
 ## 2. Save work locally
 

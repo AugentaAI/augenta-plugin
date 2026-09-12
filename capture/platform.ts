@@ -31,6 +31,7 @@ export interface Connector {
   workspaceId: string;
   orgId: string;
   _etag?: string;
+  harness?: string;
 }
 
 export class AugentaRequestError extends Error {

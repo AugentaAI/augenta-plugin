@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -105,6 +105,34 @@ cat
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain("Node.js 20 or newer was not found");
       expect(result.stderr).toContain("AUGENTA_NODE");
+    });
+
+    test("symlinked folders use the physical checkout for missing-runtime diagnostics", () => {
+      const root = mkdtempSync(join(tmpdir(), "augenta-node-runner-project-"));
+      temporaryDirectories.push(root);
+      const main = join(root, "main");
+      const worktree = join(root, "worktree");
+      const deep = join(worktree, "src");
+      mkdirSync(join(main, ".augenta"), { recursive: true });
+      writeFileSync(join(main, ".augenta/config.json"), "{}");
+      mkdirSync(deep, { recursive: true });
+      writeFileSync(join(worktree, ".git"), "gitdir: /fixture");
+      const alias = join(main, "linked-src"); symlinkSync(deep, alias, "dir");
+      expect(runWithout(JSON.stringify({ cwd: alias }))).toEqual({ exitCode: 0, stderr: "" });
+      mkdirSync(join(worktree, ".augenta"));
+      writeFileSync(join(worktree, ".augenta/config.json"), "{}");
+      expect(runWithout(JSON.stringify({ cwd: alias })).exitCode).toBe(1);
+    });
+
+    test("diagnoses nested folders but stops at another checkout boundary", () => {
+      const project = mkdtempSync(join(tmpdir(), "augenta-node-runner-project-"));
+      temporaryDirectories.push(project);
+      mkdirSync(join(project, ".augenta"));
+      writeFileSync(join(project, ".augenta/config.json"), "{}");
+      const nested = join(project, "nested"); mkdirSync(nested);
+      expect(runWithout(JSON.stringify({ cwd: nested })).exitCode).toBe(1);
+      writeFileSync(join(nested, ".git"), "gitdir: /fixture");
+      expect(runWithout(JSON.stringify({ cwd: nested }))).toEqual({ exitCode: 0, stderr: "" });
     });
   });
 });

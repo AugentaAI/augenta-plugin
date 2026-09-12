@@ -4,26 +4,40 @@
  * The invocation-only trust flag applies only to the repository's vetted hooks
  * in a disposable home; no user's trust records or installed cache are changed.
  */
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
-import type { CaptureEvent, Experience } from "../capture/event";
+import type { Experience } from "../capture/event";
+import { execFileSync } from "node:child_process";
 
 const cli = process.argv[2];
-if (!cli) throw new Error("Usage: bun scripts/codex-lifecycle-e2e.ts /absolute/path/to/codex");
+if (!cli) throw new Error("Usage: bun scripts/codex-lifecycle-e2e.ts /absolute/path/to/codex [--worktree]");
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const root = mkdtempSync(join(tmpdir(), "augenta-host-lifecycle-"));
+const root = realpathSync(mkdtempSync(join(tmpdir(), "augenta-host-lifecycle-")));
 const home = join(root, "home");
+const main = join(root, "main");
+const worktreeMode = process.argv.includes("--worktree");
 const project = join(root, "project");
-mkdirSync(home); mkdirSync(project); mkdirSync(join(project, ".augenta"));
+mkdirSync(home); mkdirSync(main);
+if (worktreeMode) {
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: main, stdio: "pipe" });
+  git("init", "-q");
+  git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "fixture");
+  git("worktree", "add", "--detach", project);
+  // Main's consent must not cause an unconnected external worktree to capture.
+  mkdirSync(join(main, ".augenta"));
+  writeFileSync(join(main, ".augenta/config.json"), JSON.stringify({ authMode: "api-key", apiKey: "main-fixture" }));
+} else mkdirSync(project);
 const received: Experience[] = [];
 let modelCalls = 0;
 let offline = false;
 let toolNext = false;
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
   const path = new URL(req.url).pathname;
+  if (path === "/v1/connectors") return Response.json({ connectors: [{ id: "fixture-connector", orgId: "fixture-org",
+    workspaceId: "fixture-workspace", kind: "agent", status: "active", direction: "inbound" }] });
   if (path === "/v1/experiences") {
     if (offline) return new Response("retry", { status: 503 });
     received.push(...(await req.json() as { experiences: Experience[] }).experiences);
@@ -50,8 +64,8 @@ const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: home, 
   AUGENTA_HOME: join(home, ".augenta"), AUGENTA_API_URL: server.url.origin };
 const flags = ["-c", 'model_provider="fixture"', "-c", 'model="fixture-model"', "-c",
   `model_providers.fixture={name="Fixture",base_url="${server.url.origin}/v1",wire_api="responses",requires_openai_auth=false}`];
-async function run(args: string[]) {
-  const child = Bun.spawn([cli!, ...args], { env, cwd: project, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+async function run(args: string[], binary = cli!) {
+  const child = Bun.spawn([binary, ...args], { env, cwd: project, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const timer = setTimeout(() => child.kill(), 30_000);
   try {
     const [out, err, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -73,19 +87,22 @@ async function until(predicate: () => boolean) {
   while (!predicate() && Date.now() < deadline) await Bun.sleep(50);
   assert(predicate(), "automatic hook/shipper activity timed out");
 }
-function connect() {
-  writeFileSync(join(project, ".augenta/config.json"), JSON.stringify({ authMode: "api-key", apiKey: "fixture-only",
-    endpoint: server.url.origin, captureSince: new Date().toISOString() }));
-}
 try {
   const version = (await run(["--version"])).trim();
   await run(["plugin", "marketplace", "add", repo]);
-  await run(["plugin", "add", "augenta@augenta"]);
+  const installed = JSON.parse(await run(["plugin", "add", "augenta@augenta", "--json"]));
+  const connectBundle = join(installed.installedPath, "dist/scripts/connect.mjs");
   // Connecting during an existing task must exclude its unconsented history.
   const historical = await turn();
   const historicalFinal = `lifecycle final ${modelCalls}`;
   assert(!existsSync(join(project, ".augenta/state/capture.json")));
-  connect(); toolNext = true;
+  // Run the installed connection entrypoint from the actual cwd, with no
+  // --project override to hide a worktree-resolution regression. The key is a
+  // disposable synthetic fixture; no real credential is involved.
+  await run([connectBundle, "--api-key", "fixture-only", "--endpoint", server.url.origin], "node");
+  assert(existsSync(join(project, ".augenta/config.json")));
+  if (worktreeMode) assert(!existsSync(join(main, ".augenta/state/capture.json")));
+  toolNext = true;
   await turn(historical);
   const first = `lifecycle final ${modelCalls}`;
   await until(() => allSteps().some(e => e.text === first));
@@ -121,11 +138,11 @@ try {
   // Retry does not duplicate accepted step identities in the fixture receiver.
   const identities = allSteps().map(e => `${e.sid}:${e.seq}`);
   assert.equal(new Set(identities).size, identities.length);
-  const health = JSON.parse(await new Response(Bun.spawn(["node", join(repo, "dist/scripts/connect.mjs"),
-    "--project", project, "--json", "--health"], { env, stdout: "pipe", stderr: "pipe" }).stdout).text());
+  const health = JSON.parse(await run([connectBundle, "--json", "--health"], "node"));
+  assert.equal(health.projectRoot, project);
   assert.equal(health.enabled, false);
   assert(health.delivery.successes > 0);
-  console.log(JSON.stringify({ version, marketplaceInstalled: true, realHostDispatch: true,
+  console.log(JSON.stringify({ version, marketplaceInstalled: true, realHostDispatch: true, worktree: worktreeMode,
     freshTask: "pass", midTaskConnection: "pass", twoTurnsWithFinals: "pass", offlineRetry: "pass",
     disabled: "pass", duplicateSteps: 0, desktopApproval: "not tested", hostedIngestion: "not tested" }, null, 2));
 } finally {

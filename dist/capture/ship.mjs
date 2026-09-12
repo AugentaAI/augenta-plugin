@@ -4550,8 +4550,8 @@ var require_promise = __commonJS((exports) => {
     _resolve;
     _reject;
     constructor() {
-      this._promise = new Promise((resolve2, reject) => {
-        this._resolve = resolve2;
+      this._promise = new Promise((resolve3, reject) => {
+        this._resolve = resolve3;
         this._reject = reject;
       });
     }
@@ -4639,9 +4639,9 @@ var require_exporter = __commonJS((exports) => {
   var api_1 = require_src();
   var suppress_tracing_1 = require_suppress_tracing();
   function _export(exporter, arg) {
-    return new Promise((resolve2) => {
+    return new Promise((resolve3) => {
       api_1.context.with((0, suppress_tracing_1.suppressTracing)(api_1.context.active()), () => {
-        exporter.export(arg, resolve2);
+        exporter.export(arg, resolve3);
       });
     });
   }
@@ -11268,7 +11268,7 @@ var require_http_transport_utils = __commonJS((exports) => {
   var DEFAULT_USER_AGENT = `OTel-OTLP-Exporter-JavaScript/${version_1.VERSION}`;
   exports.MAX_RESPONSE_BODY_SIZE = 4 * 1024 * 1024;
   function sendWithHttp(request, url, headers, compression, userAgent, agent, data, timeoutMillis) {
-    return new Promise((resolve2) => {
+    return new Promise((resolve3) => {
       const parsedUrl = new URL(url);
       if (userAgent) {
         headers["User-Agent"] = `${userAgent} ${DEFAULT_USER_AGENT}`;
@@ -11287,7 +11287,7 @@ var require_http_transport_utils = __commonJS((exports) => {
           responseSize += chunk.length;
           if (responseSize > exports.MAX_RESPONSE_BODY_SIZE) {
             const sizeError = new Error(`OTLP export response body exceeded size limit of ${exports.MAX_RESPONSE_BODY_SIZE} bytes`);
-            resolve2({ status: "failure", error: sizeError });
+            resolve3({ status: "failure", error: sizeError });
             res.destroy();
             return;
           }
@@ -11295,18 +11295,18 @@ var require_http_transport_utils = __commonJS((exports) => {
         });
         res.on("end", () => {
           if (res.statusCode && res.statusCode <= 299) {
-            resolve2({
+            resolve3({
               status: "success",
               data: Buffer.concat(responseData)
             });
           } else if (res.statusCode && (0, is_export_retryable_1.isExportHTTPErrorRetryable)(res.statusCode)) {
-            resolve2({
+            resolve3({
               status: "retryable",
               retryInMillis: (0, is_export_retryable_1.parseRetryAfterToMills)(res.headers["retry-after"])
             });
           } else {
             const error = new types_1.OTLPExporterError(res.statusMessage, res.statusCode, Buffer.concat(responseData).toString());
-            resolve2({
+            resolve3({
               status: "failure",
               error
             });
@@ -11314,17 +11314,17 @@ var require_http_transport_utils = __commonJS((exports) => {
         });
         res.on("error", (error) => {
           if (res.statusCode && res.statusCode <= 299) {
-            resolve2({
+            resolve3({
               status: "success"
             });
           } else if (res.statusCode && (0, is_export_retryable_1.isExportHTTPErrorRetryable)(res.statusCode)) {
-            resolve2({
+            resolve3({
               status: "retryable",
               error,
               retryInMillis: (0, is_export_retryable_1.parseRetryAfterToMills)(res.headers["retry-after"])
             });
           } else {
-            resolve2({
+            resolve3({
               status: "failure",
               error
             });
@@ -11333,26 +11333,26 @@ var require_http_transport_utils = __commonJS((exports) => {
       });
       req.setTimeout(timeoutMillis, () => {
         req.destroy();
-        resolve2({
+        resolve3({
           status: "retryable",
           error: new Error("Request timed out")
         });
       });
       req.on("error", (error) => {
         if (isHttpTransportNetworkErrorRetryable(error)) {
-          resolve2({
+          resolve3({
             status: "retryable",
             error
           });
         } else {
-          resolve2({
+          resolve3({
             status: "failure",
             error
           });
         }
       });
       compressAndSend(req, compression, data, (error) => {
-        resolve2({
+        resolve3({
           status: "failure",
           error
         });
@@ -11455,9 +11455,9 @@ var require_retrying_transport = __commonJS((exports) => {
       this._transport = transport;
     }
     retry(data, timeoutMillis, inMillis) {
-      return new Promise((resolve2, reject) => {
+      return new Promise((resolve3, reject) => {
         setTimeout(() => {
-          this._transport.send(data, timeoutMillis).then(resolve2, reject);
+          this._transport.send(data, timeoutMillis).then(resolve3, reject);
         }, inMillis);
       });
     }
@@ -12960,8 +12960,8 @@ var require_BatchLogRecordProcessorBase = __commonJS((exports) => {
     _metrics;
     _exportScheduledResolve;
     constructor(exporter, logRecords, exportTimeoutMillis, metrics) {
-      this._exportScheduledPromise = new Promise((resolve2) => {
-        this._exportScheduledResolve = resolve2;
+      this._exportScheduledPromise = new Promise((resolve3) => {
+        this._exportScheduledResolve = resolve3;
       });
       this._exportCompleted = this._executeExport(exporter, logRecords, exportTimeoutMillis);
       this._metrics = metrics;
@@ -12984,7 +12984,7 @@ var require_BatchLogRecordProcessorBase = __commonJS((exports) => {
       }
     }
     async _exportWithTimeout(exporter, logRecords, exportTimeoutMillis) {
-      return new Promise((resolve2, reject) => {
+      return new Promise((resolve3, reject) => {
         const timer = setTimeout(() => {
           reject(new Error("Timeout"));
         }, exportTimeoutMillis);
@@ -12992,7 +12992,7 @@ var require_BatchLogRecordProcessorBase = __commonJS((exports) => {
           this._metrics.finishLogs(logRecords.length, result.error);
           clearTimeout(timer);
           if (result.code === core_1.ExportResultCode.SUCCESS) {
-            resolve2();
+            resolve3();
           } else {
             reject(result.error ?? new Error("BatchLogRecordProcessor: log record export failed"));
           }
@@ -14160,12 +14160,12 @@ var require_MultiSpanProcessor = __commonJS((exports) => {
       for (const spanProcessor of this._spanProcessors) {
         promises.push(spanProcessor.forceFlush());
       }
-      return new Promise((resolve2) => {
+      return new Promise((resolve3) => {
         Promise.all(promises).then(() => {
-          resolve2();
+          resolve3();
         }).catch((error) => {
           (0, core_1.globalErrorHandler)(error || new Error("MultiSpanProcessor: forceFlush failed"));
-          resolve2();
+          resolve3();
         });
       });
     }
@@ -14191,9 +14191,9 @@ var require_MultiSpanProcessor = __commonJS((exports) => {
       for (const spanProcessor of this._spanProcessors) {
         promises.push(spanProcessor.shutdown());
       }
-      return new Promise((resolve2, reject) => {
+      return new Promise((resolve3, reject) => {
         Promise.all(promises).then(() => {
-          resolve2();
+          resolve3();
         }, reject);
       });
     }
@@ -14439,14 +14439,14 @@ var require_BatchSpanProcessorBase = __commonJS((exports) => {
       this._maybeStartTimer();
     }
     _flushAll() {
-      return new Promise((resolve2, reject) => {
+      return new Promise((resolve3, reject) => {
         const promises = [];
         const count = Math.ceil(this._finishedSpans.length / this._maxExportBatchSize);
         for (let i = 0, j = count;i < j; i++) {
           promises.push(this._flushOneBatch());
         }
         Promise.all(promises).then(() => {
-          resolve2();
+          resolve3();
         }).catch(reject);
       });
     }
@@ -14455,7 +14455,7 @@ var require_BatchSpanProcessorBase = __commonJS((exports) => {
       if (this._finishedSpans.length === 0) {
         return Promise.resolve();
       }
-      return new Promise((resolve2, reject) => {
+      return new Promise((resolve3, reject) => {
         const timer = setTimeout(() => {
           reject(new Error("Timeout"));
         }, this._exportTimeoutMillis);
@@ -14471,7 +14471,7 @@ var require_BatchSpanProcessorBase = __commonJS((exports) => {
             clearTimeout(timer);
             this._metrics.finishSpans(spans.length, result.error);
             if (result.code === core_1.ExportResultCode.SUCCESS) {
-              resolve2();
+              resolve3();
             } else {
               reject(result.error ?? new Error("BatchSpanProcessor: span export failed"));
             }
@@ -14663,32 +14663,32 @@ var require_TracerProvider = __commonJS((exports) => {
     forceFlush(options) {
       const timeout = options?.timeoutMillis ?? this._forceFlushTimeoutMillis;
       const promises = this._activeSpanProcessor["_spanProcessors"].map((spanProcessor) => {
-        return new Promise((resolve2) => {
+        return new Promise((resolve3) => {
           let state;
           const timeoutInterval = setTimeout(() => {
-            resolve2(new Error(`Span processor did not completed within timeout period of ${timeout} ms`));
+            resolve3(new Error(`Span processor did not completed within timeout period of ${timeout} ms`));
             state = ForceFlushState.timeout;
           }, timeout);
           spanProcessor.forceFlush().then(() => {
             clearTimeout(timeoutInterval);
             if (state !== ForceFlushState.timeout) {
               state = ForceFlushState.resolved;
-              resolve2(state);
+              resolve3(state);
             }
           }).catch((error) => {
             clearTimeout(timeoutInterval);
             state = ForceFlushState.error;
-            resolve2(error);
+            resolve3(error);
           });
         });
       });
-      return new Promise((resolve2, reject) => {
+      return new Promise((resolve3, reject) => {
         Promise.all(promises).then((results) => {
           const errors = results.filter((result) => result !== ForceFlushState.resolved);
           if (errors.length > 0) {
             reject(errors);
           } else {
-            resolve2();
+            resolve3();
           }
         }).catch((error) => reject([error]));
       });
@@ -15321,13 +15321,65 @@ var require_src15 = __commonJS((exports) => {
 });
 
 // capture/health.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join4 } from "node:path";
+import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join5 } from "node:path";
 import { randomUUID } from "node:crypto";
 
 // capture/config.ts
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join as join2 } from "node:path";
+
+// capture/project.ts
+import { execFileSync } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+function gitRevParse(cwd, arg) {
+  try {
+    const value = execFileSync("git", ["rev-parse", arg], {
+      cwd,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).toString().trim();
+    return value || undefined;
+  } catch {
+    return;
+  }
+}
+function resolveProjectRoot(cwd) {
+  if (!cwd)
+    return;
+  let dir;
+  try {
+    dir = realpathSync(cwd);
+  } catch {
+    return;
+  }
+  while (true) {
+    if (existsSync(join(dir, ".augenta", "config.json")))
+      return dir;
+    if (existsSync(join(dir, ".git")))
+      return;
+    const parent = dirname(dir);
+    if (parent === dir)
+      return;
+    dir = parent;
+  }
+}
+function resolveProject(args, cwd) {
+  if (args.project)
+    return { projectRoot: resolve(cwd, args.project) };
+  const configured = resolveProjectRoot(cwd);
+  if (configured)
+    return { projectRoot: configured };
+  const top = gitRevParse(cwd, "--show-toplevel");
+  if (!top)
+    return { projectRoot: cwd };
+  return { projectRoot: top };
+}
+function resolveTargetProject(args, cwd) {
+  return resolveProject(args, cwd).projectRoot;
+}
+
+// capture/config.ts
 var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
 var DEFAULT_CONTROL_URL = "https://augenta.ai";
 function parseDestinations(raw) {
@@ -15351,21 +15403,7 @@ function parseDestinations(raw) {
   return destinations;
 }
 function configPath(projectRoot) {
-  return join(projectRoot, ".augenta", "config.json");
-}
-function resolveProjectRoot(cwd) {
-  if (!cwd)
-    return;
-  let dir = cwd;
-  for (let i = 0;i < 30; i++) {
-    if (existsSync(configPath(dir)))
-      return dir;
-    const parent = dirname(dir);
-    if (parent === dir)
-      return;
-    dir = parent;
-  }
-  return;
+  return join2(projectRoot, ".augenta", "config.json");
 }
 function loadProjectConfig(projectRoot) {
   try {
@@ -15449,16 +15487,16 @@ function captureEnabled(cfg) {
 }
 
 // capture/augenta-dir.ts
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 import { chmodSync, mkdirSync, existsSync as existsSync2, writeFileSync } from "node:fs";
 function ensureAugentaDir(projectRoot) {
-  const dir = join2(projectRoot, ".augenta");
+  const dir = join3(projectRoot, ".augenta");
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
     try {
       chmodSync(dir, 448);
     } catch {}
-    const ignore = join2(dir, ".gitignore");
+    const ignore = join3(dir, ".gitignore");
     if (!existsSync2(ignore))
       writeFileSync(ignore, `*
 `);
@@ -15467,7 +15505,7 @@ function ensureAugentaDir(projectRoot) {
 }
 
 // capture/outbox.ts
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 import { mkdirSync as mkdirSync2, existsSync as existsSync3, readFileSync as readFileSync2, writeFileSync as writeFileSync2, appendFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 var NEWLINE = 10;
 var MAX_SPOOL_BYTES = 50 * 1024 * 1024;
@@ -15500,9 +15538,9 @@ class Outbox {
   maxDestLagBytes;
   constructor(projectRoot, opts = {}) {
     this.projectRoot = projectRoot;
-    this.dir = join3(projectRoot, ".augenta", "outbox");
-    this.spoolPath = join3(this.dir, "spool.jsonl");
-    this.cursorPath = join3(this.dir, "cursor.json");
+    this.dir = join4(projectRoot, ".augenta", "outbox");
+    this.spoolPath = join4(this.dir, "spool.jsonl");
+    this.cursorPath = join4(this.dir, "cursor.json");
     this.maxSpoolBytes = opts.maxSpoolBytes ?? MAX_SPOOL_BYTES;
     this.maxDestLagBytes = opts.maxDestLagBytes ?? MAX_DEST_LAG_BYTES;
   }
@@ -15532,7 +15570,7 @@ class Outbox {
 `);
   }
   dropEpisodePath() {
-    return join3(this.dir, "dropped.json");
+    return join4(this.dir, "dropped.json");
   }
   markDropped() {
     this.ensure();
@@ -15548,7 +15586,7 @@ class Outbox {
     } catch {}
   }
   discardNoticePath() {
-    return join3(this.dir, "discarded.json");
+    return join4(this.dir, "discarded.json");
   }
   markDiscarded(entries) {
     if (entries.length === 0)
@@ -15769,7 +15807,7 @@ var STAGES = ["dispatch", "capture", "delivery"];
 var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
 function read(projectRoot, stage) {
   try {
-    const s = JSON.parse(readFileSync3(join4(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    const s = JSON.parse(readFileSync3(join5(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
     if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
       return;
     return {
@@ -15785,7 +15823,7 @@ function read(projectRoot, stage) {
 }
 function recordHealth(projectRoot, stage, outcome, count = 0) {
   try {
-    const dir = join4(ensureAugentaDir(projectRoot), "state");
+    const dir = join5(ensureAugentaDir(projectRoot), "state");
     mkdirSync3(dir, { recursive: true });
     const old = read(projectRoot, stage);
     const at = new Date().toISOString();
@@ -15797,7 +15835,7 @@ function recordHealth(projectRoot, stage, outcome, count = 0) {
       successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
       ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
     };
-    const file = join4(dir, `health-${stage}.json`);
+    const file = join5(dir, `health-${stage}.json`);
     const tmp = `${file}.${randomUUID()}.tmp`;
     writeFileSync3(tmp, JSON.stringify(value), { mode: 384 });
     renameSync2(tmp, file);
@@ -15809,19 +15847,22 @@ function captureHealth(projectRoot) {
   return {
     configured: !!cfg,
     enabled: captureEnabled(cfg),
+    configuration: cfg ? "valid" : existsSync4(join5(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    activityScope: "project",
+    hostDispatch: "unverified",
     destinations: cfg?.authMode === "oauth" ? cfg.connectorIds.length : cfg ? 1 : 0,
     pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
     ...activity,
     hostApproval: "unknown",
     ingestion: "unverified",
-    nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch ? "check_host_hook_approval_and_activation" : "complete_a_turn_then_check_activity"
+    nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
   };
 }
 
 // runtime/node.ts
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { realpathSync as realpathSync2 } from "node:fs";
+import { resolve as resolve2 } from "node:path";
 import { fileURLToPath } from "node:url";
 async function readStdin() {
   const chunks = [];
@@ -15837,9 +15878,9 @@ function isMain(metaUrl) {
   return canonical(fileURLToPath(metaUrl)) === canonical(entry);
 }
 function canonical(path) {
-  const absolute = resolve(path);
+  const absolute = resolve2(path);
   try {
-    return realpathSync.native(absolute);
+    return realpathSync2.native(absolute);
   } catch {
     return absolute;
   }
@@ -15865,13 +15906,13 @@ function isHttpsUrl(value) {
 var PLUGIN_VERSION = "0.10.2";
 
 // capture/ship.ts
-import { join as join6, dirname as dirname2 } from "node:path";
+import { join as join7, dirname as dirname2 } from "node:path";
 import { mkdirSync as mkdirSync5, openSync, writeSync, closeSync, unlinkSync as unlinkSync3, statSync as statSync3, appendFileSync as appendFileSync2 } from "node:fs";
 
 // capture/auth.ts
 import {
   chmodSync as chmodSync2,
-  existsSync as existsSync4,
+  existsSync as existsSync5,
   mkdirSync as mkdirSync4,
   readFileSync as readFileSync4,
   renameSync as renameSync3,
@@ -15881,7 +15922,7 @@ import {
 } from "node:fs";
 import { createHash, randomUUID as randomUUID2 } from "node:crypto";
 import { homedir } from "node:os";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 class ReLoginRequiredError extends Error {
   reason;
   constructor(message, reason) {
@@ -15890,9 +15931,9 @@ class ReLoginRequiredError extends Error {
     this.reason = reason;
   }
 }
-var authRoot = () => process.env.AUGENTA_AUTH_HOME || join5(homedir(), ".augenta");
-var authPath = () => join5(authRoot(), "auth.json");
-var lockPath = () => join5(authRoot(), "auth.lock");
+var authRoot = () => process.env.AUGENTA_AUTH_HOME || join6(homedir(), ".augenta");
+var authPath = () => join6(authRoot(), "auth.json");
+var lockPath = () => join6(authRoot(), "auth.lock");
 var LOCK_WAIT_MS = 1e4;
 var STALE_LOCK_MS = 30000;
 var REQUEST_TIMEOUT_MS = 15000;
@@ -15903,7 +15944,7 @@ function ensureAuthRoot() {
 function readAuthStore() {
   try {
     ensureAuthRoot();
-    if (existsSync4(authPath()))
+    if (existsSync5(authPath()))
       chmodSync2(authPath(), 384);
     const parsed = JSON.parse(readFileSync4(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
@@ -15929,7 +15970,7 @@ function writeAuthStore(store) {
     chmodSync2(path, 384);
   } finally {
     try {
-      if (existsSync4(tmp))
+      if (existsSync5(tmp))
         unlinkSync2(tmp);
     } catch {}
   }
@@ -15950,7 +15991,7 @@ async function withAuthLock(fn) {
       if (Date.now() >= deadline) {
         throw new Error("another Augenta login or token refresh is still running");
       }
-      await new Promise((resolve2) => setTimeout(resolve2, 100));
+      await new Promise((resolve3) => setTimeout(resolve3, 100));
     }
   }
   try {
@@ -16012,7 +16053,7 @@ function browserCommand(url) {
     return ["cmd", "/c", "start", "", url];
   return ["xdg-open", url];
 }
-var pendingLoginPath = () => join5(authRoot(), "pending-login.json");
+var pendingLoginPath = () => join6(authRoot(), "pending-login.json");
 function savePendingLogin(pending) {
   ensureAuthRoot();
   const path = pendingLoginPath();
@@ -16071,7 +16112,7 @@ async function pollDeviceToken(pending, opts) {
   const deadline = Math.min(pending.expiresAt, Date.now() + opts.waitMs);
   let intervalMs = pending.intervalMs;
   while (Date.now() < deadline) {
-    await new Promise((resolve2) => setTimeout(resolve2, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
+    await new Promise((resolve3) => setTimeout(resolve3, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
     const response = await fetch(endpoint(pending.issuer, "/oauth2/token"), {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -16205,7 +16246,7 @@ async function fetchWithProfile(profileId, url, init = {}) {
 }
 var NOTICES = ["relogin", "badkey", "connect"];
 function noticePath(projectRoot, notice) {
-  return join5(projectRoot, ".augenta", `${notice}-required`);
+  return join6(projectRoot, ".augenta", `${notice}-required`);
 }
 function markAuthNotice(projectRoot, notice) {
   try {
@@ -16220,7 +16261,7 @@ function takeAuthNotice(projectRoot) {
   let found;
   for (const notice of NOTICES) {
     const path = noticePath(projectRoot, notice);
-    if (!existsSync4(path))
+    if (!existsSync5(path))
       continue;
     found ??= notice;
     try {
@@ -16420,7 +16461,7 @@ function createPluginTelemetry(options) {
       ])).then(() => {
         return;
       });
-      await Promise.race([work, new Promise((resolve2) => setTimeout(resolve2, timeoutMillis))]);
+      await Promise.race([work, new Promise((resolve3) => setTimeout(resolve3, timeoutMillis))]);
     }
   };
 }
@@ -16625,7 +16666,7 @@ async function postExperiences(url, token, experiences, connectorId, authMode = 
 var PERMANENT_STATUSES = new Set([400, 413, 422]);
 var MAX_REJECTED_BYTES = 10 * 1024 * 1024;
 function rejectedPath(projectRoot) {
-  return join6(projectRoot, ".augenta", "outbox", "rejected.jsonl");
+  return join7(projectRoot, ".augenta", "outbox", "rejected.jsonl");
 }
 function appendRejected(projectRoot, entries) {
   if (entries.length === 0)
@@ -16811,7 +16852,7 @@ async function drainAll(opts) {
 }
 var STALE_LOCK_MS2 = 60000;
 function lockPath2(projectRoot) {
-  return join6(projectRoot, ".augenta", "outbox", ".lock");
+  return join7(projectRoot, ".augenta", "outbox", ".lock");
 }
 function acquireLock(projectRoot) {
   const lock = lockPath2(projectRoot);
