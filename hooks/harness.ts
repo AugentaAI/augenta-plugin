@@ -3,12 +3,13 @@
  * `transcript_path`. Codex records sessions at `~/.codex/sessions/.../rollout-*.jsonl`;
  * Claude Code uses `~/.claude/projects/.../*.jsonl`.
  *
- * This matters because the two harnesses render hook output DIFFERENTLY: Claude
+ * This matters because the two harnesses record hook output DIFFERENTLY: Claude
  * Code treats `hookSpecificOutput.additionalContext` as HIDDEN model context,
- * whereas Codex materializes it as a VISIBLE developer message and has no
- * hidden-context channel at all. So on Codex the hooks must never inject internal
- * scaffolding (the curation nudge, agent-only instructions)
- * — the user would see it.
+ * whereas Codex materializes it as a developer message in the conversation. The
+ * Codex CLI (0.156) does not display those entries, but its other surfaces are
+ * not established to hide them, so on Codex the hooks must never inject internal
+ * scaffolding (the curation nudge, agent-only instructions) — treat anything
+ * written there as something the user may read.
  */
 export function isCodexHarness(transcriptPath: string | undefined | null): boolean {
   if (!transcriptPath) return false;

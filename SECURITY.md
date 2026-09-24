@@ -28,7 +28,7 @@ hook events and the connect and recall scripts. Reports can cover:
 | Project config | Browser connections store a profile reference, URLs, organization and destinations, with no sign-in token; only Connector ids route capture, and the server authorizes Workspace reads. API-key connections store the key |
 | Local records | The plugin sets `.augenta/` to `0700` on its writes and adds a self-ignoring `.gitignore` |
 | Capture | Only connected projects send records, and only to the selected Workspaces |
-| Recall | Only the question text is sent as content, with no attached files or transcript, to Workspaces the project already feeds |
+| Recall | Only the question text is sent as content, with no attached files or transcript, to Workspaces the project already feeds. Automatic recall asks with each submitted prompt, with pasted blocks removed and common secret patterns masked, only while capture is enabled; each question leaves a one-way fingerprint in each Workspace, and the recalled text is never captured back |
 
 Report any breach of these rules. Examples include a leaked sign-in token,
 a plugin-created file with wider access than stated, or records sent to an

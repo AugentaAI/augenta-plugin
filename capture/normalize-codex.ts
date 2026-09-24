@@ -16,6 +16,7 @@
  * bookkeeping is shared via {@link tailToEvents}. Pure: no I/O, no network, no LLM.
  */
 import { type CaptureEvent, type EventKind, type EventRole, type ToolStatus } from "./event";
+import { isCodexAutoRecallRecord, stripCodexAutoRecallHistory } from "./auto-recall-marker";
 import { tailToEvents, type NormalizeCtx, type NormalizeOpts, type NormalizeResult, type Scrubber } from "./normalize-core";
 
 interface CodexContentBlock {
@@ -298,6 +299,10 @@ export function normalizeCodexRollout(opts: NormalizeOpts): NormalizeResult {
     // leads (present on every fire), hook-payload id as fallback — identical
     // to normalizeCodexLine's derivation.
     () => codexSessionFromPath(ctx.transcriptPath) || ctx.sessionId,
+    // The prompt hook's automatic-recall context arrives as a developer message,
+    // and compaction copies earlier developer messages forward. Both are
+    // remembered memory rather than this session's activity (auto-recall-marker.ts).
+    (sanitized) => (isCodexAutoRecallRecord(sanitized) ? "drop" : stripCodexAutoRecallHistory(sanitized)),
   );
 
   // Surfaced so capture can persist it on the cursor and seed the next fire.

@@ -1,5 +1,5 @@
 {
-  "description": "Augenta agent activity and project memory — one-time connect prompt (SessionStart), turn-ordinal bump (UserPromptSubmit), buffer trajectory steps into <project>/.augenta (PostToolUse), capture a finished subagent's own transcript (SubagentStop), scan memory + flush the completed turn (Stop), flush a session that ended without one (SessionEnd), and keep the byte cursor valid across a transcript rewrite (PreCompact flushes first, PostCompact resumes at the new end). SessionStart also scans memory before draining. Every hook is a silent no-op unless <project>/.augenta/config.json exists; AUGENTA_CAPTURE_ENABLED=0 disables both.",
+  "description": "Augenta agent activity and project memory — one-time connect prompt (SessionStart), turn-ordinal bump plus an automatic context-mode recall of what the project's Workspaces remember about the prompt, silent unless something is remembered and bounded to 5s (UserPromptSubmit), buffer trajectory steps into <project>/.augenta (PostToolUse), capture a finished subagent's own transcript (SubagentStop), scan memory + flush the completed turn (Stop), flush a session that ended without one (SessionEnd), and keep the byte cursor valid across a transcript rewrite (PreCompact flushes first, PostCompact resumes at the new end). SessionStart also scans memory before draining. Every hook is a silent no-op unless <project>/.augenta/config.json exists; AUGENTA_CAPTURE_ENABLED=0 disables capture and automatic recall, and AUGENTA_AUTO_RECALL=0 disables only automatic recall.",
   "hooks": {
     "SessionStart": [
       {
@@ -18,7 +18,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/run-node-hook.sh\" \"${CLAUDE_PLUGIN_ROOT}/dist/hooks/user-prompt.mjs\"",
-            "timeout": 5
+            "timeout": 8
           }
         ]
       }

@@ -16,7 +16,7 @@
  * Run: bun test capture/ship.test.ts
  */
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -1099,5 +1099,55 @@ describe("fan-out across destinations", () => {
     expect(seqsFor("")).toEqual([0]); // arrived under the empty (absent) header
     expect(result.byDestination.get("")!.shipped).toBe(1);
     expect(box.hasPendingBytes()).toBe(false);
+  });
+});
+
+describe("the shipper process renews a stale sign-in even when another drain holds the lock", () => {
+  /* The prompt hook never refreshes a token itself; for a stale one it spawns
+     this process and waits. When the previous turn's shipper is still draining,
+     the new one cannot take the lock — and must still renew, or the hook waits
+     out its whole budget for a token nobody is fetching. */
+  test("renews without draining, and leaves the other drain's lock alone", async () => {
+    const project = mkdtempSync(join(tmpdir(), "aug-ship-renew-"));
+    const authHome = mkdtempSync(join(tmpdir(), "aug-ship-renew-auth-"));
+    let refreshes = 0;
+    let other = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        if (new URL(req.url).pathname === "/oauth2/token") {
+          refreshes++;
+          return Response.json({ access_token: "renewed", refresh_token: "refresh-2", expires_in: 3600 });
+        }
+        other++;
+        return new Response("unexpected", { status: 500 });
+      },
+    });
+    try {
+      const issuer = `http://127.0.0.1:${server.port}`;
+      writeFileSync(join(authHome, "auth.json"), JSON.stringify({
+        version: 1,
+        profiles: { p1: { issuer, clientId: "client", gateway: issuer, userId: "u", orgId: "o",
+          accessToken: "stale", refreshToken: "refresh-1", expiresAt: Date.now() - 1_000, updatedAt: new Date().toISOString() } },
+      }));
+      mkdirSync(join(project, ".augenta"), { recursive: true });
+      writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({
+        authMode: "oauth", profileId: "p1", destinations: [{ connectorId: "c1", workspaceId: "w1" }], endpoint: issuer,
+      }));
+      expect(acquireLock(project)).toBe(true); // the other, still-running drain
+      const env: Record<string, string> = { ...(process.env as Record<string, string>), AUGENTA_AUTH_HOME: authHome };
+      delete env.AUGENTA_CAPTURE_ENABLED;
+      const child = Bun.spawn(["bun", join(import.meta.dir, "ship.ts"), project], { env, stdout: "ignore", stderr: "ignore" });
+      expect(await child.exited).toBe(0);
+      expect(refreshes).toBe(1);
+      expect(other).toBe(0); // no drain, no telemetry
+      expect(JSON.parse(readFileSync(join(authHome, "auth.json"), "utf8")).profiles.p1.accessToken).toBe("renewed");
+      expect(existsSync(join(project, ".augenta", "outbox", ".lock"))).toBe(true);
+    } finally {
+      releaseLock(project);
+      server.stop(true);
+      rmSync(project, { recursive: true, force: true });
+      rmSync(authHome, { recursive: true, force: true });
+    }
   });
 });

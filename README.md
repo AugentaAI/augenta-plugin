@@ -129,6 +129,15 @@ answers after a consent refusal.
 A new Workspace may have nothing to recall yet. If recall is not available,
 the plugin will say so.
 
+**Recall also runs on its own.** When you submit a prompt in a connected project,
+the plugin asks your Workspaces what they remember about it and gives any match
+to your agent as background, which it uses only when relevant. This lookup asks
+for saved memory only, with no Augenta answer-model call. It removes pasted
+blocks and common secret patterns from the prompt first, and skips commands and
+very short replies. It waits at most five seconds. If Augenta is slow, offline,
+or has nothing saved, your prompt goes ahead as usual. The looked-up memory is
+not captured back into your Workspaces.
+
 ## What gets captured
 
 Every selected Workspace gets the **full record**:
@@ -152,7 +161,8 @@ Recall sends only the question text, with no files or transcript attached.
 Augenta records the request but keeps no copy of the question or answer. It
 keeps a one-way fingerprint of the question to check for retries. Short
 questions can be guessed from that fingerprint, so treat them as visible to
-the Workspace's audience.
+the Workspace's audience. Automatic recall uses each prompt you submit as the
+question, so every prompt leaves such a fingerprint in each selected Workspace.
 
 ## Turn it off
 
@@ -160,8 +170,11 @@ To stop both capture and recall for a project, delete its `.augenta/config.json`
 This does not delete records already sent to Augenta.
 
 To pause capture across projects, set `AUGENTA_CAPTURE_ENABLED=0` in the
-environment that starts your coding app. Recall still works while a project
-has its config file.
+environment that starts your coding app. This also pauses automatic recall.
+Asking with the recall command still works while a project has its config file.
+
+To turn off only automatic recall, set `AUGENTA_AUTO_RECALL=0` in the same
+environment. Capture and the recall command keep working.
 
 ## Configuration
 

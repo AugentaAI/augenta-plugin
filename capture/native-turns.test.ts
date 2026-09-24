@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { normalizeNativeTurns } from "./native-turns";
 import { groupIntoExperiences } from "./ship";
+import { AUTO_RECALL_SENTINEL } from "./auto-recall-marker";
 
 const ts = "2026-09-11T18:00:00.000Z";
 const row = (type: string, payload: object, timestamp = ts) => JSON.stringify({ type, timestamp, payload });
@@ -55,4 +56,18 @@ test("reconnection invalidates an in-flight turn's previous consent", () => {
   const b = normalizeNativeTurns(opts([context("active"), message("after reconnect"), end("active"),
     start("new", "2026-09-11T18:00:03Z"), message("new consent")], a.nextSeq, a.nextOffset), a.turns, "2026-09-11T18:00:02Z");
   expect(b.events.map(e => e.text)).toEqual(["new consent"]);
+});
+
+test("the automatic-recall developer message never reaches either channel of a native turn", () => {
+  const recall = row("response_item", { type: "message", role: "developer",
+    content: [{ type: "input_text", text: `${AUTO_RECALL_SENTINEL} Augenta recall for this prompt` }] });
+  const alone = normalizeNativeTurns(opts([start("a"), recall]));
+  // task_started still ships raw (with its synthetic); the recall block does not.
+  expect(JSON.stringify(alone.records)).not.toContain(AUTO_RECALL_SENTINEL);
+  const r = normalizeNativeTurns(opts([recall, message("answered"), end("a")], alone.nextSeq, alone.nextOffset), alone.turns);
+  expect(r.events.map(e => e.text)).toEqual(["answered"]);
+  expect(JSON.stringify(r.records)).not.toContain(AUTO_RECALL_SENTINEL);
+  const onlyRecall = normalizeNativeTurns(opts([recall]));
+  expect(onlyRecall.records).toEqual([]);
+  expect(onlyRecall.nextOffset).toBe(Buffer.byteLength(recall) + 1);
 });

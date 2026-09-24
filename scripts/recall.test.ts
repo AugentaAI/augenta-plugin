@@ -843,6 +843,20 @@ describe("the fan-out", () => {
     }
   });
 
+  test("the CLI never retries: a transient 5xx or a network drop is reported after one attempt", async () => {
+    /* Retries belong to the prompt hook's budgeted recall, which opts in. The
+       command a person or the agent runs keeps its one-request-per-destination
+       contract, so a flaky gateway is reported rather than silently re-asked. */
+    await connectedProject();
+    route({ [`POST ${GATEWAY}/v1/recall`]: (init) => {
+      if (JSON.parse(String(init.body)).workspace === "ws-scratch") throw new Error("offline");
+      return typedError(503, "upstream_busy", "try later", true);
+    } });
+    const payload = await runRecall({ projectRoot: project }, args({ context: true }));
+    expect(recallCalls()).toHaveLength(2);
+    expect(payload.failed.map((f) => f.code).sort()).toEqual(["network", "upstream_busy"]);
+  });
+
   test("every idempotency key is a fresh UUID, per destination and per call", async () => {
     // The door namespaces an activation by (principal, key), so a key reused
     // across destinations is a 409 on a perfectly valid second question.

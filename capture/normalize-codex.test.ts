@@ -14,6 +14,7 @@
 import { test, expect, describe } from "bun:test";
 import { normalizeCodexRollout } from "./normalize-codex";
 import { type NormalizeCtx } from "./normalize-core";
+import { AUTO_RECALL_SENTINEL } from "./auto-recall-marker";
 
 // A realistic rollout path so the canonical session UUID is recovered from it.
 const codexCtx: NormalizeCtx = {
@@ -417,5 +418,48 @@ describe("normalizeCodexRollout", () => {
       const { events } = normalizeCodexRollout({ lines, ctx: codexCtx, startSeq: 0, startOffset: 0 });
       expect(events[0]!.text).toBe("[refusal]");
     });
+  });
+});
+
+describe("the automatic-recall block never re-enters capture", () => {
+  /* Codex records hook context as a developer message right after the prompt,
+     and compaction later copies developer messages forward. Either copy shipped
+     would feed a Workspace's memory back into it on every prompt. */
+  const block = `${AUTO_RECALL_SENTINEL} Augenta recall for this prompt: remembered notes`;
+  const recall = { type: "message", role: "developer", content: [{ type: "input_text", text: block }] };
+
+  test("a developer message carrying the sentinel is dropped from both channels", () => {
+    const line = item(recall);
+    const result = normalizeCodexRollout({ lines: [line], ctx: codexCtx, startSeq: 3, startOffset: 7 });
+    expect(result.events).toEqual([]);
+    expect(result.raws).toEqual([]);
+    expect(result.nextOffset).toBe(7 + Buffer.byteLength(line) + 1);
+    expect(result.nextSeq).toBe(3);
+  });
+
+  test("other developer messages and the user's own quote are kept", () => {
+    const permissions = item({ type: "message", role: "developer", content: [{ type: "input_text", text: "<permissions>" }] });
+    const quoted = item({ type: "message", role: "user", content: [{ type: "input_text", text: `what is ${AUTO_RECALL_SENTINEL}` }] });
+    const result = normalizeCodexRollout({ lines: [permissions, quoted], ctx: codexCtx, startSeq: 0, startOffset: 0 });
+    expect(result.events.map((e) => e.role)).toEqual(["system", "user"]);
+    expect(result.raws).toHaveLength(2);
+  });
+
+  test("compaction keeps its history minus the recall block", () => {
+    const keep = { type: "message", role: "developer", content: [{ type: "input_text", text: "<permissions>" }] };
+    const user = { type: "message", role: "user", content: [{ type: "input_text", text: "fix it" }] };
+    const line = item({ message: "", replacement_history: [keep, recall, user], window_number: 2 }, "compacted");
+    const result = normalizeCodexRollout({ lines: [line], ctx: codexCtx, startSeq: 0, startOffset: 0 });
+    expect(result.raws).toHaveLength(1);
+    const shipped = JSON.parse(result.raws[0]!.raw);
+    expect(shipped.payload.replacement_history).toEqual([keep, user]);
+    expect(shipped.payload.window_number).toBe(2);
+    expect(result.raws[0]!.raw).not.toContain(AUTO_RECALL_SENTINEL);
+  });
+
+  test("a compaction with no recall block ships byte-identical", () => {
+    const line = item({ message: "", replacement_history: [{ type: "message", role: "user", content: "hi" }] }, "compacted");
+    const result = normalizeCodexRollout({ lines: [line], ctx: codexCtx, startSeq: 0, startOffset: 0 });
+    expect(result.raws[0]!.raw).toBe(line);
   });
 });

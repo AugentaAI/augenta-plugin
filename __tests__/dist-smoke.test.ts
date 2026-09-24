@@ -147,11 +147,66 @@ describe("capture, and the consent gate on the real artifact", () => {
 describe("user-prompt", () => {
   test("unconnected project: silent, exit 0, no state written", () => {
     const r = run("hooks/user-prompt.mjs", [], {
-      stdin: JSON.stringify({ transcript_path: CLAUDE_TP, cwd: project }),
+      stdin: JSON.stringify({ transcript_path: CLAUDE_TP, cwd: project, prompt: "what did we decide about sign-in" }),
     });
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toBe("");
     expect(existsSync(join(project, ".augenta"))).toBe(false);
+  });
+
+  test("connected, gateway unreachable: silent, exit 0, inside the budget", () => {
+    // Under real node, which is also the only runtime whose AbortSignal.timeout
+    // throws on a fractional delay — Bun would hide that failure.
+    mkdirSync(join(project, ".augenta"), { recursive: true });
+    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ authMode: "api-key", apiKey: "sk-aug-smoke.secret" }));
+    const startedAt = Date.now();
+    const r = run("hooks/user-prompt.mjs", [], {
+      stdin: JSON.stringify({ transcript_path: CLAUDE_TP, cwd: project, prompt: "what did we decide about sign-in" }),
+      env: { AUGENTA_API_URL: "http://127.0.0.1:9" },
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("");
+    expect(Date.now() - startedAt).toBeLessThan(7_000);
+  });
+
+  test("connected, memory found: the shipped bundle emits exactly the two keys", async () => {
+    // Async spawn: a gateway served from this process cannot answer while a
+    // synchronous spawn blocks its event loop.
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ mode: "context", content: [{ type: "engram", text: "we chose device sign-in" }] }),
+    });
+    try {
+      mkdirSync(join(project, ".augenta"), { recursive: true });
+      writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({
+        authMode: "api-key", apiKey: "sk-aug-smoke.secret", endpoint: `http://127.0.0.1:${server.port}`,
+      }));
+      const env: Record<string, string> = { ...(process.env as Record<string, string>), AUGENTA_HOME: home };
+      delete env.AUGENTA_API_URL;
+      delete env.AUGENTA_CAPTURE_ENABLED;
+      delete env.AUGENTA_AUTO_RECALL;
+      const proc = Bun.spawn(["node", join(DIST, "hooks/user-prompt.mjs")], {
+        stdin: Buffer.from(JSON.stringify({ transcript_path: CODEX_TP, cwd: project, prompt: "what did we decide about sign-in" })),
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe("");
+      const out = JSON.parse(stdout);
+      expect(Object.keys(out.hookSpecificOutput).sort()).toEqual(["additionalContext", "hookEventName"]);
+      expect(out.hookSpecificOutput.additionalContext).toStartWith("[augenta-recall:v1]");
+      expect(out.hookSpecificOutput.additionalContext).toContain("we chose device sign-in");
+      expect(stdout).not.toContain("sk-aug-smoke");
+    } finally {
+      server.stop(true);
+    }
   });
 });
 

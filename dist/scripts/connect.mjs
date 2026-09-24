@@ -954,6 +954,21 @@ async function accessTokenForProfile(profileId, forceRefresh = false) {
     return updated.accessToken;
   });
 }
+function freshStoredAccessToken(profileId, marginMs = 15000) {
+  try {
+    const parsed = JSON.parse(readFileSync4(authPath(), "utf8"));
+    if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object")
+      return;
+    const profile = Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
+    if (!profile || typeof profile.accessToken !== "string" || !profile.accessToken)
+      return;
+    if (typeof profile.expiresAt !== "number" || profile.expiresAt <= Date.now() + marginMs)
+      return;
+    return profile.accessToken;
+  } catch {
+    return;
+  }
+}
 async function fetchWithProfile(profileId, url, init = {}) {
   const send = async (forceRefresh) => {
     const accessToken = await accessTokenForProfile(profileId, forceRefresh);
@@ -982,6 +997,9 @@ function markAuthNotice(projectRoot, notice) {
       mode: 384
     });
   } catch {}
+}
+function authNoticePending(projectRoot, notice) {
+  return existsSync5(noticePath(projectRoot, notice));
 }
 function takeAuthNotice(projectRoot) {
   let found;
@@ -1035,13 +1053,16 @@ async function fetchAllWorkspaces(profileId, gateway) {
   throw new Error(`the Workspace list did not finish within ${WORKSPACE_LIST_MAX_PAGES} pages of ` + `${WORKSPACE_LIST_PAGE_SIZE} — refusing to offer a partial list of destinations`);
 }
 async function currentConnector(profileId, gateway, id) {
+  return inspectConnector((url, init) => fetchWithProfile(profileId, url, init), gateway, id);
+}
+async function inspectConnector(fetcher, gateway, id, signal) {
   if (!id)
     return;
-  const response = await fetchWithProfile(profileId, `${gateway}/v1/connectors/${encodeURIComponent(id)}`);
+  const response = await fetcher(`${gateway}/v1/connectors/${encodeURIComponent(id)}`, signal ? { signal } : {});
   if (response.status === 403 || response.status === 404)
     return;
   if (!response.ok) {
-    throw new Error(`could not inspect the existing Connector (${response.status})`);
+    throw new AugentaRequestError(response.status, `could not inspect the existing Connector (${response.status})`);
   }
   return (await response.json()).connector;
 }

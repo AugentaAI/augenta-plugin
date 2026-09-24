@@ -54,7 +54,8 @@ export function agentSid(baseSid: string, agentId: string): string {
 export interface NormalizeResult {
   events: CaptureEvent[];
   /** One entry per consumed NON-BLANK, valid JSON line, structurally sanitized
-   *  but otherwise raw — the raw-telemetry channel's feedstock. `sid` is the SAME per-line
+   *  but otherwise raw — the raw-telemetry channel's feedstock. The automatic-
+   *  recall block is the one exclusion (see {@link tailToEvents}). `sid` is the SAME per-line
    *  derivation the sibling event got (the event's own sid when the line
    *  produced one), so a turn's raws always group into the same experience
    *  as its steps — a divergent sid would orphan the raws into a zero-event
@@ -98,6 +99,14 @@ export interface NormalizeOpts {
  * callbacks and raw serialization. Keeping the two channels' sid derivation in
  * ONE walk is what guarantees a turn's raws and steps land in the same
  * experience on every harness.
+ *
+ * The one exception is `exclude`, applied before either channel sees a line.
+ * It returns `"drop"` to omit the line from BOTH channels (the cursor still
+ * advances past it and no seq is consumed), a replacement value to ship in its
+ * place, or `undefined` to leave it alone. It exists for the automatic-recall
+ * block the prompt hook injects (see `capture/auto-recall-marker.ts`): that is
+ * remembered memory handed back to the model, and shipping it would feed it
+ * into the Workspaces it came from on every prompt.
  */
 export function tailToEvents(
   lines: string[],
@@ -105,6 +114,7 @@ export function tailToEvents(
   startOffset: number,
   toEvent: (sanitized: unknown, seq: number, off: number) => CaptureEvent | null,
   lineSid: (sanitized: unknown) => string,
+  exclude?: (sanitized: unknown) => "drop" | unknown,
 ): NormalizeResult {
   const events: CaptureEvent[] = [];
   const raws: Array<{ raw: string; sid: string }> = [];
@@ -125,12 +135,21 @@ export function tailToEvents(
     const sanitized = sanitizeTelemetryRecord(raw);
     if (sanitized === undefined) continue;
 
-    const event = toEvent(sanitized.value, seq, lineOff);
+    let value = sanitized.value;
+    let json = sanitized.json;
+    const excluded = exclude?.(value);
+    if (excluded === "drop") continue;
+    if (excluded !== undefined) {
+      value = excluded;
+      json = JSON.stringify(excluded);
+    }
+
+    const event = toEvent(value, seq, lineOff);
     if (event) {
       events.push(event);
       seq += 1;
     }
-    raws.push({ raw: sanitized.json, sid: event ? event.sid : lineSid(sanitized.value) });
+    raws.push({ raw: json, sid: event ? event.sid : lineSid(value) });
   }
 
   return { events, raws, nextSeq: seq, nextOffset: off };

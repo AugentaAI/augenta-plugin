@@ -16228,6 +16228,21 @@ async function accessTokenForProfile(profileId, forceRefresh = false) {
     return updated.accessToken;
   });
 }
+function freshStoredAccessToken(profileId, marginMs = 15000) {
+  try {
+    const parsed = JSON.parse(readFileSync4(authPath(), "utf8"));
+    if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object")
+      return;
+    const profile = Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
+    if (!profile || typeof profile.accessToken !== "string" || !profile.accessToken)
+      return;
+    if (typeof profile.expiresAt !== "number" || profile.expiresAt <= Date.now() + marginMs)
+      return;
+    return profile.accessToken;
+  } catch {
+    return;
+  }
+}
 async function fetchWithProfile(profileId, url, init = {}) {
   const send = async (forceRefresh) => {
     const accessToken = await accessTokenForProfile(profileId, forceRefresh);
@@ -16256,6 +16271,9 @@ function markAuthNotice(projectRoot, notice) {
       mode: 384
     });
   } catch {}
+}
+function authNoticePending(projectRoot, notice) {
+  return existsSync5(noticePath(projectRoot, notice));
 }
 function takeAuthNotice(projectRoot) {
   let found;
@@ -16880,7 +16898,8 @@ function releaseLock(projectRoot) {
 if (isMain(import.meta.url)) {
   const projectRoot = process.argv[2];
   const cfg = projectRoot ? loadProjectConfig(projectRoot) : undefined;
-  if (cfg && captureEnabled(cfg) && acquireLock(cfg.projectRoot)) {
+  const live = Boolean(cfg && captureEnabled(cfg));
+  if (cfg && live && acquireLock(cfg.projectRoot)) {
     let telemetry;
     try {
       let token = cfg.authMode === "oauth" ? await accessTokenForProfile(cfg.profileId) : cfg.apiKey;
@@ -16918,6 +16937,13 @@ if (isMain(import.meta.url)) {
     } finally {
       await telemetry?.flush(1000).catch(() => {});
       releaseLock(cfg.projectRoot);
+    }
+  } else if (cfg && live && cfg.authMode === "oauth") {
+    try {
+      await accessTokenForProfile(cfg.profileId);
+    } catch (error) {
+      if (error instanceof ReLoginRequiredError)
+        markAuthNotice(cfg.projectRoot, "relogin");
     }
   }
   process.exit(0);

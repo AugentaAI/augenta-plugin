@@ -15,6 +15,7 @@
 import { test, expect, describe } from "bun:test";
 import { normalizeClaudeTranscript, extractText } from "./normalize-claude";
 import { type NormalizeCtx } from "./normalize-core";
+import { AUTO_RECALL_SENTINEL } from "./auto-recall-marker";
 
 const ctx: NormalizeCtx = {
   sessionId: "fallback-sess",
@@ -484,5 +485,67 @@ describe("normalizeClaudeTranscript", () => {
     expect(events[0]!.text).toBe("[image]");
     expect(events[0]!.kind).toBe("msg");
     expect(events[0]!.role).toBe("user");
+  });
+});
+
+describe("the automatic-recall block never re-enters capture", () => {
+  /* The prompt hook hands remembered memory back to the model as hook context,
+     and Claude Code writes it into the transcript twice over: the context itself
+     (text in `content[]` and again in `rendered`) and the hook's raw stdout.
+     Shipping either would feed a Workspace's memory back into it on every prompt,
+     and copy it into every other destination. */
+  const block = `${AUTO_RECALL_SENTINEL} Augenta recall for this prompt: remembered notes`;
+  const additional = {
+    type: "attachment",
+    attachment: { type: "hook_additional_context", content: [block], hookName: "UserPromptSubmit", toolUseID: "hook-1", hookEvent: "UserPromptSubmit" },
+    rendered: [{ content: `<system-reminder>\nUserPromptSubmit hook additional context: ${block}\n</system-reminder>` }],
+    sessionId: "s-1",
+  };
+  const success = {
+    type: "attachment",
+    attachment: {
+      type: "hook_success",
+      hookName: "UserPromptSubmit",
+      hookEvent: "UserPromptSubmit",
+      content: "",
+      stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: block } }),
+    },
+    sessionId: "s-1",
+  };
+
+  for (const [name, record] of [["hook_additional_context", additional], ["hook_success stdout", success]] as const) {
+    test(`a ${name} line is dropped from both channels, cursor advanced, seq unchanged`, () => {
+      const raw = lineFor(record);
+      const result = normalizeClaudeTranscript({ lines: [raw], ctx, startSeq: 4, startOffset: 10 });
+      expect(result.events).toEqual([]);
+      expect(result.raws).toEqual([]);
+      expect(result.nextOffset).toBe(10 + Buffer.byteLength(raw) + 1);
+      expect(result.nextSeq).toBe(4);
+    });
+  }
+
+  test("only the recall block is dropped from a mixed tail", () => {
+    const user = lineFor({ type: "user", message: { role: "user", content: "what did we decide about sign-in" }, sessionId: "s-1" });
+    const result = normalizeClaudeTranscript({ lines: [user, lineFor(additional), lineFor(success)], ctx, startSeq: 0, startOffset: 0 });
+    expect(result.events).toHaveLength(1);
+    expect(result.raws).toHaveLength(1);
+    expect(result.raws[0]!.raw).not.toContain(AUTO_RECALL_SENTINEL);
+  });
+
+  test("other hook context, without the sentinel, still ships raw", () => {
+    const sessionStart = {
+      type: "attachment",
+      attachment: { type: "hook_additional_context", content: ["[Augenta] connect prompt"], hookName: "SessionStart", hookEvent: "SessionStart" },
+    };
+    const result = normalizeClaudeTranscript({ lines: [lineFor(sessionStart)], ctx, startSeq: 0, startOffset: 0 });
+    expect(result.raws).toHaveLength(1);
+  });
+
+  test("the user's own words quoting the sentinel stay captured", () => {
+    const quoted = lineFor({ type: "user", message: { role: "user", content: `why does ${AUTO_RECALL_SENTINEL} appear` } });
+    const queued = lineFor({ type: "attachment", attachment: { type: "queued_command", prompt: `${AUTO_RECALL_SENTINEL} later` } });
+    const result = normalizeClaudeTranscript({ lines: [quoted, queued], ctx, startSeq: 0, startOffset: 0 });
+    expect(result.events).toHaveLength(1);
+    expect(result.raws).toHaveLength(2);
   });
 });

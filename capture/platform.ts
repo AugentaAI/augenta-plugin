@@ -135,14 +135,40 @@ export async function currentConnector(
   gateway: string,
   id: string | undefined,
 ): Promise<Connector | undefined> {
+  // No signal: fetchWithProfile then applies its own REQUEST_TIMEOUT_MS, exactly
+  // as connect has always had it.
+  return inspectConnector((url, init) => fetchWithProfile(profileId, url, init), gateway, id);
+}
+
+/** An authorized request: the caller decides which credential it carries. */
+export type AuthorizedFetch = (url: string, init: RequestInit) => Promise<Response>;
+
+/**
+ * {@link currentConnector} over any authorized fetch, with an optional deadline.
+ *
+ * The prompt hook checks links with a STORED token and a hard budget, so it can
+ * neither use `fetchWithProfile` (which may refresh, see hooks/auto-recall.ts)
+ * nor wait out its 15s default. A non-OK status other than 403/404 throws an
+ * {@link AugentaRequestError} carrying the status, so a caller can tell a
+ * rejected sign-in (401) from a network fault — both used to be one message.
+ */
+export async function inspectConnector(
+  fetcher: AuthorizedFetch,
+  gateway: string,
+  id: string | undefined,
+  signal?: AbortSignal,
+): Promise<Connector | undefined> {
   if (!id) return undefined;
-  const response = await fetchWithProfile(
-    profileId,
+  const response = await fetcher(
     `${gateway}/v1/connectors/${encodeURIComponent(id)}`,
+    signal ? { signal } : {},
   );
   if (response.status === 403 || response.status === 404) return undefined;
   if (!response.ok) {
-    throw new Error(`could not inspect the existing Connector (${response.status})`);
+    throw new AugentaRequestError(
+      response.status,
+      `could not inspect the existing Connector (${response.status})`,
+    );
   }
   return ((await response.json()) as { connector: Connector }).connector;
 }

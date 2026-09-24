@@ -21,6 +21,7 @@ import {
   describeError,
   environmentLabel,
   fetchAllWorkspaces,
+  inspectConnector,
   WORKSPACE_LIST_MAX_PAGES,
   WORKSPACE_LIST_PAGE_SIZE,
 } from "./platform";
@@ -151,6 +152,32 @@ describe("currentConnector", () => {
     }) as unknown as typeof fetch;
     expect(await currentConnector(profileId, GATEWAY, undefined)).toBeUndefined();
     expect(called).toBe(false);
+  });
+});
+
+describe("inspectConnector", () => {
+  test("uses the caller's fetch and signal, and throws a status the caller can branch on", async () => {
+    const seen: Array<{ url: string; init: RequestInit }> = [];
+    const signal = AbortSignal.timeout(1_000);
+    const fetcher = async (url: string, init: RequestInit) => {
+      seen.push({ url, init });
+      return new Response("expired", { status: 401 });
+    };
+    const error = await inspectConnector(fetcher, GATEWAY, "connector x", signal).catch((e) => e);
+    expect(error).toBeInstanceOf(AugentaRequestError);
+    expect((error as AugentaRequestError).status).toBe(401);
+    expect(seen).toEqual([{ url: `${GATEWAY}/v1/connectors/connector%20x`, init: { signal } }]);
+  });
+
+  test("currentConnector still sends one bearer request with no caller signal", async () => {
+    const seen: Array<{ url: string; auth: string | null; signal: boolean }> = [];
+    globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
+      seen.push({ url: String(url), auth: new Headers(init.headers as Record<string, string>).get("authorization"), signal: !!init.signal });
+      return Response.json({ connector: { id: "c", workspaceId: "w", status: "active" } });
+    }) as unknown as typeof fetch;
+    expect((await currentConnector(profileId, GATEWAY, "c"))?.id).toBe("c");
+    // fetchWithProfile's own default timeout is the signal, exactly as before.
+    expect(seen).toEqual([{ url: `${GATEWAY}/v1/connectors/c`, auth: "Bearer access-live", signal: true }]);
   });
 });
 

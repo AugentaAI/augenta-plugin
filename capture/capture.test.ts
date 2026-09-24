@@ -22,6 +22,7 @@ import { CaptureState } from "./capture-cursor";
 import { TurnState } from "./turn-cursor";
 import { Outbox, isCaptureEvent, isDocumentRecord, isRawRecord } from "./outbox";
 import type { CaptureEvent, RawRecord } from "./event";
+import { AUTO_RECALL_SENTINEL } from "./auto-recall-marker";
 
 function userLine(text: string): string {
   return JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n";
@@ -613,6 +614,30 @@ describe("runCapture", () => {
       const events = pendingEvents();
       expect(events.length).toBe(1);
       expect(events[0]!.text).toBe("real work");
+    });
+
+    test("a batch holding only the automatic-recall block appends nothing and advances the cursor", () => {
+      // The prompt hook's recall context is remembered memory, not activity: it
+      // produces no raw, so it must not produce a raws-only synthetic either.
+      const block = `${AUTO_RECALL_SENTINEL} Augenta recall for this prompt`;
+      const line = JSON.stringify({
+        type: "attachment",
+        attachment: { type: "hook_additional_context", content: [block], hookName: "UserPromptSubmit", hookEvent: "UserPromptSubmit" },
+      });
+      writeFileSync(transcript, line + "\n");
+      const r = fire();
+      expect(r.appended).toBe(0);
+      expect(pendingEvents()).toEqual([]);
+      expect(pendingRaws()).toEqual([]);
+      expect(new CaptureState(project).get(transcript).offset).toBe(Buffer.byteLength(line) + 1);
+
+      // A mixed batch counts only the lines that actually ship.
+      appendFileSync(transcript, line + "\n" + JSON.stringify({ type: "summary" }) + "\n");
+      fire();
+      expect(pendingEvents().map((e) => e.text)).toEqual([
+        "[augenta: 1 transcript line(s) with no mappable steps — raw channel attached]",
+      ]);
+      expect(pendingRaws().every((raw) => !raw.raw.includes(AUTO_RECALL_SENTINEL))).toBe(true);
     });
 
     test("a multi-sid raws-only fire gets ONE synthetic per distinct sid — no sid's raws are orphaned", () => {
