@@ -871,9 +871,15 @@ if (isMain(import.meta.url)) {
   // ship. Missing/invalid argv or config → silent exit.
   const projectRoot = process.argv[2];
   const cfg = projectRoot ? loadProjectConfig(projectRoot) : undefined;
-  if (cfg && captureEnabled(cfg) && acquireLock(cfg.projectRoot)) {
+  const live = Boolean(cfg && captureEnabled(cfg));
+  if (cfg && live && acquireLock(cfg.projectRoot)) {
     let telemetry: PluginTelemetry | undefined;
     try {
+      // Renews a stale sign-in FIRST, before any drain work, even with nothing
+      // pending. The prompt hook depends on this: it never refreshes a token in
+      // its own process (a hook killed mid-rotation would strand the user signed
+      // out), so for a stale token it spawns this shipper and waits for the
+      // renewed one (hooks/auto-recall.ts).
       let token = cfg.authMode === "oauth"
         ? await accessTokenForProfile(cfg.profileId!)
         : cfg.apiKey;
@@ -922,6 +928,18 @@ if (isMain(import.meta.url)) {
     } finally {
       await telemetry?.flush(1_000).catch(() => {});
       releaseLock(cfg.projectRoot);
+    }
+  } else if (cfg && live && cfg.authMode === "oauth") {
+    // Another shipper holds the drain — typically the previous turn's, still
+    // delivering when the next prompt is typed. It renewed the sign-in when IT
+    // started, which may have been before the token went stale, and the prompt
+    // hook that spawned this process is waiting on a fresh one. So renew here
+    // without draining. accessTokenForProfile serializes on the auth lock and
+    // does nothing when the stored token is still fresh.
+    try {
+      await accessTokenForProfile(cfg.profileId!);
+    } catch (error) {
+      if (error instanceof ReLoginRequiredError) markAuthNotice(cfg.projectRoot, "relogin");
     }
   }
   process.exit(0);

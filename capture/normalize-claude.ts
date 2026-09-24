@@ -16,6 +16,7 @@
  * source line. Cursor bookkeeping is shared via {@link tailToEvents}.
  */
 import { type CaptureEvent, type EventKind, type EventRole, type ToolStatus } from "./event";
+import { isClaudeAutoRecallRecord } from "./auto-recall-marker";
 import { agentSid, tailToEvents, type NormalizeCtx, type NormalizeOpts, type NormalizeResult, type Scrubber } from "./normalize-core";
 
 interface ContentBlock {
@@ -256,5 +257,9 @@ export function normalizeClaudeTranscript(opts: NormalizeOpts): NormalizeResult 
           : ctx.sessionId;
       return ctx.agentId ? agentSid(base, ctx.agentId) : base;
     },
+    // The prompt hook's automatic-recall context, in any of the hook attachment
+    // records Claude Code writes for it, is remembered memory rather than this
+    // session's activity: dropped from both channels (auto-recall-marker.ts).
+    (sanitized) => (isClaudeAutoRecallRecord(sanitized) ? "drop" : undefined),
   );
 }

@@ -132,13 +132,21 @@ describe the current harness's native user-input mechanism and never add
 Codex-only tools to Claude `allowed-tools`.
 
 A declared hook timeout must be the **minimum** the two harnesses allow, because
-one manifest serves both. Codex enforces a per-event **maximum** and caps
-shutdown-path hooks at 3s — over-declaring does not fail the load, it clamps the
+one manifest serves both. Codex caps its shutdown-path events (`SessionEnd`, and
+its own `Interrupt`) at 3s and leaves every other event uncapped (verified against
+the Codex 0.156.1 source) — over-declaring does not fail the load, it clamps the
 value and shows `1 issue loading hooks for this source` in the Codex plugin panel
 for good. Claude accepts the larger number, so `claude plugin validate` and
 `plugin details` cannot catch this; only a real Codex install can. `SessionEnd`
 is the event this bites (hence its 3s budget, and why it skips the memory scan
 that `Stop` and `SessionStart` already cover).
+
+The opposite mistake matters for `UserPromptSubmit`, which holds the user's
+prompt while it runs: its declared 8s must stay comfortably ABOVE the 5s budget
+the automatic recall enforces on itself, because Claude Code discards a timed-out
+hook's output and shows the user a timeout notice. Its output is exactly
+`hookSpecificOutput.{hookEventName, additionalContext}` — Codex rejects any other
+key in that event's output and then drops the context entirely.
 
 `CLAUDE_PLUGIN_ROOT` belongs in `hooks/hooks.json` and nowhere else. It is
 exported only to processes the plugin system spawns — hooks and MCP servers —
@@ -210,20 +218,24 @@ record the user's choices for display and never become authorization inputs. Cap
 silent no-op without project config, and `AUGENTA_CAPTURE_ENABLED=0` remains the
 global kill switch.
 
-**Recall is a READ, and its invariants are its own.** `scripts/recall.ts` is the
-only outbound path that is not capture, so the rules above do not all transfer
-and the differences are deliberate:
+**Recall is a READ, and its invariants are its own.** Recall — explicit through
+`scripts/recall.ts`, automatic through the prompt hook, both over the one request
+layer in `capture/recall-client.ts` — is the only outbound path that is not
+capture, so the rules above do not all transfer and the differences are
+deliberate:
 
 - **Only the question text leaves.** The request body is the query and — for a
   signed-in project — the Workspace id, and nothing else. No transcript line, no
   file content, no memory document. Adding a field to that body is a change to
   what a user's machine discloses, not a feature.
-- **It is NOT gated on `AUGENTA_CAPTURE_ENABLED`,** on purpose. That switch stops
-  a project SENDING; someone who turned it off may still legitimately ask what
-  was already remembered, and gating a read on it would make one off switch
-  silently mean two things. What governs recall is the same thing that governs
-  everything else: a readable `.augenta/config.json`. Deleting it remains the one
-  off switch for both, and README says so in those words.
+- **Explicit recall is NOT gated on `AUGENTA_CAPTURE_ENABLED`,** on purpose. That
+  switch stops a project SENDING; someone who turned it off may still legitimately
+  ask what was already remembered, and gating a read on it would make one off
+  switch silently mean two things. What governs recall is the same thing that
+  governs everything else: a readable `.augenta/config.json`. Deleting it remains
+  the one off switch for both, and README says so in those words. Automatic
+  recall IS gated on the switch — see below — and that gate lives in the hook,
+  never in the shared request layer.
 - **It needs no consent gate because it creates no new disclosure.** Recall asks
   only the destinations the user already selected — recorded in `destinations`
   with their Workspaces — and `--workspace` may only NARROW that set. A destination
@@ -256,6 +268,42 @@ and the differences are deliberate:
 - **A young Workspace is not an error.** `empty_scope` means "nothing remembered
   yet"; reporting it as a failure sends a user to look for a fault that is not
   there, and invites a reconnect that would change nothing.
+
+**Automatic recall asks with the prompt, and has invariants of its own.** The
+UserPromptSubmit hook (`hooks/auto-recall.ts`) asks every recorded destination
+what it remembers about each submitted prompt and hands a match to the model as
+hook context. Everything above still holds; these are the additions:
+
+- **It is gated on capture.** It sends prompt text nobody asked it to send, so it
+  runs only while `captureEnabled` holds — the capture kill switch stops it — and
+  `AUGENTA_AUTO_RECALL=0` stops only it. That is what keeps it from being a new
+  disclosure: capture already sends each prompt to these same Workspaces. What it
+  adds is one stored fingerprint of the question per Workspace per prompt, and
+  README, SECURITY.md and the connect skill say so.
+- **Same body, same destinations, context mode.** `{query, workspace}` only, to
+  recorded destinations whose links check out live, in `?mode=context` — no
+  Augenta-side model runs and no prompt reaches an external model on this path.
+  The query is the user's own words: pasted blocks are removed, credential shapes
+  scrubbed, and commands, `$augenta:` mentions, replies under three words and
+  over-long prompts are skipped rather than truncated.
+- **A hard 5s budget, and silence as the only failure.** The budget covers the
+  token wait, the link checks and every attempt. Up to two retries of a transient
+  failure (a dropped connection, a 5xx not marked final) fit inside it; a
+  timeout, a 4xx or a final code never retries. Anything short of an answer emits
+  nothing and the prompt proceeds; a 429 pauses later prompts until its
+  `Retry-After`. The explicit CLI never retries.
+- **It never refreshes a token in-process.** A refresh rotates the refresh token,
+  and a hook killed mid-rotation — by its deadline or the harness — would strand
+  the user signed out. A stale token is renewed by spawning the detached shipper,
+  which renews first thing even when another drain holds the outbox lock, and the
+  hook waits for the stored token within its budget.
+- **Its block never ships back.** It begins with the frozen
+  `AUTO_RECALL_SENTINEL` (`capture/auto-recall-marker.ts`), and capture drops
+  every transcript copy the harnesses write of it — Claude Code's hook
+  attachments, Codex's developer message and compaction history — from both
+  channels. Otherwise remembered memory would be re-ingested on every prompt and
+  copied from one Workspace into the others. Never change the sentinel's value:
+  resumed sessions replay old lines.
 
 **No credential passes through the agent.** The line is what a process *handles*,
 not who starts it. The agent is the normal caller of `scripts/connect.ts --json`

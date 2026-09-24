@@ -65,8 +65,9 @@ try {
   /* no / non-JSON stdin — fine */
 }
 
-// On Codex, additionalContext is shown to the user (no hidden channel), so we
-// inject clean user-facing facts instead of internal agent instructions.
+// On Codex, additionalContext becomes a developer message the user may see (see
+// harness.ts), so we inject clean user-facing facts instead of internal agent
+// instructions.
 const codex = isCodexHarness(transcriptPath);
 // How the user invokes connect in THIS harness. Codex has no slash commands, so
 // its prompts name the `$` form alongside the plain-English ask. Every prompt
@@ -194,7 +195,7 @@ try {
   process.exit(0);
 }
 
-// Codex shows additionalContext verbatim, so its wording stays clean and
+// Codex may show additionalContext verbatim, so its wording stays clean and
 // user-facing; Claude Code's is agent-directed and may carry scaffolding.
 // Nothing auto-starts on Codex (no initialUserMessage), so these state the fact
 // AND the invocation — this is the project's only automatic prompt, and one that

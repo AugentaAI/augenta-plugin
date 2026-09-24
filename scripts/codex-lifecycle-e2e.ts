@@ -31,6 +31,12 @@ if (worktreeMode) {
   writeFileSync(join(main, ".augenta/config.json"), JSON.stringify({ authMode: "api-key", apiKey: "main-fixture" }));
 } else mkdirSync(project);
 const received: Experience[] = [];
+/** What the fixture Workspace "remembers": automatic recall must bring it into the
+ *  model request, and capture must never send it back. */
+const RECALLED = "fixture recall memory: the lifecycle uses native turns";
+const SENTINEL = "[augenta-recall:v1]";
+const modelRequests: string[] = [];
+let recallCalls = 0;
 let modelCalls = 0;
 let offline = false;
 let toolNext = false;
@@ -38,12 +44,17 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
   const path = new URL(req.url).pathname;
   if (path === "/v1/connectors") return Response.json({ connectors: [{ id: "fixture-connector", orgId: "fixture-org",
     workspaceId: "fixture-workspace", kind: "agent", status: "active", direction: "inbound" }] });
+  if (path === "/v1/recall") {
+    recallCalls++;
+    return Response.json({ mode: "context", scope: "fixture", content: [{ type: "engram", text: RECALLED }] });
+  }
   if (path === "/v1/experiences") {
     if (offline) return new Response("retry", { status: 503 });
     received.push(...(await req.json() as { experiences: Experience[] }).experiences);
     return Response.json({ accepted: true });
   }
   if (!path.endsWith("/responses")) return Response.json({}); // local OTel sink
+  modelRequests.push(await req.text());
   modelCalls++;
   const message = { id: `msg_${modelCalls}`, type: "message", role: "assistant", status: "completed",
     content: [{ type: "output_text", text: `lifecycle final ${modelCalls}`, annotations: [] }] };
@@ -114,6 +125,11 @@ try {
   assert(finals.every(e => e.turn_source === "native"));
   assert(allSteps().some(e => e.kind === "tool"));
   assert(!JSON.stringify(received).includes(historicalFinal));
+  // Automatic recall: the connected turns asked the fixture Workspace with the
+  // prompt, the hook's context reached the model, and capture dropped it.
+  assert(recallCalls > 0, "the prompt hook never asked for recall");
+  assert(modelRequests.some(body => body.includes(RECALLED) && body.includes(SENTINEL)),
+    "the recalled memory never reached the model");
   // Fresh task, already connected. No prompt-to-capture manual calls anywhere.
   await turn();
   const fresh = `lifecycle final ${modelCalls}`;
@@ -132,10 +148,14 @@ try {
   // A fresh disabled task cannot advance capture or ship its content.
   env.AUGENTA_CAPTURE_ENABLED = "0";
   const cursor = readFileSync(join(project, ".augenta/state/capture.json"), "utf8");
+  const recallsBeforeDisabled = recallCalls;
   await turn();
+  assert.equal(recallCalls, recallsBeforeDisabled, "automatic recall ran with capture paused");
   assert.equal(readFileSync(join(project, ".augenta/state/capture.json"), "utf8"), cursor);
   assert(!allSteps().some(e => e.text === `lifecycle final ${modelCalls}`));
   // Retry does not duplicate accepted step identities in the fixture receiver.
+  assert(!JSON.stringify(received).includes(SENTINEL), "an automatic-recall block was captured back");
+  assert(!JSON.stringify(received).includes(RECALLED), "recalled memory was captured back");
   const identities = allSteps().map(e => `${e.sid}:${e.seq}`);
   assert.equal(new Set(identities).size, identities.length);
   const health = JSON.parse(await run([connectBundle, "--json", "--health"], "node"));
@@ -144,6 +164,7 @@ try {
   assert(health.delivery.successes > 0);
   console.log(JSON.stringify({ version, marketplaceInstalled: true, realHostDispatch: true, worktree: worktreeMode,
     freshTask: "pass", midTaskConnection: "pass", twoTurnsWithFinals: "pass", offlineRetry: "pass",
+    automaticRecall: "pass", recallNotCaptured: "pass",
     disabled: "pass", duplicateSteps: 0, desktopApproval: "not tested", hostedIngestion: "not tested" }, null, 2));
 } finally {
   // Let already-detached shippers finish against the local sink before removing fixtures.

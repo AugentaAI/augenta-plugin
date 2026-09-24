@@ -551,6 +551,52 @@ export async function accessTokenForProfile(
   });
 }
 
+/**
+ * The stored access token, only while it is not about to expire — and never a
+ * refresh.
+ *
+ * For the prompt hook, which must never rotate tokens itself: a refresh rotates
+ * the refresh token, and a hook killed mid-rotation (by its own deadline or the
+ * harness timeout) would strand the user signed out. So it reads what is stored
+ * and, when that is stale, has the detached shipper refresh instead
+ * (hooks/auto-recall.ts).
+ *
+ * Lock-free by design, and safe: writeAuthStore replaces auth.json by atomic
+ * rename, so a reader sees the old file or the new one, never half of either.
+ * Nothing is created or chmod-ed here — a read with no side effects.
+ *
+ * `marginMs` must stay at or below the 60s margin accessTokenForProfile refreshes
+ * at, or a token this treats as stale would be one the shipper declines to renew.
+ */
+export function freshStoredAccessToken(profileId: string, marginMs = 15_000): string | undefined {
+  const profile = storedProfile(profileId);
+  if (!profile || typeof profile.accessToken !== "string" || !profile.accessToken) return undefined;
+  if (typeof profile.expiresAt !== "number" || profile.expiresAt <= Date.now() + marginMs) return undefined;
+  return profile.accessToken;
+}
+
+/**
+ * When the stored sign-in for `profileId` was last written — by a login or a
+ * refresh — in epoch ms, read the same side-effect-free way as
+ * {@link freshStoredAccessToken}. Undefined without a readable profile.
+ */
+export function storedProfileUpdatedAt(profileId: string): number | undefined {
+  const updatedAt = storedProfile(profileId)?.updatedAt;
+  const ms = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN;
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/** One profile off auth.json, lock-free and with no side effects (see above). */
+function storedProfile(profileId: string): Partial<AuthProfile> | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(authPath(), "utf8")) as Partial<AuthStore>;
+    if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") return undefined;
+    return Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** One bearer request with exactly one locked refresh/retry on a 401. */
 export async function fetchWithProfile(
   profileId: string,
@@ -597,6 +643,25 @@ export function markAuthNotice(projectRoot: string, notice: Notice): void {
     });
   } catch {
     // The spool remains durable even if a notice marker cannot be written.
+  }
+}
+
+/**
+ * Whether `notice` is pending, WITHOUT consuming it — the SessionStart hook is
+ * what reports and clears notices ({@link takeAuthNotice}). The prompt hook
+ * reads `relogin` to skip a recall whose sign-in the shipper already found
+ * refused, instead of waiting out its budget on every prompt.
+ *
+ * `since` ignores a notice written before that epoch ms. Only SessionStart
+ * clears notices, so one can outlive the fault it reported: a reconnect later
+ * in the same session (in this project or any other sharing the profile)
+ * writes a working sign-in and leaves the notice behind.
+ */
+export function authNoticePending(projectRoot: string, notice: Notice, since?: number): boolean {
+  try {
+    return statSync(noticePath(projectRoot, notice)).mtimeMs >= (since ?? Number.NEGATIVE_INFINITY);
+  } catch {
+    return false;
   }
 }
 

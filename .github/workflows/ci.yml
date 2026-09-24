@@ -257,6 +257,16 @@ jobs:
           # diagnostic, which a passing exit code alone would not prove.
           ! grep -q "Augenta hook:" capture-err.txt
 
+          # The prompt hook, through its declared command, WITH a prompt: on a
+          # project that never opted in, automatic recall has nothing to ask and
+          # nowhere to ask it — no output, no state, and a resolved runtime.
+          prompt_command="$(jq -r '.hooks.UserPromptSubmit[0].hooks[0].command' "$claude_root/hooks/hooks.json")"
+          printf '{"transcript_path":"%s/.claude/projects/p/s.jsonl","cwd":"%s","prompt":"what did we decide about sign-in"}' "$HOME" "$project" \
+            | sh -c "$prompt_command" > prompt-out.txt 2> prompt-err.txt
+          test ! -s prompt-out.txt
+          test ! -d "$project/.augenta"
+          ! grep -q "Augenta hook:" prompt-err.txt
+
       - name: Install and inspect with Codex
         run: |
           version="$(jq -r .version package.json)"
@@ -323,3 +333,11 @@ jobs:
             (.hookSpecificOutput.additionalContext | contains("$augenta:connect")) and
             ((.hookSpecificOutput | keys | sort) == ["additionalContext", "hookEventName"])
           ' codex-hook-out.json
+
+          # The Codex branch of the prompt hook, with a prompt, on the same
+          # unconnected project: silent and stateless from the pruned bundle too.
+          printf '{"transcript_path":"%s/.codex/sessions/2026/06/24/rollout-2026-06-24T00-00-00-a.jsonl","cwd":"%s","prompt":"what did we decide about sign-in"}' \
+            "$HOME" "$codex_project" \
+            | node "$codex_plugin_root/dist/hooks/user-prompt.mjs" > codex-prompt-out.txt
+          test ! -s codex-prompt-out.txt
+          test ! -d "$codex_project/.augenta"

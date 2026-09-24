@@ -33,9 +33,6 @@ var __toESM = (mod, isNodeMode, target) => {
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
-// scripts/recall.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
-
 // runtime/node.ts
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
@@ -79,173 +76,12 @@ function isHttpsUrl(value) {
   }
 }
 
-// capture/config.ts
-import { readFileSync } from "node:fs";
-import { join as join2 } from "node:path";
-
-// capture/project.ts
-import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync as realpathSync2 } from "node:fs";
-import { dirname, join, resolve as resolve2 } from "node:path";
-function gitRevParse(cwd, arg) {
-  try {
-    const value = execFileSync("git", ["rev-parse", arg], {
-      cwd,
-      stdio: ["ignore", "pipe", "ignore"]
-    }).toString().trim();
-    return value || undefined;
-  } catch {
-    return;
-  }
-}
-function resolveProjectRoot(cwd) {
-  if (!cwd)
-    return;
-  let dir;
-  try {
-    dir = realpathSync2(cwd);
-  } catch {
-    return;
-  }
-  while (true) {
-    if (existsSync(join(dir, ".augenta", "config.json")))
-      return dir;
-    if (existsSync(join(dir, ".git")))
-      return;
-    const parent = dirname(dir);
-    if (parent === dir)
-      return;
-    dir = parent;
-  }
-}
-function resolveProject(args, cwd) {
-  if (args.project)
-    return { projectRoot: resolve2(cwd, args.project) };
-  const configured = resolveProjectRoot(cwd);
-  if (configured)
-    return { projectRoot: configured };
-  const top = gitRevParse(cwd, "--show-toplevel");
-  if (!top)
-    return { projectRoot: cwd };
-  return { projectRoot: top };
-}
-function resolveTargetProject(args, cwd) {
-  return resolveProject(args, cwd).projectRoot;
-}
-
-// capture/config.ts
-var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
-var DEFAULT_CONTROL_URL = "https://augenta.ai";
-function parseDestinations(raw) {
-  if (!Array.isArray(raw) || raw.length === 0)
-    return;
-  const destinations = [];
-  for (const item of raw) {
-    if (!item || typeof item !== "object")
-      return;
-    const connectorId = typeof item.connectorId === "string" ? item.connectorId.trim() : "";
-    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
-    if (!connectorId || !workspaceId)
-      return;
-    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
-      return;
-    if (destinations.some((destination) => destination.connectorId === connectorId))
-      continue;
-    const workspaceName = item.workspaceName?.trim();
-    destinations.push({ connectorId, workspaceId, ...workspaceName ? { workspaceName } : {} });
-  }
-  return destinations;
-}
-function configPath(projectRoot) {
-  return join2(projectRoot, ".augenta", "config.json");
-}
-function loadProjectConfig(projectRoot) {
-  try {
-    const value = JSON.parse(readFileSync(configPath(projectRoot), "utf8"));
-    if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
-      return;
-    const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
-    const settings = {};
-    for (const key of ["endpoint", "controlUrl", "ingestUrl", "discoveredGateway"]) {
-      const raw = value[key];
-      if (raw !== undefined && typeof raw !== "string")
-        return;
-      if (typeof raw === "string" && raw.trim()) {
-        settings[key] = raw.trim().replace(/\/+$/, "");
-      }
-    }
-    if (value.org !== undefined) {
-      if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
-        return;
-      if (value.org.name !== undefined && typeof value.org.name !== "string")
-        return;
-      settings.org = { id: value.org.id.trim(), ...value.org.name?.trim() ? { name: value.org.name.trim() } : {} };
-    }
-    const destinations = value.destinations === undefined ? undefined : parseDestinations(value.destinations);
-    if (value.destinations !== undefined && !destinations)
-      return;
-    if (destinations) {
-      settings.destinations = destinations;
-      settings.connectorIds = destinations.map((destination) => destination.connectorId);
-    }
-    if (value.authMode === "oauth") {
-      const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
-      if (!profileId || !destinations)
-        return;
-      return {
-        ...settings,
-        authMode: "oauth",
-        ...captureSince ? { captureSince } : {},
-        profileId,
-        projectRoot
-      };
-    }
-    if (value.authMode === "api-key") {
-      const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
-      if (!apiKey || Array.isArray(value.destinations) && value.destinations.length !== 1)
-        return;
-      return {
-        ...settings,
-        authMode: "api-key",
-        ...captureSince ? { captureSince } : {},
-        apiKey,
-        projectRoot
-      };
-    }
-    return;
-  } catch {
-    return;
-  }
-}
-function projectConfig(cwd) {
-  const root = resolveProjectRoot(cwd);
-  return root ? loadProjectConfig(root) : undefined;
-}
-function controlUrl(cfg, flag) {
-  return (flag?.trim() || process.env.AUGENTA_CONTROL_URL?.trim() || cfg?.controlUrl || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
-}
-function gatewayBase(cfg, flag) {
-  return (flag?.trim() || process.env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
-}
-function experiencesUrl(cfg) {
-  return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
-}
-function captureKilled() {
-  const value = process.env.AUGENTA_CAPTURE_ENABLED;
-  return value === "0" || value === "false";
-}
-function captureEnabled(cfg) {
-  if (!cfg || captureKilled())
-    return false;
-  return cfg.authMode === "oauth" ? Boolean(cfg.profileId) && (cfg.connectorIds?.length ?? 0) > 0 : Boolean(cfg.apiKey);
-}
-
 // capture/auth.ts
 import {
   chmodSync as chmodSync2,
-  existsSync as existsSync3,
+  existsSync as existsSync2,
   mkdirSync as mkdirSync2,
-  readFileSync as readFileSync2,
+  readFileSync,
   renameSync,
   statSync,
   unlinkSync,
@@ -253,20 +89,20 @@ import {
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join as join4 } from "node:path";
+import { join as join2 } from "node:path";
 
 // capture/augenta-dir.ts
-import { join as join3 } from "node:path";
-import { chmodSync, mkdirSync, existsSync as existsSync2, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { chmodSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
 function ensureAugentaDir(projectRoot) {
-  const dir = join3(projectRoot, ".augenta");
+  const dir = join(projectRoot, ".augenta");
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
     try {
       chmodSync(dir, 448);
     } catch {}
-    const ignore = join3(dir, ".gitignore");
-    if (!existsSync2(ignore))
+    const ignore = join(dir, ".gitignore");
+    if (!existsSync(ignore))
       writeFileSync(ignore, `*
 `);
   } catch {}
@@ -282,9 +118,9 @@ class ReLoginRequiredError extends Error {
     this.reason = reason;
   }
 }
-var authRoot = () => process.env.AUGENTA_AUTH_HOME || join4(homedir(), ".augenta");
-var authPath = () => join4(authRoot(), "auth.json");
-var lockPath = () => join4(authRoot(), "auth.lock");
+var authRoot = () => process.env.AUGENTA_AUTH_HOME || join2(homedir(), ".augenta");
+var authPath = () => join2(authRoot(), "auth.json");
+var lockPath = () => join2(authRoot(), "auth.lock");
 var LOCK_WAIT_MS = 1e4;
 var STALE_LOCK_MS = 30000;
 var REQUEST_TIMEOUT_MS = 15000;
@@ -295,9 +131,9 @@ function ensureAuthRoot() {
 function readAuthStore() {
   try {
     ensureAuthRoot();
-    if (existsSync3(authPath()))
+    if (existsSync2(authPath()))
       chmodSync2(authPath(), 384);
-    const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
       return { version: 1, profiles: {} };
     }
@@ -321,7 +157,7 @@ function writeAuthStore(store) {
     chmodSync2(path, 384);
   } finally {
     try {
-      if (existsSync3(tmp))
+      if (existsSync2(tmp))
         unlinkSync(tmp);
     } catch {}
   }
@@ -342,7 +178,7 @@ async function withAuthLock(fn) {
       if (Date.now() >= deadline) {
         throw new Error("another Augenta login or token refresh is still running");
       }
-      await new Promise((resolve3) => setTimeout(resolve3, 100));
+      await new Promise((resolve2) => setTimeout(resolve2, 100));
     }
   }
   try {
@@ -382,8 +218,8 @@ async function refreshTokens(profile) {
   }
   throw new Error(`Augenta token refresh failed (${response.status})`);
 }
-async function augentaOAuthConfig(controlUrl2) {
-  const response = await fetch(`${controlUrl2.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+async function augentaOAuthConfig(controlUrl) {
+  const response = await fetch(`${controlUrl.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
   if (!response.ok) {
     throw new Error("Augenta sign-in is not configured for this environment");
   }
@@ -404,7 +240,7 @@ function browserCommand(url) {
     return ["cmd", "/c", "start", "", url];
   return ["xdg-open", url];
 }
-var pendingLoginPath = () => join4(authRoot(), "pending-login.json");
+var pendingLoginPath = () => join2(authRoot(), "pending-login.json");
 function savePendingLogin(pending) {
   ensureAuthRoot();
   const path = pendingLoginPath();
@@ -414,7 +250,7 @@ function savePendingLogin(pending) {
 }
 function readPendingLogin() {
   try {
-    const parsed = JSON.parse(readFileSync2(pendingLoginPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync(pendingLoginPath(), "utf8"));
     if (typeof parsed.deviceCode !== "string" || typeof parsed.clientId !== "string" || typeof parsed.issuer !== "string" || typeof parsed.expiresAt !== "number" || parsed.expiresAt <= Date.now()) {
       return;
     }
@@ -463,7 +299,7 @@ async function pollDeviceToken(pending, opts) {
   const deadline = Math.min(pending.expiresAt, Date.now() + opts.waitMs);
   let intervalMs = pending.intervalMs;
   while (Date.now() < deadline) {
-    await new Promise((resolve3) => setTimeout(resolve3, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
+    await new Promise((resolve2) => setTimeout(resolve2, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
     const response = await fetch(endpoint(pending.issuer, "/oauth2/token"), {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -579,6 +415,29 @@ async function accessTokenForProfile(profileId, forceRefresh = false) {
     return updated.accessToken;
   });
 }
+function freshStoredAccessToken(profileId, marginMs = 15000) {
+  const profile = storedProfile(profileId);
+  if (!profile || typeof profile.accessToken !== "string" || !profile.accessToken)
+    return;
+  if (typeof profile.expiresAt !== "number" || profile.expiresAt <= Date.now() + marginMs)
+    return;
+  return profile.accessToken;
+}
+function storedProfileUpdatedAt(profileId) {
+  const updatedAt = storedProfile(profileId)?.updatedAt;
+  const ms = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN;
+  return Number.isFinite(ms) ? ms : undefined;
+}
+function storedProfile(profileId) {
+  try {
+    const parsed = JSON.parse(readFileSync(authPath(), "utf8"));
+    if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object")
+      return;
+    return Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
+  } catch {
+    return;
+  }
+}
 async function fetchWithProfile(profileId, url, init = {}) {
   const send = async (forceRefresh) => {
     const accessToken = await accessTokenForProfile(profileId, forceRefresh);
@@ -597,7 +456,7 @@ async function fetchWithProfile(profileId, url, init = {}) {
 }
 var NOTICES = ["relogin", "badkey", "connect"];
 function noticePath(projectRoot, notice) {
-  return join4(projectRoot, ".augenta", `${notice}-required`);
+  return join2(projectRoot, ".augenta", `${notice}-required`);
 }
 function markAuthNotice(projectRoot, notice) {
   try {
@@ -608,11 +467,18 @@ function markAuthNotice(projectRoot, notice) {
     });
   } catch {}
 }
+function authNoticePending(projectRoot, notice, since) {
+  try {
+    return statSync(noticePath(projectRoot, notice)).mtimeMs >= (since ?? Number.NEGATIVE_INFINITY);
+  } catch {
+    return false;
+  }
+}
 function takeAuthNotice(projectRoot) {
   let found;
   for (const notice of NOTICES) {
     const path = noticePath(projectRoot, notice);
-    if (!existsSync3(path))
+    if (!existsSync2(path))
       continue;
     found ??= notice;
     try {
@@ -620,6 +486,167 @@ function takeAuthNotice(projectRoot) {
     } catch {}
   }
   return found;
+}
+
+// capture/config.ts
+import { readFileSync as readFileSync2 } from "node:fs";
+import { join as join4 } from "node:path";
+
+// capture/project.ts
+import { execFileSync } from "node:child_process";
+import { existsSync as existsSync3, realpathSync as realpathSync2 } from "node:fs";
+import { dirname, join as join3, resolve as resolve2 } from "node:path";
+function gitRevParse(cwd, arg) {
+  try {
+    const value = execFileSync("git", ["rev-parse", arg], {
+      cwd,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).toString().trim();
+    return value || undefined;
+  } catch {
+    return;
+  }
+}
+function resolveProjectRoot(cwd) {
+  if (!cwd)
+    return;
+  let dir;
+  try {
+    dir = realpathSync2(cwd);
+  } catch {
+    return;
+  }
+  while (true) {
+    if (existsSync3(join3(dir, ".augenta", "config.json")))
+      return dir;
+    if (existsSync3(join3(dir, ".git")))
+      return;
+    const parent = dirname(dir);
+    if (parent === dir)
+      return;
+    dir = parent;
+  }
+}
+function resolveProject(args, cwd) {
+  if (args.project)
+    return { projectRoot: resolve2(cwd, args.project) };
+  const configured = resolveProjectRoot(cwd);
+  if (configured)
+    return { projectRoot: configured };
+  const top = gitRevParse(cwd, "--show-toplevel");
+  if (!top)
+    return { projectRoot: cwd };
+  return { projectRoot: top };
+}
+function resolveTargetProject(args, cwd) {
+  return resolveProject(args, cwd).projectRoot;
+}
+
+// capture/config.ts
+var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
+var DEFAULT_CONTROL_URL = "https://augenta.ai";
+function parseDestinations(raw) {
+  if (!Array.isArray(raw) || raw.length === 0)
+    return;
+  const destinations = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object")
+      return;
+    const connectorId = typeof item.connectorId === "string" ? item.connectorId.trim() : "";
+    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
+    if (!connectorId || !workspaceId)
+      return;
+    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
+      return;
+    if (destinations.some((destination) => destination.connectorId === connectorId))
+      continue;
+    const workspaceName = item.workspaceName?.trim();
+    destinations.push({ connectorId, workspaceId, ...workspaceName ? { workspaceName } : {} });
+  }
+  return destinations;
+}
+function configPath(projectRoot) {
+  return join4(projectRoot, ".augenta", "config.json");
+}
+function loadProjectConfig(projectRoot) {
+  try {
+    const value = JSON.parse(readFileSync2(configPath(projectRoot), "utf8"));
+    if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
+      return;
+    const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
+    const settings = {};
+    for (const key of ["endpoint", "controlUrl", "ingestUrl", "discoveredGateway"]) {
+      const raw = value[key];
+      if (raw !== undefined && typeof raw !== "string")
+        return;
+      if (typeof raw === "string" && raw.trim()) {
+        settings[key] = raw.trim().replace(/\/+$/, "");
+      }
+    }
+    if (value.org !== undefined) {
+      if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
+        return;
+      if (value.org.name !== undefined && typeof value.org.name !== "string")
+        return;
+      settings.org = { id: value.org.id.trim(), ...value.org.name?.trim() ? { name: value.org.name.trim() } : {} };
+    }
+    const destinations = value.destinations === undefined ? undefined : parseDestinations(value.destinations);
+    if (value.destinations !== undefined && !destinations)
+      return;
+    if (destinations) {
+      settings.destinations = destinations;
+      settings.connectorIds = destinations.map((destination) => destination.connectorId);
+    }
+    if (value.authMode === "oauth") {
+      const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
+      if (!profileId || !destinations)
+        return;
+      return {
+        ...settings,
+        authMode: "oauth",
+        ...captureSince ? { captureSince } : {},
+        profileId,
+        projectRoot
+      };
+    }
+    if (value.authMode === "api-key") {
+      const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
+      if (!apiKey || Array.isArray(value.destinations) && value.destinations.length !== 1)
+        return;
+      return {
+        ...settings,
+        authMode: "api-key",
+        ...captureSince ? { captureSince } : {},
+        apiKey,
+        projectRoot
+      };
+    }
+    return;
+  } catch {
+    return;
+  }
+}
+function projectConfig(cwd) {
+  const root = resolveProjectRoot(cwd);
+  return root ? loadProjectConfig(root) : undefined;
+}
+function controlUrl(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_CONTROL_URL?.trim() || cfg?.controlUrl || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
+}
+function gatewayBase(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+}
+function experiencesUrl(cfg) {
+  return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
+}
+function captureKilled() {
+  const value = process.env.AUGENTA_CAPTURE_ENABLED;
+  return value === "0" || value === "false";
+}
+function captureEnabled(cfg) {
+  if (!cfg || captureKilled())
+    return false;
+  return cfg.authMode === "oauth" ? Boolean(cfg.profileId) && (cfg.connectorIds?.length ?? 0) > 0 : Boolean(cfg.apiKey);
 }
 
 // capture/platform.ts
@@ -660,13 +687,16 @@ async function fetchAllWorkspaces(profileId, gateway) {
   throw new Error(`the Workspace list did not finish within ${WORKSPACE_LIST_MAX_PAGES} pages of ` + `${WORKSPACE_LIST_PAGE_SIZE} — refusing to offer a partial list of destinations`);
 }
 async function currentConnector(profileId, gateway, id) {
+  return inspectConnector((url, init) => fetchWithProfile(profileId, url, init), gateway, id);
+}
+async function inspectConnector(fetcher, gateway, id, signal) {
   if (!id)
     return;
-  const response = await fetchWithProfile(profileId, `${gateway}/v1/connectors/${encodeURIComponent(id)}`);
+  const response = await fetcher(`${gateway}/v1/connectors/${encodeURIComponent(id)}`, signal ? { signal } : {});
   if (response.status === 403 || response.status === 404)
     return;
   if (!response.ok) {
-    throw new Error(`could not inspect the existing Connector (${response.status})`);
+    throw new AugentaRequestError(response.status, `could not inspect the existing Connector (${response.status})`);
   }
   return (await response.json()).connector;
 }
@@ -693,62 +723,17 @@ function describeError(error) {
   return detail ? `cannot reach Augenta: ${detail}` : "cannot reach Augenta: the network request failed. Check your connection.";
 }
 
-// scripts/recall.ts
-var CONTEXT_TIMEOUT_SECONDS = 75;
-var ANSWER_TIMEOUT_SECONDS = 75;
-var MAX_TIMEOUT_SECONDS = 600;
+// capture/recall-client.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
 var MAX_QUERY_CHARS = 4096;
-var MODE_CONFLICT_MESSAGE = "--answer and --context cannot be used together";
-function parseArgs(argv) {
-  const args = { words: [] };
-  const valueFor = (flag, i) => {
-    const value = argv[i + 1];
-    if (!value || value.startsWith("--")) {
-      throw new Error(`${flag} requires a value`);
-    }
-    return value;
-  };
-  for (let i = 0;i < argv.length; i++) {
-    const flag = argv[i];
-    if (flag === "--json") {
-      args.json = true;
-    } else if (flag === "--answer") {
-      args.answer = true;
-    } else if (flag === "--context") {
-      args.context = true;
-    } else if (flag === "--query") {
-      args.query = valueFor(flag, i++);
-    } else if (flag === "--workspace") {
-      (args.workspaces ??= []).push(valueFor(flag, i++));
-    } else if (flag === "--project") {
-      args.project = valueFor(flag, i++);
-    } else if (flag === "--timeout") {
-      const value = Number(valueFor(flag, i++));
-      if (!Number.isFinite(value) || value <= 0) {
-        throw new Error("--timeout must be a positive number of seconds");
-      }
-      if (value > MAX_TIMEOUT_SECONDS) {
-        throw new Error(`--timeout must be at most ${MAX_TIMEOUT_SECONDS} seconds; a longer wait does not work (see MAX_TIMEOUT_SECONDS)`);
-      }
-      args.timeoutSeconds = value;
-    } else if (flag.startsWith("--")) {
-      throw new Error(`unknown flag: ${flag}`);
-    } else {
-      args.words.push(flag);
-    }
-  }
-  if (args.answer && args.context)
-    throw new Error(MODE_CONFLICT_MESSAGE);
-  return args;
-}
-function questionFrom(args) {
-  const words = args.words.join(" ").trim();
-  const flag = args.query?.trim() ?? "";
-  if (flag && words) {
-    throw new Error("pass the question with --query or as plain words, not both");
-  }
-  return flag || words;
-}
+var MIN_ATTEMPT_MS = 200;
+var RETRY_BACKOFF_MS = [150, 300];
+var NON_TRANSIENT_CODES = new Set([
+  "recall_unavailable",
+  "recall_forward_rejected",
+  "answerer_unavailable",
+  "consent_required"
+]);
 function blocksOf(body, type) {
   const content = body?.content;
   if (!Array.isArray(content))
@@ -888,23 +873,40 @@ function classifyRecallResponse(parts) {
     message: say(`Augenta returned ${status}`)
   };
 }
-async function askDestination(ctx, destination) {
+var defaultSleep = (ms) => new Promise((resolve3) => setTimeout(resolve3, ms));
+function requestTimeout(ceilingMs, deadlineAt) {
+  if (deadlineAt === undefined)
+    return Math.max(1, Math.floor(ceilingMs));
+  const remaining = deadlineAt - Date.now();
+  if (remaining < MIN_ATTEMPT_MS)
+    return;
+  return Math.max(1, Math.floor(Math.min(ceilingMs, remaining)));
+}
+function hasRoomFor(waitMs, deadlineAt) {
+  return deadlineAt === undefined || deadlineAt - Date.now() >= waitMs + MIN_ATTEMPT_MS;
+}
+function outOfTime() {
+  return {
+    kind: "failed",
+    code: "recall_timeout",
+    message: "Augenta did not answer within the time allowed"
+  };
+}
+async function askOnce(ctx, destination) {
+  const timeoutMs = requestTimeout(ctx.timeoutMs, ctx.deadlineAt);
+  if (timeoutMs === undefined)
+    return { outcome: outOfTime(), transient: false };
   const headers = {
     "content-type": "application/json",
     "idempotency-key": randomUUID2()
   };
   const body = JSON.stringify(destination.workspaceId ? { query: ctx.query, workspace: destination.workspaceId } : { query: ctx.query });
   try {
-    const response = ctx.profileId ? await fetchWithProfile(ctx.profileId, ctx.url, {
+    const response = await ctx.fetcher(ctx.url, {
       method: "POST",
       headers,
       body,
-      signal: AbortSignal.timeout(ctx.timeoutMs)
-    }) : await fetch(ctx.url, {
-      method: "POST",
-      headers: { ...headers, authorization: `AugentaKey ${ctx.apiKey}` },
-      body,
-      signal: AbortSignal.timeout(ctx.timeoutMs)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     const text = await response.text().catch(() => "");
     let parsed;
@@ -925,22 +927,61 @@ async function askDestination(ctx, destination) {
     if (response.status === 503 && url.searchParams.get("mode") === "answer" && outcome.kind === "failed" && (outcome.code === "answerer_unavailable" || outcome.code === "consent_required")) {
       url.searchParams.set("mode", "context");
       const fallback = await askDestination({ ...ctx, url: url.toString(), timeoutMs: ctx.contextTimeoutMs }, destination);
-      return { ...fallback, fallback: { requested: "answer", reason: outcome.code } };
+      return { outcome: { ...fallback, fallback: { requested: "answer", reason: outcome.code } }, transient: false };
     }
-    return outcome;
+    const { code } = errorFields(parsed, text);
+    const final = parsed?.error?.retryable === false;
+    const transient = [500, 502, 503, 504].includes(response.status) && !final && !(code && NON_TRANSIENT_CODES.has(code));
+    const wait = retryAfterSeconds(response.headers.get("retry-after"));
+    return { outcome, transient, ...wait !== undefined ? { retryAfterMs: wait * 1000 } : {} };
   } catch (error) {
     if (error instanceof ReLoginRequiredError) {
-      return { kind: "failed", code: "need_login", message: error.message };
+      return { outcome: { kind: "failed", code: "need_login", message: error.message }, transient: false };
     }
     const name = error?.name;
     if (name === "TimeoutError" || name === "AbortError") {
       return {
-        kind: "failed",
-        code: "recall_timeout",
-        message: `Augenta did not answer within ${Math.round(ctx.timeoutMs / 1000)}s`
+        outcome: {
+          kind: "failed",
+          code: "recall_timeout",
+          message: `Augenta did not answer within ${Math.round(timeoutMs / 1000)}s`
+        },
+        transient: false
       };
     }
-    return { kind: "failed", code: "network", message: describeError(error) };
+    return { outcome: { kind: "failed", code: "network", message: describeError(error) }, transient: true };
+  }
+}
+async function askDestination(ctx, destination) {
+  for (let attempt = 0;; attempt++) {
+    const { outcome, transient, retryAfterMs } = await askOnce(ctx, destination);
+    if (!transient || attempt >= ctx.retries)
+      return outcome;
+    const wait = retryAfterMs ?? RETRY_BACKOFF_MS[Math.min(attempt, RETRY_BACKOFF_MS.length - 1)];
+    if (!hasRoomFor(wait, ctx.deadlineAt))
+      return outcome;
+    await ctx.sleep(wait);
+  }
+}
+async function checkLink(fetcher, gateway, connectorId, deadlineAt, retries, sleep) {
+  for (let attempt = 0;; attempt++) {
+    let signal;
+    if (deadlineAt !== undefined) {
+      const timeoutMs = requestTimeout(REQUEST_TIMEOUT_MS, deadlineAt);
+      if (timeoutMs === undefined)
+        throw new Error("no time left to check the Connector");
+      signal = AbortSignal.timeout(timeoutMs);
+    }
+    try {
+      return await inspectConnector(fetcher, gateway, connectorId, signal);
+    } catch (error) {
+      const name = error?.name;
+      const transient = error instanceof AugentaRequestError ? error.status >= 500 : !(error instanceof ReLoginRequiredError) && name !== "TimeoutError" && name !== "AbortError";
+      const wait = RETRY_BACKOFF_MS[0];
+      if (!transient || attempt >= Math.min(retries, 1) || !hasRoomFor(wait, deadlineAt))
+        throw error;
+      await sleep(wait);
+    }
   }
 }
 function aggregateStatus(payload) {
@@ -971,13 +1012,13 @@ function recallEnvironment(gateway, cfg) {
     return label;
   return gateway === DEFAULT_GATEWAY ? "prod" : gateway;
 }
-async function runRecall(resolved, args) {
-  if (args.answer && args.context)
-    throw new Error(MODE_CONFLICT_MESSAGE);
+async function askWorkspaces(searchRoot, request) {
   const startedAt = Date.now();
-  const query = questionFrom(args);
+  const { query, mode, deadlineAt } = request;
+  const retries = Math.max(0, Math.floor(request.retries ?? 0));
+  const sleep = request.sleep ?? defaultSleep;
   let environment = recallEnvironment(DEFAULT_GATEWAY);
-  let projectRoot = resolved.projectRoot;
+  let projectRoot = searchRoot;
   let organization;
   const bail = (status2, code, message, extra = {}) => ({
     status: status2,
@@ -999,7 +1040,7 @@ async function runRecall(resolved, args) {
   if (query.length > MAX_QUERY_CHARS) {
     return bail("error", "query_too_long", `the question is ${query.length} characters; Augenta accepts ${MAX_QUERY_CHARS}`);
   }
-  const found = resolveProjectRoot(resolved.projectRoot);
+  const found = resolveProjectRoot(searchRoot);
   if (!found) {
     return bail("not_connected", "not_connected", "this project is not connected to Augenta; run the connect skill first");
   }
@@ -1017,20 +1058,23 @@ async function runRecall(resolved, args) {
   const unresolvedConnectorIds = [];
   let names = Promise.resolve([]);
   let destinations = [];
-  let ctx;
-  const mode = args.context ? "context" : "answer";
-  const contextTimeoutMs = (args.timeoutSeconds ?? CONTEXT_TIMEOUT_SECONDS) * 1000;
-  const timeoutMs = mode === "context" ? contextTimeoutMs : (args.timeoutSeconds ?? ANSWER_TIMEOUT_SECONDS) * 1000;
+  let fetcher;
   const url = `${gateway}/v1/recall?mode=${mode}`;
   if (cfg.authMode === "oauth") {
     const profileId = cfg.profileId;
-    if (!getAuthProfile(profileId)) {
+    const bearer = typeof request.auth === "object" ? request.auth.bearer : undefined;
+    if (bearer === undefined && !getAuthProfile(profileId)) {
       return bail("need_login", "need_login", "this project's Augenta sign-in is missing; sign in again with the connect skill");
     }
+    fetcher = bearer !== undefined ? (target, init) => fetch(target, {
+      ...init,
+      signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      headers: { ...init.headers, authorization: `Bearer ${bearer}` }
+    }) : (target, init) => fetchWithProfile(profileId, target, init);
     destinations = (cfg.destinations ?? []).map((destination) => ({ ...destination }));
-    if (args.workspaces?.length) {
-      const requested = new Set(args.workspaces);
-      const unknown = args.workspaces.filter((id) => !destinations.some((destination) => destination.workspaceId === id));
+    if (request.workspaces?.length) {
+      const requested = new Set(request.workspaces);
+      const unknown = request.workspaces.filter((id) => !destinations.some((destination) => destination.workspaceId === id));
       if (unknown.length > 0) {
         return bail("error", "unknown_workspace", `this project does not feed ${unknown.join(", ")}; recall can only ask the Workspaces it sends to`);
       }
@@ -1038,7 +1082,7 @@ async function runRecall(resolved, args) {
     }
     const inspected = await Promise.all(destinations.map(async (destination) => {
       try {
-        return { destination, connector: await currentConnector(profileId, gateway, destination.connectorId) };
+        return { destination, connector: await checkLink(fetcher, gateway, destination.connectorId, deadlineAt, retries, sleep) };
       } catch (error) {
         return { destination, error };
       }
@@ -1046,9 +1090,11 @@ async function runRecall(resolved, args) {
     destinations = [];
     for (const entry of inspected) {
       if ("error" in entry) {
+        const status2 = entry.error instanceof AugentaRequestError ? entry.error.status : undefined;
+        const refused = entry.error instanceof ReLoginRequiredError || bearer !== undefined && status2 === 401;
         failed.push({
           ...entry.destination,
-          code: entry.error instanceof ReLoginRequiredError ? "need_login" : "network",
+          code: refused ? "need_login" : status2 === 429 ? "rate_limited" : "network",
           message: describeError(entry.error)
         });
       } else if (!entry.connector || entry.connector.status !== "active" || entry.connector.id !== entry.destination.connectorId || entry.connector.workspaceId !== entry.destination.workspaceId) {
@@ -1057,12 +1103,11 @@ async function runRecall(resolved, args) {
         destinations.push(entry.destination);
       }
     }
-    if (destinations.length > 0) {
+    if (destinations.length > 0 && request.refreshNames !== false && bearer === undefined) {
       names = fetchAllWorkspaces(profileId, gateway).catch(() => []);
     }
-    ctx = { url, query, timeoutMs, contextTimeoutMs, profileId };
   } else {
-    if (args.workspaces?.length) {
+    if (request.workspaces?.length) {
       return bail("error", "workspace_not_selectable", "this project uses a platform key, whose Connector fixes the Workspace; --workspace selects nothing");
     }
     const apiKey = cfg.apiKey?.trim();
@@ -1070,13 +1115,27 @@ async function runRecall(resolved, args) {
       return bail("error", "unreadable_config", "this project's platform key is missing from its Augenta config; reconnect");
     }
     destinations = [{}];
-    ctx = { url, query, timeoutMs, contextTimeoutMs, apiKey };
+    fetcher = (target, init) => fetch(target, {
+      ...init,
+      signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      headers: { ...init.headers, authorization: `AugentaKey ${apiKey}` }
+    });
   }
   if (destinations.length === 0 && failed.length === 0) {
     return bail("error", "no_destination", unresolvedConnectorIds.length > 0 ? `this project lists ${unresolvedConnectorIds.join(", ")}, but their links are disabled, inaccessible, or no longer match the saved Workspaces; reconnect` : "this project has no destination to ask; reconnect with the connect skill", unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {});
   }
   const linkedDestinations = destinations;
   destinations = destinations.filter((destination, index) => destinations.findIndex((entry) => entry.workspaceId === destination.workspaceId) === index);
+  const ctx = {
+    url,
+    query,
+    timeoutMs: request.timeoutMs,
+    contextTimeoutMs: request.contextTimeoutMs,
+    fetcher,
+    ...deadlineAt !== undefined ? { deadlineAt } : {},
+    retries,
+    sleep
+  };
   const outcomes = await Promise.all(destinations.map(async (destination) => ({
     destination,
     outcome: await askDestination(ctx, destination)
@@ -1113,6 +1172,77 @@ async function runRecall(resolved, args) {
     projectRoot,
     elapsedMs: Date.now() - startedAt
   };
+}
+
+// scripts/recall.ts
+var CONTEXT_TIMEOUT_SECONDS = 75;
+var ANSWER_TIMEOUT_SECONDS = 75;
+var MAX_TIMEOUT_SECONDS = 600;
+var MODE_CONFLICT_MESSAGE = "--answer and --context cannot be used together";
+function parseArgs(argv) {
+  const args = { words: [] };
+  const valueFor = (flag, i) => {
+    const value = argv[i + 1];
+    if (!value || value.startsWith("--")) {
+      throw new Error(`${flag} requires a value`);
+    }
+    return value;
+  };
+  for (let i = 0;i < argv.length; i++) {
+    const flag = argv[i];
+    if (flag === "--json") {
+      args.json = true;
+    } else if (flag === "--answer") {
+      args.answer = true;
+    } else if (flag === "--context") {
+      args.context = true;
+    } else if (flag === "--query") {
+      args.query = valueFor(flag, i++);
+    } else if (flag === "--workspace") {
+      (args.workspaces ??= []).push(valueFor(flag, i++));
+    } else if (flag === "--project") {
+      args.project = valueFor(flag, i++);
+    } else if (flag === "--timeout") {
+      const value = Number(valueFor(flag, i++));
+      if (!Number.isFinite(value) || value <= 0) {
+        throw new Error("--timeout must be a positive number of seconds");
+      }
+      if (value > MAX_TIMEOUT_SECONDS) {
+        throw new Error(`--timeout must be at most ${MAX_TIMEOUT_SECONDS} seconds; a longer wait does not work (see MAX_TIMEOUT_SECONDS)`);
+      }
+      args.timeoutSeconds = value;
+    } else if (flag.startsWith("--")) {
+      throw new Error(`unknown flag: ${flag}`);
+    } else {
+      args.words.push(flag);
+    }
+  }
+  if (args.answer && args.context)
+    throw new Error(MODE_CONFLICT_MESSAGE);
+  return args;
+}
+function questionFrom(args) {
+  const words = args.words.join(" ").trim();
+  const flag = args.query?.trim() ?? "";
+  if (flag && words) {
+    throw new Error("pass the question with --query or as plain words, not both");
+  }
+  return flag || words;
+}
+async function runRecall(resolved, args) {
+  if (args.answer && args.context)
+    throw new Error(MODE_CONFLICT_MESSAGE);
+  const query = questionFrom(args);
+  const mode = args.context ? "context" : "answer";
+  const contextTimeoutMs = (args.timeoutSeconds ?? CONTEXT_TIMEOUT_SECONDS) * 1000;
+  const timeoutMs = mode === "context" ? contextTimeoutMs : (args.timeoutSeconds ?? ANSWER_TIMEOUT_SECONDS) * 1000;
+  return askWorkspaces(resolved.projectRoot, {
+    query,
+    mode,
+    ...args.workspaces ? { workspaces: args.workspaces } : {},
+    timeoutMs,
+    contextTimeoutMs
+  });
 }
 function printPayload(payload) {
   for (const entry of [...payload.answers, ...payload.nothingRemembered, ...payload.failed]) {
@@ -1177,5 +1307,7 @@ export {
   questionFrom,
   parseArgs,
   classifyRecallResponse,
-  aggregateStatus
+  askWorkspaces,
+  aggregateStatus,
+  MAX_QUERY_CHARS
 };

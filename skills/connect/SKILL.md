@@ -189,6 +189,9 @@ from `signedInAs`:
   activity, its raw transcript lines, and its project memory, complete, in each;
 - so **anyone with access to any selected Workspace can read this project's
   captured activity** — the audience is the union of all of them;
+- that each prompt they submit is also asked of those Workspaces as a recall
+  question, so what they remember can be added to the conversation
+  (`AUGENTA_AUTO_RECALL=0` turns just that off);
 - and, if `environment` is not `prod`, which environment this is.
 
 For Codex, also explain that capture starts with native turns beginning after

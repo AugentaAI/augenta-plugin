@@ -6,7 +6,9 @@
  * cursor and buffer them into the project's durable outbox on TWO channels —
  * normalized + scrubbed canonical events (the scrub applies to event text
  * ONLY), plus one structurally-sanitized RawRecord per consumed valid JSON
- * transcript line (the project opt-in is consent for both channels). Both get the
+ * transcript line (the project opt-in is consent for both channels). The prompt
+ * hook's own automatic-recall block is excluded from both channels — it is
+ * remembered memory, not this session's activity (capture/auto-recall-marker.ts). Both get the
  * current turn stamp; then the cursor advances. PostToolUse stops there — it is
  * buffer-only. A genuine Stop also scans harness memory into standalone,
  * scrubbed document records before spawning a detached shipper to flush the
@@ -408,7 +410,8 @@ function captureUnderLock(
   // Raw-telemetry channel: one RawRecord per consumed non-blank valid JSON line,
   // structurally sanitized but otherwise UNSCRUBBED — including lines that
   // produced no event (the cursor advances past them; without a wrapper they
-  // would be lost). The sid
+  // would be lost). The automatic-recall block is the one line never wrapped:
+  // the normalizers drop it from both channels (capture/auto-recall-marker.ts). The sid
   // comes from the normalizer's OWN per-line derivation (the sibling event's
   // sid), so a resumed session's replayed lines — which keep their original
   // sessionId — can never split the raw channel from its steps into a

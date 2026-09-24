@@ -969,6 +969,29 @@ async function accessTokenForProfile(profileId, forceRefresh = false) {
     return updated.accessToken;
   });
 }
+function freshStoredAccessToken(profileId, marginMs = 15000) {
+  const profile = storedProfile(profileId);
+  if (!profile || typeof profile.accessToken !== "string" || !profile.accessToken)
+    return;
+  if (typeof profile.expiresAt !== "number" || profile.expiresAt <= Date.now() + marginMs)
+    return;
+  return profile.accessToken;
+}
+function storedProfileUpdatedAt(profileId) {
+  const updatedAt = storedProfile(profileId)?.updatedAt;
+  const ms = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN;
+  return Number.isFinite(ms) ? ms : undefined;
+}
+function storedProfile(profileId) {
+  try {
+    const parsed = JSON.parse(readFileSync4(authPath(), "utf8"));
+    if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object")
+      return;
+    return Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
+  } catch {
+    return;
+  }
+}
 async function fetchWithProfile(profileId, url, init = {}) {
   const send = async (forceRefresh) => {
     const accessToken = await accessTokenForProfile(profileId, forceRefresh);
@@ -997,6 +1020,13 @@ function markAuthNotice(projectRoot, notice) {
       mode: 384
     });
   } catch {}
+}
+function authNoticePending(projectRoot, notice, since) {
+  try {
+    return statSync2(noticePath(projectRoot, notice)).mtimeMs >= (since ?? Number.NEGATIVE_INFINITY);
+  } catch {
+    return false;
+  }
 }
 function takeAuthNotice(projectRoot) {
   let found;
@@ -1050,13 +1080,16 @@ async function fetchAllWorkspaces(profileId, gateway) {
   throw new Error(`the Workspace list did not finish within ${WORKSPACE_LIST_MAX_PAGES} pages of ` + `${WORKSPACE_LIST_PAGE_SIZE} — refusing to offer a partial list of destinations`);
 }
 async function currentConnector(profileId, gateway, id) {
+  return inspectConnector((url, init) => fetchWithProfile(profileId, url, init), gateway, id);
+}
+async function inspectConnector(fetcher, gateway, id, signal) {
   if (!id)
     return;
-  const response = await fetchWithProfile(profileId, `${gateway}/v1/connectors/${encodeURIComponent(id)}`);
+  const response = await fetcher(`${gateway}/v1/connectors/${encodeURIComponent(id)}`, signal ? { signal } : {});
   if (response.status === 403 || response.status === 404)
     return;
   if (!response.ok) {
-    throw new Error(`could not inspect the existing Connector (${response.status})`);
+    throw new AugentaRequestError(response.status, `could not inspect the existing Connector (${response.status})`);
   }
   return (await response.json()).connector;
 }
@@ -1104,8 +1137,10 @@ function spawnShipper(projectRoot) {
     });
     child.once("error", () => recordHealth(projectRoot, "delivery", "failed"));
     child.unref();
+    return child;
   } catch {
     recordHealth(projectRoot, "delivery", "failed");
+    return;
   }
 }
 

@@ -11,6 +11,27 @@ release a user can read.
 
 ## [Unreleased]
 
+### Added
+
+- **Recall now runs on each prompt.** In a connected project, when you submit a
+  prompt, the plugin asks the Workspaces the project feeds what they remember
+  about it. It uses memory-only context mode, with no Augenta answer model.
+  Anything that matches reaches your agent as background it uses only when
+  relevant.
+  - Pasted blocks and common secret patterns are removed from the prompt first.
+    Commands and replies shorter than three words are skipped.
+  - The lookup waits at most five seconds, including up to two retries. If
+    Augenta is slow, offline or has nothing saved, the prompt goes ahead as
+    usual.
+  - Each prompt leaves a one-way fingerprint of the question in each selected
+    Workspace, as any recall question does. The recalled text itself is not
+    captured back.
+  - Pausing capture with `AUGENTA_CAPTURE_ENABLED=0` also pauses this.
+    `AUGENTA_AUTO_RECALL=0` turns off only this. `/augenta:recall` keeps working
+    either way.
+  - No reconnect is required. Codex asks once to approve the updated prompt
+    hook, because its timeout changed.
+
 ### Fixed
 
 - Connecting from a Git worktree now connects that worktree, where its hooks

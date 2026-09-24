@@ -33,6 +33,7 @@ the project keeps sending to its old Workspaces.
 | --- | --- |
 | `<project>/.augenta/config.json` | This project's connection settings |
 | `<project>/.augenta/outbox/` | Records waiting to be sent, plus delivery state |
+| `<project>/.augenta/state/recall-backoff.json` | When automatic recall may ask again after Augenta asked it to slow down |
 | `~/.augenta/auth.json` | Your saved sign-in, shared across connected projects |
 
 The plugin needs a readable project config to capture or recall. An old or
@@ -140,8 +141,9 @@ If your job calls the API directly, it does not need this file. Send
 | What you want | What to do |
 | --- | --- |
 | Stop capture and recall for one project | Delete that project's `.augenta/config.json` |
-| Pause capture across projects, but keep recall | Set `AUGENTA_CAPTURE_ENABLED=0` in the environment that starts your coding app |
-| Resume paused capture | Remove that variable and restart the app with the new environment |
+| Pause capture and automatic recall across projects, but keep the recall command | Set `AUGENTA_CAPTURE_ENABLED=0` in the environment that starts your coding app |
+| Turn off only automatic recall | Set `AUGENTA_AUTO_RECALL=0` in the environment that starts your coding app |
+| Resume paused capture or automatic recall | Remove that variable and restart the app with the new environment |
 
 Disconnecting does not erase local buffers or records already sent. Removing
 a Workspace from the selected set also leaves its existing records in place.
@@ -156,6 +158,7 @@ a Workspace from the selected set also leaves its existing records in place.
 | A refused API key | Check the key and whether its Connector is enabled; browser connect would replace the key setup |
 | “Nothing remembered” | That Workspace may not have saved memory yet |
 | “Recall unavailable” | Recall is not available in the connected Augenta environment |
+| No automatic recall on a prompt | Nothing matched, the prompt was a command or very short, Augenta did not answer within five seconds, or the sign-in needs renewing; ask with the recall command to see why |
 | A notice about discarded records | Those records will not be retried; check the named connection |
 
 For an unresolved problem, [report a bug](https://github.com/AugentaAI/augenta-plugin/issues).

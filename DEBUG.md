@@ -55,7 +55,7 @@ touches the control plane: it posts to the GATEWAY in the project's own
 that environment. So a project connected against dev asks dev, whatever
 `AUGENTA_CONTROL_URL` says. To aim recall somewhere else, either reconnect the
 project or set `AUGENTA_API_URL`, which `gatewayBase` reads first. This is also
-why `recallEnvironment` in `scripts/recall.ts` consults BOTH coordinates — the
+why `recallEnvironment` in `capture/recall-client.ts` consults BOTH coordinates — the
 control URL alone would report `prod` about a question going to dev.
 
 **Neither skill has an environment flag, on purpose.** `SKILL.md` stays
@@ -187,7 +187,34 @@ a bug in whichever half you were not watching.
 variables win over file values; explicit CLI flags win over both. Connect keeps
 a hand-set `ingestUrl` on reconnect. None opts a project into capture — capture still
 requires `.augenta/config.json`. `AUGENTA_CAPTURE_ENABLED=0` is the global kill
-switch.
+switch, and it also stops automatic recall. `AUGENTA_AUTO_RECALL=0` stops only
+automatic recall.
+
+## Fire the prompt hook by hand
+
+Automatic recall is silent by design, so when a prompt gets no recall block the
+fastest way to see why is to run the hook yourself against a connected project.
+Pipe it the payload the harness would send:
+
+```bash
+printf '%s' '{"cwd":"/absolute/path/to/project","transcript_path":"/tmp/t.jsonl","prompt":"what did we decide about sign-in"}' \
+  | node dist/hooks/user-prompt.mjs
+```
+
+A match prints one `hookSpecificOutput` object whose `additionalContext` starts
+with `[augenta-recall:v1]`. Nothing printed means one of the skips applied. The
+usual ones are:
+
+- The prompt is a command, mentions `$augenta:`, or is under three words.
+- Capture is paused.
+- A rate-limit pause is recorded in `.augenta/state/recall-backoff.json`.
+- The stored sign-in is stale and was not renewed within 5 seconds.
+- Nothing matched.
+
+`node dist/scripts/recall.mjs --json --context --query "<the same prompt>"`
+asks the same question and reports which of those it was. Running the hook
+bumps the turn ordinal for that transcript path, so use a scratch path like the
+one above.
 
 ## Known non-production wrinkle
 

@@ -12,10 +12,10 @@ flowchart LR
         Agent[Claude Code or Codex]
         Queue[Local queue]
         Sender[Background sender]
-        Recall[Recall skill]
+        Recall[Recall skill or prompt hook]
         Agent -->|Activity, raw transcripts, and notes| Queue
         Queue --> Sender
-        Agent -->|A question| Recall
+        Agent -->|A question or the prompt| Recall
     end
     subgraph Hosted[Augenta]
         Saved[Selected Workspaces]
@@ -27,9 +27,10 @@ flowchart LR
 ```
 
 Saving happens through **hooks**: small scripts your coding app runs at points
-such as the end of a turn. Recall happens when you or your agent calls the
-recall skill. The hooks do not fetch answers or add remembered context to each
-new chat. The recall skill brings remembered context back into the task.
+such as the end of a turn. Recall happens two ways. When you submit a prompt,
+the prompt hook asks your Workspaces what they remember about it and adds any
+match to the conversation for the agent to use or ignore. You or your agent can
+also call the recall skill with a question of your own.
 
 This repository contains those scripts and two skills, `connect` and `recall`.
 It does not contain the hosted memory engine or train your coding model.
@@ -151,8 +152,30 @@ denials and archived Workspaces from disabled links. Workspace names are fetched
 best-effort after link checks, concurrently with recall, so an all-disabled set
 does not trigger a name lookup and name listing never gates the recall POSTs.
 
-Recall uses the saved project config even when `AUGENTA_CAPTURE_ENABLED=0`.
-Deleting the config turns off both paths.
+The recall command uses the saved project config even when
+`AUGENTA_CAPTURE_ENABLED=0`; automatic recall does not. Deleting the config
+turns off every path.
+
+### Automatic recall
+
+The [prompt hook](../hooks/auto-recall.ts) runs the same request on each
+submitted prompt, through the same [request layer](../capture/recall-client.ts),
+with these differences:
+
+- It asks in context mode, so Augenta runs no model for it.
+- The question is the prompt, with pasted blocks removed and common secret
+  patterns masked. Commands, `$augenta:` mentions, replies under three words and
+  prompts over the size limit are not asked.
+- One 5-second budget covers everything, including up to two retries of a
+  dropped connection or a temporary server error. A timeout or a refusal is not
+  retried. Anything short of an answer adds nothing, and the prompt proceeds.
+- It never refreshes a sign-in itself. A stale token is renewed by the
+  background sender, and the hook waits for it within the budget.
+- It runs only while capture is enabled, and `AUGENTA_AUTO_RECALL=0` turns off
+  only this path. A 429 pauses it until the server's retry time.
+
+The added text starts with a fixed marker. Capture drops every transcript copy
+of it, in both apps and both channels, so recalled memory is not saved again.
 
 ## Code map
 
@@ -160,10 +183,11 @@ Deleting the config turns off both paths.
 | --- | --- |
 | [`skills/`](../skills/) | Instructions the agent follows for connect and recall |
 | [`hooks/hooks.json`](../hooks/hooks.json) | Eight app events and the scripts they run |
-| [`hooks/`](../hooks/) | Session setup and turn tracking |
+| [`hooks/`](../hooks/) | Session setup, turn tracking, and automatic recall |
 | [`capture/`](../capture/) | Read records, clean them, queue them, and send them |
 | [`scripts/connect.ts`](../scripts/connect.ts) | Sign-in and Workspace selection |
 | [`scripts/recall.ts`](../scripts/recall.ts) | Ask the selected Workspaces a question |
+| [`capture/recall-client.ts`](../capture/recall-client.ts) | The recall request both of those use |
 | [`runtime/`](../runtime/) | Shared Node helpers and plugin version |
 | [`dist/`](../dist/) | Six ready-to-run Node bundles installed by both apps |
 | [`__tests__/contract.test.ts`](../__tests__/contract.test.ts) | Checks the plugin's rules, including key privacy and setup wording |

@@ -37,6 +37,67 @@ var __require = /* @__PURE__ */ createRequire(import.meta.url);
 import { existsSync as existsSync9, openSync as openSync2, fstatSync, readSync, closeSync as closeSync2 } from "node:fs";
 import { basename as basename2, dirname as dirname6, join as join11 } from "node:path";
 
+// capture/auto-recall-marker.ts
+var AUTO_RECALL_SENTINEL = "[augenta-recall:v1]";
+function hasSentinel(value) {
+  if (typeof value === "string")
+    return value.includes(AUTO_RECALL_SENTINEL);
+  if (Array.isArray(value))
+    return value.some(hasSentinel);
+  return false;
+}
+function isClaudeAutoRecallRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const line = value;
+  if (line.type !== "attachment")
+    return false;
+  const attachment = line.attachment;
+  if (!attachment || typeof attachment !== "object")
+    return false;
+  if (typeof attachment.type !== "string" || !attachment.type.startsWith("hook_"))
+    return false;
+  return hasSentinel(attachment.content) || hasSentinel(attachment.stdout);
+}
+function isCodexAutoRecallItem(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const item = value;
+  if (item.type !== "message" || item.role !== "developer")
+    return false;
+  if (typeof item.content === "string")
+    return hasSentinel(item.content);
+  if (!Array.isArray(item.content))
+    return false;
+  return item.content.some((block) => !!block && typeof block === "object" && hasSentinel(block.text));
+}
+function isCodexAutoRecallRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const line = value;
+  return line.type === "response_item" && isCodexAutoRecallItem(line.payload);
+}
+function stripCodexAutoRecallHistory(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return;
+  const line = value;
+  if (line.type !== "compacted" || !line.payload || typeof line.payload !== "object")
+    return;
+  const payload = line.payload;
+  let changed = false;
+  const next = { ...payload };
+  for (const [key, entry] of Object.entries(payload)) {
+    if (!Array.isArray(entry))
+      continue;
+    const kept = entry.filter((item) => !isCodexAutoRecallItem(item));
+    if (kept.length !== entry.length) {
+      next[key] = kept;
+      changed = true;
+    }
+  }
+  return changed ? { ...line, payload: next } : undefined;
+}
+
 // capture/sanitize.ts
 function normalizedKey(key) {
   return key.replace(/[_-]/g, "").toLowerCase();
@@ -88,7 +149,7 @@ function sanitizeTelemetryJsonl(raw) {
 function agentSid(baseSid, agentId) {
   return `${baseSid}/agent-${agentId}`;
 }
-function tailToEvents(lines, startSeq, startOffset, toEvent, lineSid) {
+function tailToEvents(lines, startSeq, startOffset, toEvent, lineSid, exclude) {
   const events = [];
   const raws = [];
   let seq = startSeq;
@@ -102,12 +163,21 @@ function tailToEvents(lines, startSeq, startOffset, toEvent, lineSid) {
     const sanitized = sanitizeTelemetryRecord(raw);
     if (sanitized === undefined)
       continue;
-    const event = toEvent(sanitized.value, seq, lineOff);
+    let value = sanitized.value;
+    let json = sanitized.json;
+    const excluded = exclude?.(value);
+    if (excluded === "drop")
+      continue;
+    if (excluded !== undefined) {
+      value = excluded;
+      json = JSON.stringify(excluded);
+    }
+    const event = toEvent(value, seq, lineOff);
     if (event) {
       events.push(event);
       seq += 1;
     }
-    raws.push({ raw: sanitized.json, sid: event ? event.sid : lineSid(sanitized.value) });
+    raws.push({ raw: json, sid: event ? event.sid : lineSid(value) });
   }
   return { events, raws, nextSeq: seq, nextOffset: off };
 }
@@ -253,7 +323,7 @@ function normalizeClaudeTranscript(opts) {
   }, (sanitized) => {
     const base = sanitized && typeof sanitized === "object" && !Array.isArray(sanitized) ? sanitized.sessionId || ctx.sessionId : ctx.sessionId;
     return ctx.agentId ? agentSid(base, ctx.agentId) : base;
-  });
+  }, (sanitized) => isClaudeAutoRecallRecord(sanitized) ? "drop" : undefined);
 }
 // capture/normalize-codex.ts
 function extractCodexText(content) {
@@ -400,7 +470,7 @@ function normalizeCodexRollout(opts) {
     if (event?.role === "assistant")
       lastAssistant = event;
     return event;
-  }, () => codexSessionFromPath(ctx.transcriptPath) || ctx.sessionId);
+  }, () => codexSessionFromPath(ctx.transcriptPath) || ctx.sessionId, (sanitized) => isCodexAutoRecallRecord(sanitized) ? "drop" : stripCodexAutoRecallHistory(sanitized));
   return model ? { ...result, lastModel: model } : result;
 }
 // capture/scrub.ts
@@ -1657,8 +1727,10 @@ function spawnShipper(projectRoot) {
     });
     child.once("error", () => recordHealth(projectRoot, "delivery", "failed"));
     child.unref();
+    return child;
   } catch {
     recordHealth(projectRoot, "delivery", "failed");
+    return;
   }
 }
 
