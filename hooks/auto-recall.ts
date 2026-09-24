@@ -40,7 +40,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AUTO_RECALL_SENTINEL } from "../capture/auto-recall-marker";
 import { ensureAugentaDir } from "../capture/augenta-dir";
-import { authNoticePending, freshStoredAccessToken } from "../capture/auth";
+import { authNoticePending, freshStoredAccessToken, storedProfileUpdatedAt } from "../capture/auth";
 import { captureEnabled, projectConfig } from "../capture/config";
 import { askWorkspaces, MAX_QUERY_CHARS, type RecallAnswer, type RecallPayload } from "../capture/recall-client";
 import { scrub } from "../capture/scrub";
@@ -64,6 +64,10 @@ const TOKEN_WAIT_RESERVE_MS = 600;
 /** The pause after a 429 that carried no Retry-After. */
 const DEFAULT_RATE_LIMIT_SECONDS = 60;
 const CUT_MARKER = "\n[… cut by the Augenta plugin to fit the prompt context]";
+/** Claude Code wraps hook context in `<system-reminder>`. Recalled text is
+ *  remembered content anyone feeding the Workspace could have written, so it
+ *  must not be able to close that wrapper and continue as if outside it. */
+const HARNESS_WRAPPER_TAG = /<(\/?system-reminder)/gi;
 
 /** `AUGENTA_AUTO_RECALL=0` (or `false`) turns off only this path. */
 export function autoRecallDisabled(): boolean {
@@ -161,21 +165,39 @@ export function renderRecallContext(payload: RecallPayload): string {
       ? [`These Workspaces are in the ${payload.environment} Augenta environment, not production.`]
       : []),
   ].join("\n");
-  const answers = payload.answers.filter((answer) => answer.answer.trim());
+  const sections = payload.answers
+    .filter((answer) => answer.answer.trim())
+    .map((answer) => {
+      const kind = answer.mode === "answer" ? "Augenta's answer" : "remembered notes";
+      const partial = answer.notesTruncated ? " (only its most recent notes)" : "";
+      return {
+        heading: `\n\n## ${label(answer)}: ${kind}${partial}\n`,
+        text: answer.answer.trim().replace(HARNESS_WRAPPER_TAG, "&lt;$1"),
+        body: "",
+      };
+    });
+  // Shares are handed out shortest first, so an answer needing less than an
+  // even share leaves the rest to the longer ones; the order shown is unchanged.
+  const bySize = [...sections].sort((a, b) => a.heading.length + a.text.length - (b.heading.length + b.text.length));
   let remaining = MAX_CONTEXT_CHARS - header.length;
-  const sections: string[] = [];
-  answers.forEach((answer, index) => {
-    const kind = answer.mode === "answer" ? "Augenta's answer" : "remembered notes";
-    const partial = answer.notesTruncated ? " (only its most recent notes)" : "";
-    const heading = `\n\n## ${label(answer)}: ${kind}${partial}\n`;
-    const share = Math.floor(remaining / (answers.length - index)) - heading.length;
+  bySize.forEach((section, index) => {
+    const share = Math.floor(remaining / (bySize.length - index)) - section.heading.length;
     if (share <= CUT_MARKER.length) return;
-    const text = answer.answer.trim();
-    const body = text.length <= share ? text : `${text.slice(0, share - CUT_MARKER.length).trimEnd()}${CUT_MARKER}`;
-    sections.push(heading + body);
-    remaining -= heading.length + body.length;
+    section.body = section.text.length <= share
+      ? section.text
+      : `${cutAt(section.text, share - CUT_MARKER.length)}${CUT_MARKER}`;
+    remaining -= section.heading.length + section.body.length;
   });
-  return sections.length ? header + sections.join("") : "";
+  const shown = sections.filter((section) => section.body);
+  return shown.length ? header + shown.map((section) => section.heading + section.body).join("") : "";
+}
+
+/** `text` cut to at most `length` code units, never between the halves of a
+ *  surrogate pair: a lone half reaches the model as a replacement character. */
+function cutAt(text: string, length: number): string {
+  const lastKept = text.charCodeAt(length - 1);
+  const end = lastKept >= 0xd800 && lastKept <= 0xdbff ? length - 1 : length;
+  return text.slice(0, end).trimEnd();
 }
 
 /* ---------------------------------------------------------------------- */
@@ -185,12 +207,18 @@ export interface AutoRecallInput {
   cwd?: string;
 }
 
+/** What the token wait needs from a spawned shipper: word that it finished. */
+export interface ShipperProcess {
+  once(event: "exit" | "error", listener: () => void): unknown;
+}
+
 export interface AutoRecallOptions {
   /** When the hook started; the budget runs from here. */
   startedAt?: number;
   budgetMs?: number;
-  /** Renews a stale sign-in out of process. Defaults to the detached shipper. */
-  spawn?: (projectRoot: string) => void;
+  /** Renews a stale sign-in out of process. Defaults to the detached shipper,
+   *  whose exit ends the wait for it. */
+  spawn?: (projectRoot: string) => ShipperProcess | undefined | void;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -219,11 +247,18 @@ export async function runAutoRecall(
     if (cfg.authMode === "oauth") {
       bearer = freshStoredAccessToken(cfg.profileId!);
       if (!bearer) {
-        // The shipper already found this sign-in refused: waiting would cost the
-        // whole budget on every prompt until the user reconnects.
-        if (authNoticePending(cfg.projectRoot, "relogin")) return undefined;
-        (options.spawn ?? spawnShipper)(cfg.projectRoot);
-        while (!bearer && Date.now() + TOKEN_POLL_MS < deadlineAt - TOKEN_WAIT_RESERVE_MS) {
+        // The shipper already found this sign-in refused, and nothing has written
+        // one since — a reconnect would have: waiting would cost the whole budget
+        // on every prompt until the user reconnects.
+        if (authNoticePending(cfg.projectRoot, "relogin", storedProfileUpdatedAt(cfg.profileId!))) return undefined;
+        const shipper = (options.spawn ?? spawnShipper)(cfg.projectRoot);
+        // An exited shipper has renewed the token or failed to (offline, a revoked
+        // sign-in), so nothing more is coming. The read after each sleep still
+        // sees a token it wrote just before exiting.
+        let shipperExited = false;
+        shipper?.once("exit", () => (shipperExited = true));
+        shipper?.once("error", () => (shipperExited = true));
+        while (!bearer && !shipperExited && Date.now() + TOKEN_POLL_MS < deadlineAt - TOKEN_WAIT_RESERVE_MS) {
           await sleep(TOKEN_POLL_MS);
           bearer = freshStoredAccessToken(cfg.profileId!);
         }

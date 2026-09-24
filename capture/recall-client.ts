@@ -177,7 +177,8 @@ export interface RecallRequest {
   deadlineAt?: number;
   /** Extra attempts on a transient failure, per destination. Default 0. */
   retries?: number;
-  /** Look up live Workspace names for the headings. Default true. */
+  /** Look up live Workspace names for the headings. Default true; never with a
+   *  `{ bearer }`, since the lookup may refresh the sign-in. */
   refreshNames?: boolean;
   /**
    * How a signed-in project authorizes. `"profile"` (the default) goes through
@@ -812,11 +813,13 @@ export async function askWorkspaces(searchRoot: string, request: RecallRequest):
            itself being refused — the same verdict the POST would reach. Under
            fetchWithProfile a 401 has already been refreshed once, and the CLI's
            long-standing report of what is left is kept as it was. */
-        const refused = entry.error instanceof ReLoginRequiredError ||
-          (bearer !== undefined && entry.error instanceof AugentaRequestError && entry.error.status === 401);
+        const status = entry.error instanceof AugentaRequestError ? entry.error.status : undefined;
+        const refused = entry.error instanceof ReLoginRequiredError || (bearer !== undefined && status === 401);
         failed.push({
           ...entry.destination,
-          code: refused ? "need_login" : "network",
+          // A 429 on the check is the same verdict the POST would reach, and the
+          // prompt hook paces later prompts only on `rate_limited`.
+          code: refused ? "need_login" : status === 429 ? "rate_limited" : "network",
           message: describeError(entry.error),
         });
       } else if (
@@ -829,9 +832,11 @@ export async function askWorkspaces(searchRoot: string, request: RecallRequest):
         destinations.push(entry.destination);
       }
     }
-    if (destinations.length > 0 && request.refreshNames !== false) {
+    if (destinations.length > 0 && request.refreshNames !== false && bearer === undefined) {
       // Names do not authorize a read. Start their best-effort lookup only after
       // link checks pass, then overlap it with recall instead of waiting on it.
+      // Never with a caller-held bearer: the lookup signs in through
+      // fetchWithProfile, which may refresh — the one thing that mode rules out.
       names = fetchAllWorkspaces(profileId, gateway).catch(() => [] as Workspace[]);
     }
   } else {

@@ -14,7 +14,7 @@
  * Only node builtins here, so it costs the importing bundle almost nothing.
  */
 import { recordHealth } from "./health";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -45,8 +45,12 @@ function shipperEntry(): string {
  * Detached fire-and-forget shipper — never blocks the hook, ignores all I/O.
  * The project root rides as argv (explicit and visible in `ps`) so the child
  * drains the SAME project the hook captured into, regardless of its own cwd.
+ *
+ * Returns the unref'd child so a caller that is still running anyway — the
+ * prompt hook waiting for a renewed sign-in — can tell when it has finished.
+ * Listening does not keep the caller alive.
  */
-export function spawnShipper(projectRoot: string): void {
+export function spawnShipper(projectRoot: string): ChildProcess | undefined {
   try {
     // process.execPath, never a runtime named as a string: it is `node` when a
     // built bundle runs (hooks are invoked as `node <bundle>`) and `bun` when the
@@ -60,8 +64,10 @@ export function spawnShipper(projectRoot: string): void {
     });
     child.once("error", () => recordHealth(projectRoot, "delivery", "failed"));
     child.unref();
+    return child;
   } catch {
     recordHealth(projectRoot, "delivery", "failed");
     /* spawning the shipper is best-effort; the next Stop will retry the drain */
+    return undefined;
   }
 }

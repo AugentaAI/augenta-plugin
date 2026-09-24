@@ -1041,16 +1041,24 @@ async function accessTokenForProfile(profileId, forceRefresh = false) {
   });
 }
 function freshStoredAccessToken(profileId, marginMs = 15000) {
+  const profile = storedProfile(profileId);
+  if (!profile || typeof profile.accessToken !== "string" || !profile.accessToken)
+    return;
+  if (typeof profile.expiresAt !== "number" || profile.expiresAt <= Date.now() + marginMs)
+    return;
+  return profile.accessToken;
+}
+function storedProfileUpdatedAt(profileId) {
+  const updatedAt = storedProfile(profileId)?.updatedAt;
+  const ms = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN;
+  return Number.isFinite(ms) ? ms : undefined;
+}
+function storedProfile(profileId) {
   try {
     const parsed = JSON.parse(readFileSync5(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object")
       return;
-    const profile = Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
-    if (!profile || typeof profile.accessToken !== "string" || !profile.accessToken)
-      return;
-    if (typeof profile.expiresAt !== "number" || profile.expiresAt <= Date.now() + marginMs)
-      return;
-    return profile.accessToken;
+    return Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
   } catch {
     return;
   }
@@ -1084,8 +1092,12 @@ function markAuthNotice(projectRoot, notice) {
     });
   } catch {}
 }
-function authNoticePending(projectRoot, notice) {
-  return existsSync6(noticePath(projectRoot, notice));
+function authNoticePending(projectRoot, notice, since) {
+  try {
+    return statSync2(noticePath(projectRoot, notice)).mtimeMs >= (since ?? Number.NEGATIVE_INFINITY);
+  } catch {
+    return false;
+  }
 }
 function takeAuthNotice(projectRoot) {
   let found;
@@ -1544,10 +1556,11 @@ async function askWorkspaces(searchRoot, request) {
     destinations = [];
     for (const entry of inspected) {
       if ("error" in entry) {
-        const refused = entry.error instanceof ReLoginRequiredError || bearer !== undefined && entry.error instanceof AugentaRequestError && entry.error.status === 401;
+        const status2 = entry.error instanceof AugentaRequestError ? entry.error.status : undefined;
+        const refused = entry.error instanceof ReLoginRequiredError || bearer !== undefined && status2 === 401;
         failed.push({
           ...entry.destination,
-          code: refused ? "need_login" : "network",
+          code: refused ? "need_login" : status2 === 429 ? "rate_limited" : "network",
           message: describeError(entry.error)
         });
       } else if (!entry.connector || entry.connector.status !== "active" || entry.connector.id !== entry.destination.connectorId || entry.connector.workspaceId !== entry.destination.workspaceId) {
@@ -1556,7 +1569,7 @@ async function askWorkspaces(searchRoot, request) {
         destinations.push(entry.destination);
       }
     }
-    if (destinations.length > 0 && request.refreshNames !== false) {
+    if (destinations.length > 0 && request.refreshNames !== false && bearer === undefined) {
       names = fetchAllWorkspaces(profileId, gateway).catch(() => []);
     }
   } else {
@@ -1694,8 +1707,10 @@ function spawnShipper(projectRoot) {
     });
     child.once("error", () => recordHealth(projectRoot, "delivery", "failed"));
     child.unref();
+    return child;
   } catch {
     recordHealth(projectRoot, "delivery", "failed");
+    return;
   }
 }
 
@@ -1709,6 +1724,7 @@ var TOKEN_WAIT_RESERVE_MS = 600;
 var DEFAULT_RATE_LIMIT_SECONDS = 60;
 var CUT_MARKER = `
 [… cut by the Augenta plugin to fit the prompt context]`;
+var HARNESS_WRAPPER_TAG = /<(\/?system-reminder)/gi;
 function autoRecallDisabled() {
   const value = process.env.AUGENTA_AUTO_RECALL?.trim().toLowerCase();
   return value === "0" || value === "false";
@@ -1771,25 +1787,34 @@ function renderRecallContext(payload) {
     ...payload.environment !== "prod" ? [`These Workspaces are in the ${payload.environment} Augenta environment, not production.`] : []
   ].join(`
 `);
-  const answers = payload.answers.filter((answer) => answer.answer.trim());
-  let remaining = MAX_CONTEXT_CHARS - header.length;
-  const sections = [];
-  answers.forEach((answer, index) => {
+  const sections = payload.answers.filter((answer) => answer.answer.trim()).map((answer) => {
     const kind = answer.mode === "answer" ? "Augenta's answer" : "remembered notes";
     const partial = answer.notesTruncated ? " (only its most recent notes)" : "";
-    const heading = `
+    return {
+      heading: `
 
 ## ${label(answer)}: ${kind}${partial}
-`;
-    const share = Math.floor(remaining / (answers.length - index)) - heading.length;
+`,
+      text: answer.answer.trim().replace(HARNESS_WRAPPER_TAG, "&lt;$1"),
+      body: ""
+    };
+  });
+  const bySize = [...sections].sort((a, b) => a.heading.length + a.text.length - (b.heading.length + b.text.length));
+  let remaining = MAX_CONTEXT_CHARS - header.length;
+  bySize.forEach((section, index) => {
+    const share = Math.floor(remaining / (bySize.length - index)) - section.heading.length;
     if (share <= CUT_MARKER.length)
       return;
-    const text = answer.answer.trim();
-    const body = text.length <= share ? text : `${text.slice(0, share - CUT_MARKER.length).trimEnd()}${CUT_MARKER}`;
-    sections.push(heading + body);
-    remaining -= heading.length + body.length;
+    section.body = section.text.length <= share ? section.text : `${cutAt(section.text, share - CUT_MARKER.length)}${CUT_MARKER}`;
+    remaining -= section.heading.length + section.body.length;
   });
-  return sections.length ? header + sections.join("") : "";
+  const shown = sections.filter((section) => section.body);
+  return shown.length ? header + shown.map((section) => section.heading + section.body).join("") : "";
+}
+function cutAt(text, length) {
+  const lastKept = text.charCodeAt(length - 1);
+  const end = lastKept >= 55296 && lastKept <= 56319 ? length - 1 : length;
+  return text.slice(0, end).trimEnd();
 }
 var defaultSleep2 = (ms) => new Promise((resolve3) => setTimeout(resolve3, ms));
 async function runAutoRecall(input, options = {}) {
@@ -1811,10 +1836,13 @@ async function runAutoRecall(input, options = {}) {
     if (cfg.authMode === "oauth") {
       bearer = freshStoredAccessToken(cfg.profileId);
       if (!bearer) {
-        if (authNoticePending(cfg.projectRoot, "relogin"))
+        if (authNoticePending(cfg.projectRoot, "relogin", storedProfileUpdatedAt(cfg.profileId)))
           return;
-        (options.spawn ?? spawnShipper)(cfg.projectRoot);
-        while (!bearer && Date.now() + TOKEN_POLL_MS < deadlineAt - TOKEN_WAIT_RESERVE_MS) {
+        const shipper = (options.spawn ?? spawnShipper)(cfg.projectRoot);
+        let shipperExited = false;
+        shipper?.once("exit", () => shipperExited = true);
+        shipper?.once("error", () => shipperExited = true);
+        while (!bearer && !shipperExited && Date.now() + TOKEN_POLL_MS < deadlineAt - TOKEN_WAIT_RESERVE_MS) {
           await sleep(TOKEN_POLL_MS);
           bearer = freshStoredAccessToken(cfg.profileId);
         }

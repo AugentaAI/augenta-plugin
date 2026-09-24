@@ -955,16 +955,24 @@ async function accessTokenForProfile(profileId, forceRefresh = false) {
   });
 }
 function freshStoredAccessToken(profileId, marginMs = 15000) {
+  const profile = storedProfile(profileId);
+  if (!profile || typeof profile.accessToken !== "string" || !profile.accessToken)
+    return;
+  if (typeof profile.expiresAt !== "number" || profile.expiresAt <= Date.now() + marginMs)
+    return;
+  return profile.accessToken;
+}
+function storedProfileUpdatedAt(profileId) {
+  const updatedAt = storedProfile(profileId)?.updatedAt;
+  const ms = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN;
+  return Number.isFinite(ms) ? ms : undefined;
+}
+function storedProfile(profileId) {
   try {
     const parsed = JSON.parse(readFileSync4(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object")
       return;
-    const profile = Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
-    if (!profile || typeof profile.accessToken !== "string" || !profile.accessToken)
-      return;
-    if (typeof profile.expiresAt !== "number" || profile.expiresAt <= Date.now() + marginMs)
-      return;
-    return profile.accessToken;
+    return Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
   } catch {
     return;
   }
@@ -998,8 +1006,12 @@ function markAuthNotice(projectRoot, notice) {
     });
   } catch {}
 }
-function authNoticePending(projectRoot, notice) {
-  return existsSync5(noticePath(projectRoot, notice));
+function authNoticePending(projectRoot, notice, since) {
+  try {
+    return statSync2(noticePath(projectRoot, notice)).mtimeMs >= (since ?? Number.NEGATIVE_INFINITY);
+  } catch {
+    return false;
+  }
 }
 function takeAuthNotice(projectRoot) {
   let found;

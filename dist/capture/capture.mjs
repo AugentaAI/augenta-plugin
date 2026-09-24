@@ -1727,8 +1727,10 @@ function spawnShipper(projectRoot) {
     });
     child.once("error", () => recordHealth(projectRoot, "delivery", "failed"));
     child.unref();
+    return child;
   } catch {
     recordHealth(projectRoot, "delivery", "failed");
+    return;
   }
 }
 

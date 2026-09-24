@@ -569,13 +569,29 @@ export async function accessTokenForProfile(
  * at, or a token this treats as stale would be one the shipper declines to renew.
  */
 export function freshStoredAccessToken(profileId: string, marginMs = 15_000): string | undefined {
+  const profile = storedProfile(profileId);
+  if (!profile || typeof profile.accessToken !== "string" || !profile.accessToken) return undefined;
+  if (typeof profile.expiresAt !== "number" || profile.expiresAt <= Date.now() + marginMs) return undefined;
+  return profile.accessToken;
+}
+
+/**
+ * When the stored sign-in for `profileId` was last written — by a login or a
+ * refresh — in epoch ms, read the same side-effect-free way as
+ * {@link freshStoredAccessToken}. Undefined without a readable profile.
+ */
+export function storedProfileUpdatedAt(profileId: string): number | undefined {
+  const updatedAt = storedProfile(profileId)?.updatedAt;
+  const ms = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN;
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/** One profile off auth.json, lock-free and with no side effects (see above). */
+function storedProfile(profileId: string): Partial<AuthProfile> | undefined {
   try {
     const parsed = JSON.parse(readFileSync(authPath(), "utf8")) as Partial<AuthStore>;
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") return undefined;
-    const profile = Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
-    if (!profile || typeof profile.accessToken !== "string" || !profile.accessToken) return undefined;
-    if (typeof profile.expiresAt !== "number" || profile.expiresAt <= Date.now() + marginMs) return undefined;
-    return profile.accessToken;
+    return Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
   } catch {
     return undefined;
   }
@@ -635,9 +651,18 @@ export function markAuthNotice(projectRoot: string, notice: Notice): void {
  * what reports and clears notices ({@link takeAuthNotice}). The prompt hook
  * reads `relogin` to skip a recall whose sign-in the shipper already found
  * refused, instead of waiting out its budget on every prompt.
+ *
+ * `since` ignores a notice written before that epoch ms. Only SessionStart
+ * clears notices, so one can outlive the fault it reported: a reconnect later
+ * in the same session (in this project or any other sharing the profile)
+ * writes a working sign-in and leaves the notice behind.
  */
-export function authNoticePending(projectRoot: string, notice: Notice): boolean {
-  return existsSync(noticePath(projectRoot, notice));
+export function authNoticePending(projectRoot: string, notice: Notice, since?: number): boolean {
+  try {
+    return statSync(noticePath(projectRoot, notice)).mtimeMs >= (since ?? Number.NEGATIVE_INFINITY);
+  } catch {
+    return false;
+  }
 }
 
 /**

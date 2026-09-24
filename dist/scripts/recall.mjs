@@ -416,16 +416,24 @@ async function accessTokenForProfile(profileId, forceRefresh = false) {
   });
 }
 function freshStoredAccessToken(profileId, marginMs = 15000) {
+  const profile = storedProfile(profileId);
+  if (!profile || typeof profile.accessToken !== "string" || !profile.accessToken)
+    return;
+  if (typeof profile.expiresAt !== "number" || profile.expiresAt <= Date.now() + marginMs)
+    return;
+  return profile.accessToken;
+}
+function storedProfileUpdatedAt(profileId) {
+  const updatedAt = storedProfile(profileId)?.updatedAt;
+  const ms = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN;
+  return Number.isFinite(ms) ? ms : undefined;
+}
+function storedProfile(profileId) {
   try {
     const parsed = JSON.parse(readFileSync(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object")
       return;
-    const profile = Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
-    if (!profile || typeof profile.accessToken !== "string" || !profile.accessToken)
-      return;
-    if (typeof profile.expiresAt !== "number" || profile.expiresAt <= Date.now() + marginMs)
-      return;
-    return profile.accessToken;
+    return Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
   } catch {
     return;
   }
@@ -459,8 +467,12 @@ function markAuthNotice(projectRoot, notice) {
     });
   } catch {}
 }
-function authNoticePending(projectRoot, notice) {
-  return existsSync2(noticePath(projectRoot, notice));
+function authNoticePending(projectRoot, notice, since) {
+  try {
+    return statSync(noticePath(projectRoot, notice)).mtimeMs >= (since ?? Number.NEGATIVE_INFINITY);
+  } catch {
+    return false;
+  }
 }
 function takeAuthNotice(projectRoot) {
   let found;
@@ -1078,10 +1090,11 @@ async function askWorkspaces(searchRoot, request) {
     destinations = [];
     for (const entry of inspected) {
       if ("error" in entry) {
-        const refused = entry.error instanceof ReLoginRequiredError || bearer !== undefined && entry.error instanceof AugentaRequestError && entry.error.status === 401;
+        const status2 = entry.error instanceof AugentaRequestError ? entry.error.status : undefined;
+        const refused = entry.error instanceof ReLoginRequiredError || bearer !== undefined && status2 === 401;
         failed.push({
           ...entry.destination,
-          code: refused ? "need_login" : "network",
+          code: refused ? "need_login" : status2 === 429 ? "rate_limited" : "network",
           message: describeError(entry.error)
         });
       } else if (!entry.connector || entry.connector.status !== "active" || entry.connector.id !== entry.destination.connectorId || entry.connector.workspaceId !== entry.destination.workspaceId) {
@@ -1090,7 +1103,7 @@ async function askWorkspaces(searchRoot, request) {
         destinations.push(entry.destination);
       }
     }
-    if (destinations.length > 0 && request.refreshNames !== false) {
+    if (destinations.length > 0 && request.refreshNames !== false && bearer === undefined) {
       names = fetchAllWorkspaces(profileId, gateway).catch(() => []);
     }
   } else {
