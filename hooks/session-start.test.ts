@@ -17,7 +17,7 @@
  * Run: bun test hooks/session-start.test.ts
  */
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDocumentRecord, Outbox } from "../capture/outbox";
@@ -31,8 +31,8 @@ let home: string;
 let project: string;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "aug-ss-home-"));
-  // Physical path: the hook realpaths the project root (macOS tmpdir() is under
-  // /var → /private/var), and Task Group scopes written below must match it.
+  // Physical path, matching the root the hook resolves (macOS tmpdir() is under
+  // the /var → /private/var symlink).
   project = realpathSync(mkdtempSync(join(tmpdir(), "aug-ss-proj-")));
 });
 afterEach(() => {
@@ -253,6 +253,38 @@ describe("connected / silent paths", () => {
       expect(captured[0]!.data.text).toContain("Background memory.");
     } finally {
       rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  test("a Task Group recorded through a symlinked path to the project is still captured", () => {
+    // A harness can report, and Codex record, a path through a symlink. The hook
+    // resolves the project physically, so the Task Group's scope has to be
+    // resolved the same way or that project's memory is silently skipped.
+    const codexHome = mkdtempSync(join(tmpdir(), "aug-ss-codex-home-"));
+    const aliasHome = mkdtempSync(join(tmpdir(), "aug-ss-alias-"));
+    try {
+      const alias = join(aliasHome, "project");
+      symlinkSync(project, alias, "dir");
+      mkdirSync(join(project, ".augenta"), { recursive: true });
+      writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ authMode: "api-key", apiKey: "k" }));
+      mkdirSync(join(codexHome, "memories"), { recursive: true });
+      writeFileSync(
+        join(codexHome, "memories", "MEMORY.md"),
+        `# Task Group: Aliased\napplies_to: cwd=${alias}\nAliased memory.`,
+      );
+
+      expect(
+        fire(
+          { transcript_path: CODEX_TP, cwd: alias },
+          { CODEX_HOME: codexHome, AUGENTA_INGEST_URL: "http://127.0.0.1:1/v1/experiences" },
+        ),
+      ).toBe("");
+      const captured = new Outbox(project).readPending().records.filter(isDocumentRecord);
+      expect(captured).toHaveLength(1);
+      expect(captured[0]!.data.text).toContain("Aliased memory.");
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+      rmSync(aliasHome, { recursive: true, force: true });
     }
   });
 });

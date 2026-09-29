@@ -1152,6 +1152,8 @@ import {
   mkdirSync as mkdirSync5,
   readFileSync as readFileSync5,
   readdirSync,
+  readlinkSync,
+  realpathSync as realpathSync3,
   renameSync as renameSync4,
   statSync as statSync3,
   writeFileSync as writeFileSync5
@@ -1330,11 +1332,42 @@ function scanClaudeMemory(transcriptPath) {
   walk(root);
   return { complete, documents };
 }
-function isScopedToProject(scope, projectRoot) {
+var MAX_SYMLINK_HOPS = 40;
+function symlinkTarget(path) {
+  try {
+    return lstatSync(path).isSymbolicLink() ? resolve3(dirname3(path), readlinkSync(path)) : undefined;
+  } catch {
+    return;
+  }
+}
+function physicalPath(path) {
+  let existing = resolve3(path);
+  const missing = [];
+  let hops = 0;
+  while (true) {
+    try {
+      return join8(realpathSync3(existing), ...missing);
+    } catch {}
+    const target = symlinkTarget(existing);
+    if (target !== undefined) {
+      if (++hops > MAX_SYMLINK_HOPS)
+        return;
+      existing = target;
+      continue;
+    }
+    const parent = dirname3(existing);
+    if (parent === existing)
+      return resolve3(path);
+    missing.unshift(basename(existing));
+    existing = parent;
+  }
+}
+function isScopedToProject(scope, root) {
   if (!isAbsolute(scope))
     return false;
-  const root = resolve3(projectRoot);
-  const target = resolve3(scope);
+  const target = physicalPath(scope);
+  if (target === undefined)
+    return false;
   const rel = relative(root, target);
   return rel === "" || !rel.startsWith(".." + sep) && rel !== ".." && !isAbsolute(rel);
 }
@@ -1369,6 +1402,9 @@ function markdownH1s(text) {
 function parseCodexTaskGroups(text, projectRoot) {
   const headings = markdownH1s(text);
   const documents = [];
+  const root = physicalPath(projectRoot);
+  if (root === undefined)
+    return documents;
   for (let i = 0;i < headings.length; i++) {
     const heading = headings[i];
     const taskGroup = /^Task Group:\s*(.+?)\s*$/.exec(heading.title);
@@ -1382,7 +1418,7 @@ function parseCodexTaskGroups(text, projectRoot) {
     if (!scopeMatch)
       continue;
     const scope = scopeMatch[1].trim().replace(/^['"]|['"]$/g, "");
-    if (!isScopedToProject(scope, projectRoot))
+    if (!isScopedToProject(scope, root))
       continue;
     const identity = sha256(`${header}\x00${scope}`).slice(0, 24);
     documents.push({

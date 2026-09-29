@@ -158,8 +158,8 @@ describe("memory capture E2E", () => {
   }, 10_000);
 
   test("Codex SessionStart ships only Task Groups scoped to the connected project", async () => {
-    // Physical for the same reason: Task Group scopes are compared to the
-    // realpath'd project root without being realpath'd themselves.
+    // Physical for the same reason: every document's `proj` is the realpath'd
+    // project root.
     const work = realpathSync(mkdtempSync(join(tmpdir(), "augenta-e2e-codex-")));
     const project = join(work, "project");
     const childProject = join(project, "packages", "app");

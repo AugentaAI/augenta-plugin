@@ -15,6 +15,8 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
+  realpathSync,
   renameSync,
   statSync,
   writeFileSync,
@@ -235,10 +237,61 @@ function scanClaudeMemory(transcriptPath: string | undefined): ScanResult {
   return { complete, documents };
 }
 
-function isScopedToProject(scope: string, projectRoot: string): boolean {
+/** Linux's MAXSYMLINKS: more hops than this is a loop, not a real location. */
+const MAX_SYMLINK_HOPS = 40;
+
+/** Where `path` points if it is itself a symlink, whether or not the target exists. */
+function symlinkTarget(path: string): string | undefined {
+  try {
+    return lstatSync(path).isSymbolicLink() ? resolve(dirname(path), readlinkSync(path)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * An absolute path's physical form: its nearest existing ancestor with every
+ * symlink resolved, and whatever no longer (or does not yet) exist re-appended.
+ * Scope is decided on physical paths on both sides, the way the project lookup
+ * resolves its input, so a logical alias of the project (macOS /var →
+ * /private/var, a symlinked projects folder) matches it, and a symlink inside
+ * the project that points elsewhere does not — including a dangling one, which
+ * is followed to where it points rather than read as a missing folder here. A
+ * Task Group can outlive the directory it names, which is why a missing tail
+ * falls back to its ancestor instead of failing. A symlink loop has no physical
+ * location, so it is `undefined` and never in scope.
+ *
+ * Unlike the project lookup, scope does not stop at a checkout nested inside
+ * the project; that is a separate consent question, left as it was.
+ */
+function physicalPath(path: string): string | undefined {
+  let existing = resolve(path);
+  const missing: string[] = [];
+  let hops = 0;
+  while (true) {
+    try {
+      return join(realpathSync(existing), ...missing);
+    } catch {
+      /* resolved below */
+    }
+    const target = symlinkTarget(existing);
+    if (target !== undefined) {
+      if (++hops > MAX_SYMLINK_HOPS) return undefined;
+      existing = target;
+      continue;
+    }
+    const parent = dirname(existing);
+    if (parent === existing) return resolve(path);
+    missing.unshift(basename(existing));
+    existing = parent;
+  }
+}
+
+/** `root` must already be physical (see {@link physicalPath}). */
+function isScopedToProject(scope: string, root: string): boolean {
   if (!isAbsolute(scope)) return false;
-  const root = resolve(projectRoot);
-  const target = resolve(scope);
+  const target = physicalPath(scope);
+  if (target === undefined) return false;
   const rel = relative(root, target);
   return rel === "" || (!rel.startsWith(".." + sep) && rel !== ".." && !isAbsolute(rel));
 }
@@ -286,6 +339,8 @@ function markdownH1s(text: string): MarkdownH1[] {
 export function parseCodexTaskGroups(text: string, projectRoot: string): MemoryCandidate[] {
   const headings = markdownH1s(text);
   const documents: MemoryCandidate[] = [];
+  const root = physicalPath(projectRoot);
+  if (root === undefined) return documents;
   for (let i = 0; i < headings.length; i++) {
     const heading = headings[i]!;
     const taskGroup = /^Task Group:\s*(.+?)\s*$/.exec(heading.title);
@@ -300,7 +355,7 @@ export function parseCodexTaskGroups(text: string, projectRoot: string): MemoryC
     const scopeMatch = firstBodyLine ? /^ {0,3}applies_to:\s*cwd=(.+?)\s*$/.exec(firstBodyLine) : null;
     if (!scopeMatch) continue; // mandatory project scope; never capture global/unscoped memory
     const scope = scopeMatch[1]!.trim().replace(/^['"]|['"]$/g, "");
-    if (!isScopedToProject(scope, projectRoot)) continue;
+    if (!isScopedToProject(scope, root)) continue;
     const identity = sha256(`${header}\0${scope}`).slice(0, 24);
     documents.push({
       sourcePath: `MEMORY.md#task-group-${identity}`,
