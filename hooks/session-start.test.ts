@@ -17,7 +17,7 @@
  * Run: bun test hooks/session-start.test.ts
  */
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDocumentRecord, Outbox } from "../capture/outbox";
@@ -31,7 +31,9 @@ let home: string;
 let project: string;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "aug-ss-home-"));
-  project = mkdtempSync(join(tmpdir(), "aug-ss-proj-"));
+  // Physical path: the hook realpaths the project root (macOS tmpdir() is under
+  // /var → /private/var), and Task Group scopes written below must match it.
+  project = realpathSync(mkdtempSync(join(tmpdir(), "aug-ss-proj-")));
 });
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });

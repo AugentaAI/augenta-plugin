@@ -16,7 +16,7 @@
  * Requires a current dist/ — run `bun run build` first. CI builds before testing.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DocumentExperience, Experience, TrajectoryExperience } from "../capture/event";
@@ -88,7 +88,9 @@ async function waitForShipper(project: string, requests: ReceivedRequest[], mini
 
 describe("memory capture E2E", () => {
   test("Claude Stop ships scrubbed memory beside a trajectory while preserving the consented raw channel", async () => {
-    const work = mkdtempSync(join(tmpdir(), "augenta-e2e-claude-"));
+    // Physical path: hooks realpath the project root, and macOS tmpdir() is under
+    // the /var → /private/var symlink.
+    const work = realpathSync(mkdtempSync(join(tmpdir(), "augenta-e2e-claude-")));
     const project = join(work, "project");
     const sessionDir = join(work, ".claude", "projects", "encoded-project");
     const transcript = join(sessionDir, "session.jsonl");
@@ -156,7 +158,9 @@ describe("memory capture E2E", () => {
   }, 10_000);
 
   test("Codex SessionStart ships only Task Groups scoped to the connected project", async () => {
-    const work = mkdtempSync(join(tmpdir(), "augenta-e2e-codex-"));
+    // Physical for the same reason: Task Group scopes are compared to the
+    // realpath'd project root without being realpath'd themselves.
+    const work = realpathSync(mkdtempSync(join(tmpdir(), "augenta-e2e-codex-")));
     const project = join(work, "project");
     const childProject = join(project, "packages", "app");
     const codexHome = join(work, "custom-codex-home");
