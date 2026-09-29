@@ -202,7 +202,7 @@ export function writeApiKeyConfig(
   projectRoot: string,
   apiKey: string,
   endpoint?: string,
-  details: Pick<ProjectConfig, "org" | "destinations" | "controlUrl" | "ingestUrl"> = {},
+  details: Pick<ProjectConfig, "org" | "destinations" | "controlUrl" | "ingestUrl" | "autoRecall"> = {},
 ): string {
   // The key goes into this file, so it must never be one git already tracks.
   // Refused before anything is written, rather than written and then warned about.
@@ -225,6 +225,12 @@ export function writeApiKeyConfig(
         destinations: details.destinations?.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
         controlUrl: details.controlUrl,
         ingestUrl: details.ingestUrl,
+        // Always written, like the OAuth config: this path asks nobody, so an
+        // absent key would hand a config written by this release the
+        // "connected before the question existed" reading and turn automatic
+        // recall on without an answer. `false` is the question's default, and
+        // a caller carrying a prior answer forward passes it here.
+        autoRecall: details.autoRecall ?? false,
         ...(endpoint ? { endpoint } : {}),
       },
       null,
@@ -1905,6 +1911,9 @@ export async function connectWithApiKey(
       {
         org: { id: connector.orgId },
         destinations: [{ connectorId: connector.id, workspaceId: connector.workspaceId }],
+        // A key rotation must not revert an explicit `--auto-recall off`; the
+        // whole-file write would otherwise drop the answer and turn it back on.
+        autoRecall: prior?.autoRecall ?? false,
         ...(prior?.controlUrl ? { controlUrl: prior.controlUrl } : {}),
         ...(prior?.ingestUrl ? { ingestUrl: prior.ingestUrl } : {}),
       },

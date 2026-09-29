@@ -1457,6 +1457,7 @@ function writeApiKeyConfig(projectRoot, apiKey, endpoint2, details = {}) {
     destinations: details.destinations?.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
     controlUrl: details.controlUrl,
     ingestUrl: details.ingestUrl,
+    autoRecall: details.autoRecall ?? false,
     ...endpoint2 ? { endpoint: endpoint2 } : {}
   }, null, 2)}
 `, { mode: 384 });
@@ -2416,6 +2417,7 @@ async function connectWithApiKey(projectRoot, apiKey, endpoint2) {
     path: writeApiKeyConfig(projectRoot, apiKey, gateway === DEFAULT_GATEWAY ? undefined : gateway, {
       org: { id: connector.orgId },
       destinations: [{ connectorId: connector.id, workspaceId: connector.workspaceId }],
+      autoRecall: prior?.autoRecall ?? false,
       ...prior?.controlUrl ? { controlUrl: prior.controlUrl } : {},
       ...prior?.ingestUrl ? { ingestUrl: prior.ingestUrl } : {}
     }),

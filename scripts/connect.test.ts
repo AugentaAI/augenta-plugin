@@ -322,6 +322,7 @@ describe("project config writers", () => {
       authMode: "api-key",
       captureSince: expect.any(String),
       apiKey: "sk-aug-test.secret",
+      autoRecall: false,
       endpoint: "http://gw.example.com",
     });
     expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -334,7 +335,19 @@ describe("project config writers", () => {
       authMode: "api-key",
       captureSince: expect.any(String),
       apiKey: "sk-aug-test.secret",
+      autoRecall: false,
     });
+  });
+
+  // Nobody is asked on the platform-key path, so the answer has to be written:
+  // an absent key reads as "connected before the question existed", which is on.
+  test("platform-key config records automatic recall off unless carried forward", () => {
+    const off = JSON.parse(readFileSync(writeApiKeyConfig(project, "sk-aug-test.secret"), "utf8"));
+    expect(off.autoRecall).toBe(false);
+    const on = JSON.parse(
+      readFileSync(writeApiKeyConfig(project, "sk-aug-test.secret", undefined, { autoRecall: true }), "utf8"),
+    );
+    expect(on.autoRecall).toBe(true);
   });
 
   test("oauth config records the organization, destinations, consent time, and URLs", () => {
@@ -483,7 +496,23 @@ describe("platform-key connection", () => {
       endpoint: "https://gw.example.com",
       org: { id: "org_1" },
       destinations: [{ connectorId: "connector_123", workspaceId: "ws-default" }],
+      autoRecall: false,
     });
+  });
+
+  // A key rotation rewrites the whole file, so an explicit `--auto-recall off`
+  // — or on — has to survive it rather than reverting to the default.
+  test("carries a prior automatic-recall answer through a key rotation", async () => {
+    writeApiKeyConfig(project, "sk-aug-old.secret", "https://gw.example.com", { autoRecall: true });
+    globalThis.fetch = (async (_url, _init) =>
+      Response.json({
+        connectors: [
+          { id: "connector_123", orgId: "org_1", direction: "inbound", status: "active", workspaceId: "ws-default" },
+        ],
+      })) as typeof fetch;
+
+    const { path } = await connectWithApiKey(project, "sk-aug-new.secret", "https://gw.example.com/");
+    expect(JSON.parse(readFileSync(path, "utf8")).autoRecall).toBe(true);
   });
 
   /* --verify-only. The file path is the documented way to configure an autonomous

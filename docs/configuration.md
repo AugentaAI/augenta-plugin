@@ -40,7 +40,7 @@ the project keeps sending to its old Workspaces.
 
 The plugin needs a readable project config to capture or recall. A browser
 connection also captures only once this machine is signed in for it and this
-checkout has joined it with connect; recall needs the sign-in but not the join.
+checkout has joined it with connect; recall needs both as well.
 Session start says which is missing. An old or damaged config prompts you to
 reconnect. The plugin does not convert it or
 guess where its records should go.
