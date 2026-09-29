@@ -72,6 +72,8 @@ function fire(payload: object, overrides: Record<string, string> = {}): string {
     AUGENTA_CONTROL_URL: "",
     AUGENTA_HOME: home,
     AUGENTA_AUTH_HOME: join(home, ".augenta"),
+    // Lasting unless a test says otherwise, even when the suite runs in a cloud session.
+    AUGENTA_EPHEMERAL: "0",
     ...overrides,
   };
   const proc = Bun.spawnSync(["bun", "run", HOOK], {
@@ -147,6 +149,17 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
     } finally {
       rmSync(other, { recursive: true, force: true });
     }
+  });
+
+  test("a throwaway session outside any checkout is not prompted: connect would refuse it", () => {
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project }, { AUGENTA_EPHEMERAL: "1" })).toBe("");
+    // Nothing was recorded either, so a lasting session there still gets its one prompt.
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).not.toBe("");
+  });
+
+  test("a throwaway session in a checkout is still prompted", () => {
+    mkdirSync(join(project, ".git"));
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project }, { AUGENTA_EPHEMERAL: "1" })).not.toBe("");
   });
 
   test("a project already prompted under the pre-0.3.0 marker is not re-prompted", () => {

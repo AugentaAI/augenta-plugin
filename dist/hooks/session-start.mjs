@@ -1111,7 +1111,7 @@ function captureHealth(projectRoot) {
 
 // hooks/session-start.ts
 import { homedir as homedir3 } from "node:os";
-import { join as join10 } from "node:path";
+import { join as join11 } from "node:path";
 import { createHash as createHash3 } from "node:crypto";
 import { mkdirSync as mkdirSync7, readFileSync as readFileSync8, writeFileSync as writeFileSync7, renameSync as renameSync6 } from "node:fs";
 
@@ -1143,6 +1143,48 @@ function sniffHarness(line) {
     return "claude-code";
   }
   return;
+}
+
+// capture/environment.ts
+import { existsSync as existsSync6 } from "node:fs";
+import { dirname as dirname2, join as join8, resolve as resolve3 } from "node:path";
+function sessionEnvironment(env = process.env) {
+  const declared = env.AUGENTA_EPHEMERAL?.trim().toLowerCase();
+  if (declared === "0" || declared === "false")
+    return { ephemeral: false, signals: ["AUGENTA_EPHEMERAL=0"] };
+  const signals = [];
+  let kind;
+  if (env.CLAUDE_CODE_REMOTE === "true") {
+    signals.push("CLAUDE_CODE_REMOTE");
+    kind ??= "claude-cloud";
+  }
+  if (env.CLAUDE_CODE_REMOTE_SESSION_ID?.trim()) {
+    signals.push("CLAUDE_CODE_REMOTE_SESSION_ID");
+    kind ??= "claude-cloud";
+  }
+  if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {
+    signals.push("CODEX_HOME=/opt/codex (heuristic)");
+    kind ??= "codex-cloud";
+  }
+  if (declared === "1" || declared === "true") {
+    signals.push("AUGENTA_EPHEMERAL=1");
+    kind ??= "declared";
+  }
+  return { ephemeral: signals.length > 0, ...kind ? { kind } : {}, signals };
+}
+function insideGitCheckout(dir) {
+  let current = resolve3(dir);
+  while (true) {
+    if (existsSync6(join8(current, ".git")))
+      return true;
+    const parent = dirname2(current);
+    if (parent === current)
+      return false;
+    current = parent;
+  }
+}
+function ephemeralProject(projectRoot, env = process.env) {
+  return sessionEnvironment(env).ephemeral && !insideGitCheckout(projectRoot);
 }
 
 // capture/platform.ts
@@ -1221,15 +1263,15 @@ function describeError(error) {
 
 // capture/shipper.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync6 } from "node:fs";
-import { dirname as dirname2, join as join8 } from "node:path";
+import { existsSync as existsSync7 } from "node:fs";
+import { dirname as dirname3, join as join9 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function shipperEntry() {
   const self = fileURLToPath2(import.meta.url);
   const ext = self.endsWith(".ts") ? ".ts" : ".mjs";
-  const here = dirname2(self);
-  const sibling = join8(here, `ship${ext}`);
-  return existsSync6(sibling) ? sibling : join8(here, "..", "capture", `ship${ext}`);
+  const here = dirname3(self);
+  const sibling = join9(here, `ship${ext}`);
+  return existsSync7(sibling) ? sibling : join9(here, "..", "capture", `ship${ext}`);
 }
 function spawnShipper(projectRoot) {
   try {
@@ -1250,7 +1292,7 @@ function spawnShipper(projectRoot) {
 // capture/memory.ts
 import { createHash as createHash2 } from "node:crypto";
 import {
-  existsSync as existsSync7,
+  existsSync as existsSync8,
   lstatSync,
   mkdirSync as mkdirSync6,
   readFileSync as readFileSync7,
@@ -1262,7 +1304,7 @@ import {
   writeFileSync as writeFileSync6
 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { basename, dirname as dirname3, extname, isAbsolute, join as join9, relative, resolve as resolve3, sep } from "node:path";
+import { basename, dirname as dirname4, extname, isAbsolute, join as join10, relative, resolve as resolve4, sep } from "node:path";
 
 // capture/scrub.ts
 var MASK = (label) => `[redacted:${label}]`;
@@ -1319,7 +1361,7 @@ function sha256(input) {
   return createHash2("sha256").update(input).digest("hex");
 }
 function memoryStatePath(projectRoot) {
-  return join9(projectRoot, ".augenta", "state", "memory.json");
+  return join10(projectRoot, ".augenta", "state", "memory.json");
 }
 function validEntry(value) {
   const e = value;
@@ -1343,8 +1385,8 @@ function readMemoryIndex(projectRoot) {
   }
 }
 function writeMemoryIndex(projectRoot, index) {
-  const stateDir = join9(ensureAugentaDir(projectRoot), "state");
-  const path = join9(stateDir, "memory.json");
+  const stateDir = join10(ensureAugentaDir(projectRoot), "state");
+  const path = join10(stateDir, "memory.json");
   const tmp = path + ".tmp";
   try {
     mkdirSync6(stateDir, { recursive: true });
@@ -1368,9 +1410,9 @@ function normalizeLogicalPath(path) {
 function scanClaudeMemory(transcriptPath) {
   if (!transcriptPath)
     return { complete: false, documents: [] };
-  const root = join9(dirname3(transcriptPath), "memory");
+  const root = join10(dirname4(transcriptPath), "memory");
   try {
-    if (!existsSync7(root) || !lstatSync(root).isDirectory())
+    if (!existsSync8(root) || !lstatSync(root).isDirectory())
       return { complete: false, documents: [] };
   } catch {
     return { complete: false, documents: [] };
@@ -1392,7 +1434,7 @@ function scanClaudeMemory(transcriptPath) {
       return;
     }
     for (const entry of entries) {
-      const path = join9(dir, entry.name);
+      const path = join10(dir, entry.name);
       if (entry.isSymbolicLink())
         continue;
       if (entry.isDirectory()) {
@@ -1438,18 +1480,18 @@ function scanClaudeMemory(transcriptPath) {
 var MAX_SYMLINK_HOPS = 40;
 function symlinkTarget(path) {
   try {
-    return lstatSync(path).isSymbolicLink() ? resolve3(dirname3(path), readlinkSync(path)) : undefined;
+    return lstatSync(path).isSymbolicLink() ? resolve4(dirname4(path), readlinkSync(path)) : undefined;
   } catch {
     return;
   }
 }
 function physicalPath(path) {
-  let existing = resolve3(path);
+  let existing = resolve4(path);
   const missing = [];
   let hops = 0;
   while (true) {
     try {
-      return join9(realpathSync3(existing), ...missing);
+      return join10(realpathSync3(existing), ...missing);
     } catch {}
     const target = symlinkTarget(existing);
     if (target !== undefined) {
@@ -1458,9 +1500,9 @@ function physicalPath(path) {
       existing = target;
       continue;
     }
-    const parent = dirname3(existing);
+    const parent = dirname4(existing);
     if (parent === existing)
-      return resolve3(path);
+      return resolve4(path);
     missing.unshift(basename(existing));
     existing = parent;
   }
@@ -1541,10 +1583,10 @@ function codexHomeFromRollout(transcriptPath) {
   return match?.[1];
 }
 function scanCodexMemory(projectRoot, codexHome, transcriptPath) {
-  const root = codexHome ?? process.env.CODEX_HOME ?? codexHomeFromRollout(transcriptPath) ?? join9(homedir2(), ".codex");
-  const path = join9(root, "memories", "MEMORY.md");
+  const root = codexHome ?? process.env.CODEX_HOME ?? codexHomeFromRollout(transcriptPath) ?? join10(homedir2(), ".codex");
+  const path = join10(root, "memories", "MEMORY.md");
   try {
-    if (!existsSync7(path))
+    if (!existsSync8(path))
       return { complete: false, documents: [] };
     const linkBefore = lstatSync(path);
     const before = statSync3(path);
@@ -1567,7 +1609,7 @@ function scanCodexMemory(projectRoot, codexHome, transcriptPath) {
 function documentId(source, projectRoot, candidate) {
   const taskGroup = candidate.taskGroup;
   const discriminator = taskGroup ? `\x00${taskGroup.header}\x00${taskGroup.scope}` : "";
-  return sha256(`${source}\x00${resolve3(projectRoot)}\x00${candidate.sourcePath}${discriminator}`);
+  return sha256(`${source}\x00${resolve4(projectRoot)}\x00${candidate.sourcePath}${discriminator}`);
 }
 function revision(text, deleted) {
   return sha256(`${deleted ? "deleted" : "live"}\x00${text}`);
@@ -1746,9 +1788,9 @@ var codex = isCodexHarness(transcriptPath);
 var connectAction = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
 var projectPath = cwd || process.cwd();
 var home = process.env.AUGENTA_HOME ?? homedir3();
-var stateDir = join10(home, ".augenta", "state");
-var markerPath = join10(stateDir, "connect-prompted.json");
-var legacyMarkerPath = join10(stateDir, "init-prompted.json");
+var stateDir = join11(home, ".augenta", "state");
+var markerPath = join11(stateDir, "connect-prompted.json");
+var legacyMarkerPath = join11(stateDir, "init-prompted.json");
 function readMarkers(path) {
   try {
     const parsed = JSON.parse(readFileSync8(path, "utf8"));
@@ -1828,6 +1870,8 @@ if (connectedRoot) {
 }
 var markerKey = staleConfig ? `reconnect:${projectPath}` : projectPath;
 if (!staleConfig && readMarkers(legacyMarkerPath)[projectPath])
+  process.exit(0);
+if (ephemeralProject(projectPath))
   process.exit(0);
 if (!firstTime(markerKey))
   process.exit(0);

@@ -28,6 +28,7 @@ import { isMain } from "../runtime/node";
 import { PLUGIN_VERSION } from "../runtime/version";
 import { ensureAugentaDir, setAugentaIgnore } from "../capture/augenta-dir";
 import { adoptionCovers, writeAdoption } from "../capture/adoption";
+import { ephemeralProject, sessionEnvironment } from "../capture/environment";
 import {
   DEFAULT_CONTROL_URL,
   DEFAULT_GATEWAY,
@@ -1480,6 +1481,9 @@ export async function runJsonVerb(
     environment: environmentLabel(args.repairHarness ? cfg?.controlUrl : controlUrl(cfg, args.controlUrl)),
     ...(args.repairHarness ? {} : environmentChange(cfg, args)),
     ...(args.probe && cfg ? { current: savedConnection(cfg) } : {}),
+    // Always on a probe: a sign-in made in a throwaway session lasts only as
+    // long as that session, and the user should hear it before signing in.
+    ...(args.probe ? { session: sessionEnvironment() } : {}),
   };
   try {
     return { ...(await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot })), ...metadata };
@@ -1682,6 +1686,21 @@ async function dispatchJsonVerb(
       code: "conflicting_verbs",
       message:
         "--create-workspace and --workspace are separate steps; create first, then ask for the complete destination set again and pass it with --workspace",
+    };
+  }
+  // A throwaway machine with no checkout to carry the config: refuse before any
+  // sign-in starts or any link is made, rather than write a config no later
+  // session will ever read (and leave Connectors behind for it).
+  if ((args.probe || args.workspaces?.length || args.adopt) && ephemeralProject(resolved.projectRoot)) {
+    const session = sessionEnvironment();
+    return {
+      status: "error",
+      code: "ephemeral_project",
+      session,
+      message:
+        `this session's machine is discarded when the session ends (${session.signals.join(", ")}), and ` +
+        `${resolved.projectRoot} is not inside a Git checkout, so a connection written here could not outlast it; ` +
+        "connect from a local session instead (in Cowork, a local session with the project folder attached)",
     };
   }
   // Joining uses the recorded connection exactly as it is, so nothing that

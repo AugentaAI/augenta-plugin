@@ -89,12 +89,15 @@ const CONNECT = join(import.meta.dir, "connect.ts");
 const realFetch = globalThis.fetch;
 
 let project: string;
-const URL_ENV_KEYS = ["AUGENTA_CONTROL_URL", "AUGENTA_API_URL", "AUGENTA_INGEST_URL"] as const;
+const URL_ENV_KEYS = ["AUGENTA_CONTROL_URL", "AUGENTA_API_URL", "AUGENTA_INGEST_URL", "AUGENTA_EPHEMERAL"] as const;
 let savedUrlEnv: Record<string, string | undefined>;
 beforeEach(() => {
   project = realpathSync(mkdtempSync(join(tmpdir(), "aug-connect-")));
   savedUrlEnv = Object.fromEntries(URL_ENV_KEYS.map((key) => [key, process.env[key]]));
   for (const key of URL_ENV_KEYS) delete process.env[key];
+  // Declared lasting, so the suite behaves the same when run inside a cloud
+  // session; the throwaway-session tests set it themselves.
+  process.env.AUGENTA_EPHEMERAL = "0";
 });
 afterEach(() => {
   for (const key of URL_ENV_KEYS) {
@@ -1838,6 +1841,22 @@ describe("JSON verbs", () => {
       expect(await runJsonVerb({ projectRoot: project }, { json: true, adopt: true, ...extra }))
         .toMatchObject({ status: "error", code: "conflicting_verbs" });
     }
+  });
+
+  test("a throwaway session outside any checkout is refused before anything is asked or sent", async () => {
+    process.env.AUGENTA_EPHEMERAL = "1";
+    route();
+    for (const extra of [{ probe: true }, { workspaces: ["ws-default"] }, { adopt: true }]) {
+      expect(await runJsonVerb({ projectRoot: project }, { ...baseArgs, ...extra }))
+        .toMatchObject({ status: "error", code: "ephemeral_project", session: { ephemeral: true, kind: "declared" } });
+    }
+    expect(requests).toEqual([]);
+    expect(() => statSync(join(project, ".augenta"))).toThrow();
+
+    // The same session in a Git checkout keeps its config through the repo.
+    execFileSync("git", ["init", "-q"], { cwd: project });
+    const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true });
+    expect(payload).toMatchObject({ status: "need_login", session: { ephemeral: true } });
   });
 
   test("an API-key project or no project has nothing to join", async () => {

@@ -44,6 +44,12 @@ ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/augenta/*/dist/scrip
       "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/augenta/*/dist/scripts/connect.mjs 2>/dev/null
 ```
 
+If neither finds the script, do not keep searching other machines or shells. In a
+cloud session whose shell reaches the user's folder through a separate device
+shell (a Cowork cloud task), the plugin is not in that shell: say that connect
+cannot run in this session, and suggest a local session with the project folder
+attached.
+
 Every verb below is then:
 
 ```bash
@@ -113,6 +119,13 @@ node "$CONNECT" --harness <harness> --json --probe
 Read-only. It starts no sign-in, so nothing has happened yet and you can still
 explain and ask. `alreadyConnected: true` means reconnecting will verify or change
 which Workspaces this project feeds — continue, do not stop.
+
+When `session.ephemeral` is `true`, this session runs on a machine that is
+discarded when the session ends. Say so before any sign-in: the sign-in lasts only
+for this session, and each new session signs in again. The connection itself is
+kept only through the repository, when its `.augenta/config.json` is committed.
+On `ephemeral_project`, report `message` and stop: the project folder is not in a
+repository, so nothing connect writes here would outlast the session.
 
 `current` describes the saved connection before live checks: its `environment`,
 `organization`, and `destinations` (including saved names). Use it for context;

@@ -192,6 +192,15 @@ requires `.augenta/config.json`. `AUGENTA_CAPTURE_ENABLED=0` is the global kill
 switch, and it also stops automatic recall. `AUGENTA_AUTO_RECALL=0` stops only
 automatic recall.
 
+`AUGENTA_EPHEMERAL=1` declares that this session's machine is discarded when the
+session ends, and `=0` that it is not; either overrides detection
+(`capture/environment.ts`), which otherwise reads `CLAUDE_CODE_REMOTE=true`,
+`CLAUDE_CODE_REMOTE_SESSION_ID`, and, as a heuristic, `CODEX_HOME=/opt/codex`.
+In such a session, `--probe`, `--workspace` and `--adopt` refuse a project folder
+that is not inside a Git checkout (`ephemeral_project`), and session start stays
+quiet there. The test suites pin `=0` so they behave the same when run inside a
+cloud session.
+
 ## Fire the prompt hook by hand
 
 Automatic recall is silent by design, so when a prompt gets no recall block the

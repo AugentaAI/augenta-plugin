@@ -1121,13 +1121,55 @@ function detectedHarness(explicit, env = process.env) {
 }
 
 // scripts/connect.ts
-import { chmodSync as chmodSync3, existsSync as existsSync6, readFileSync as readFileSync7, renameSync as renameSync5, rmSync as rmSync2, writeFileSync as writeFileSync6 } from "node:fs";
-import { basename, join as join8 } from "node:path";
+import { chmodSync as chmodSync3, existsSync as existsSync7, readFileSync as readFileSync7, renameSync as renameSync5, rmSync as rmSync2, writeFileSync as writeFileSync6 } from "node:fs";
+import { basename, join as join9 } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 // runtime/version.ts
 var PLUGIN_VERSION = "0.11.0";
+
+// capture/environment.ts
+import { existsSync as existsSync6 } from "node:fs";
+import { dirname as dirname2, join as join8, resolve as resolve3 } from "node:path";
+function sessionEnvironment(env = process.env) {
+  const declared = env.AUGENTA_EPHEMERAL?.trim().toLowerCase();
+  if (declared === "0" || declared === "false")
+    return { ephemeral: false, signals: ["AUGENTA_EPHEMERAL=0"] };
+  const signals = [];
+  let kind;
+  if (env.CLAUDE_CODE_REMOTE === "true") {
+    signals.push("CLAUDE_CODE_REMOTE");
+    kind ??= "claude-cloud";
+  }
+  if (env.CLAUDE_CODE_REMOTE_SESSION_ID?.trim()) {
+    signals.push("CLAUDE_CODE_REMOTE_SESSION_ID");
+    kind ??= "claude-cloud";
+  }
+  if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {
+    signals.push("CODEX_HOME=/opt/codex (heuristic)");
+    kind ??= "codex-cloud";
+  }
+  if (declared === "1" || declared === "true") {
+    signals.push("AUGENTA_EPHEMERAL=1");
+    kind ??= "declared";
+  }
+  return { ephemeral: signals.length > 0, ...kind ? { kind } : {}, signals };
+}
+function insideGitCheckout(dir) {
+  let current = resolve3(dir);
+  while (true) {
+    if (existsSync6(join8(current, ".git")))
+      return true;
+    const parent = dirname2(current);
+    if (parent === current)
+      return false;
+    current = parent;
+  }
+}
+function ephemeralProject(projectRoot, env = process.env) {
+  return sessionEnvironment(env).ephemeral && !insideGitCheckout(projectRoot);
+}
 
 // capture/platform.ts
 class AugentaRequestError extends Error {
@@ -1274,7 +1316,7 @@ function writeApiKeyConfig(projectRoot, apiKey, endpoint2, details = {}) {
   }
   const dir = ensureAugentaDir(projectRoot);
   setAugentaIgnore(projectRoot, "local");
-  const path = join8(dir, "config.json");
+  const path = join9(dir, "config.json");
   writeFileSync6(path, `${JSON.stringify({
     authMode: "api-key",
     captureSince: new Date().toISOString(),
@@ -1294,7 +1336,7 @@ function writeOAuthConfig(projectRoot, connection) {
     throw new Error("an OAuth connection requires at least one Connector");
   }
   const dir = ensureAugentaDir(projectRoot);
-  const path = join8(dir, "config.json");
+  const path = join9(dir, "config.json");
   const captureSince = new Date().toISOString();
   const tmp = `${path}.${process.pid}.tmp`;
   try {
@@ -1563,7 +1605,7 @@ async function resolveOAuth(args, projectRoot = args.project ?? process.cwd()) {
   return { oauth: { ...discovered, gateway }, gateway, control, discoveredGateway };
 }
 function priorConnection(projectRoot) {
-  if (!existsSync6(join8(projectRoot, ".augenta", "config.json")))
+  if (!existsSync7(join9(projectRoot, ".augenta", "config.json")))
     return;
   try {
     const existing = loadProjectConfig(projectRoot);
@@ -1954,7 +1996,8 @@ async function runJsonVerb(resolved, args) {
   const metadata = {
     environment: environmentLabel(args.repairHarness ? cfg?.controlUrl : controlUrl(cfg, args.controlUrl)),
     ...args.repairHarness ? {} : environmentChange(cfg, args),
-    ...args.probe && cfg ? { current: savedConnection(cfg) } : {}
+    ...args.probe && cfg ? { current: savedConnection(cfg) } : {},
+    ...args.probe ? { session: sessionEnvironment() } : {}
   };
   try {
     return { ...await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot }), ...metadata };
@@ -2121,6 +2164,15 @@ async function dispatchJsonVerb(resolved, args) {
       message: "--create-workspace and --workspace are separate steps; create first, then ask for the complete destination set again and pass it with --workspace"
     };
   }
+  if ((args.probe || args.workspaces?.length || args.adopt) && ephemeralProject(resolved.projectRoot)) {
+    const session = sessionEnvironment();
+    return {
+      status: "error",
+      code: "ephemeral_project",
+      session,
+      message: `this session's machine is discarded when the session ends (${session.signals.join(", ")}), and ` + `${resolved.projectRoot} is not inside a Git checkout, so a connection written here could not outlast it; ` + "connect from a local session instead (in Cowork, a local session with the project folder attached)"
+    };
+  }
   if (args.adopt) {
     if (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe || args.verifyOnly || args.autoRecall !== undefined || args.endpoint || args.controlUrl || args.profile) {
       return {
@@ -2247,7 +2299,7 @@ if (isMain(import.meta.url)) {
       const { connector, gateway } = await verifyProjectKey(projectRoot, args.endpoint);
       console.log(`The platform key in .augenta/config.json is accepted by ${gateway} and resolves to Connector ${connector.id} (${connector.status}, ${connector.direction}). Nothing was written.`);
     } else if (args.apiKey?.trim()) {
-      const existed = existsSync6(join8(projectRoot, ".augenta", "config.json"));
+      const existed = existsSync7(join9(projectRoot, ".augenta", "config.json"));
       const { path, connector } = await connectWithApiKey(projectRoot, args.apiKey.trim(), args.endpoint);
       console.log(`${existed ? "Updated" : "Wrote"} ${path} (0600). Platform-key capture is enabled through Connector ${connector.id}.`);
       console.log("Off switch: delete .augenta/config.json, or set AUGENTA_CAPTURE_ENABLED=0.");

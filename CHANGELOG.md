@@ -68,6 +68,14 @@ default, whether automatic recall is on or off.
   - Everyone sharing a config needs plugin 0.11.0 or newer. If you already
     reconnected with a pre-release build from `main`, run connect once more; it
     only asks you to confirm your Workspaces.
+- **Cloud sessions are recognized.** Connect notices a session whose machine is
+  discarded when it ends, such as a Claude Code or Codex cloud session, and says
+  before sign-in that the sign-in lasts only for that session. In such a session
+  it refuses to connect a folder that is not in a Git repository, because the
+  connection could not outlast the session. That is the Cowork cloud case: use a
+  local Cowork session instead. Session start stays quiet there rather than
+  asking every session. `AUGENTA_EPHEMERAL=1` or `0` overrides the detection.
+  README's new Cloud sessions section says what runs where.
 
 ### Fixed
 

@@ -85,6 +85,31 @@ ref, and leave Sparse paths empty. Install or enable Augenta.
 Start a new Codex or Work task with your project. Ask **“Connect Augenta”**,
 or run `$augenta:connect`.
 
+### Cloud sessions
+
+A cloud session runs on a machine that is discarded when the session ends, so
+your Augenta sign-in there lasts only for that session. The project's
+connection lasts only if its `.augenta/config.json` is committed to the
+repository (see [Share a project's setup](#share-a-projects-setup)); each new
+session then signs in and joins it.
+
+- **Claude Code in the cloud** (claude.ai/code) does not install plugins, so
+  Augenta does not run there.
+- **Cowork in the cloud** runs the plugin on Anthropic's machine while your
+  project folder stays on your computer, so connect cannot connect it. Run the
+  task as a **local** Cowork session instead. An organization owner can make
+  local the default by turning off "Run Cowork in the cloud".
+- **Codex cloud** has internet access off by default.
+
+Wherever commands run behind a network allowlist, Augenta needs these three
+hosts: `augenta.ai`, `auth.augenta.ai` and `api.augenta.ai`.
+
+| Where | Where to allow them |
+| --- | --- |
+| Cowork, local or cloud | Organization settings → Capabilities → Code execution → Allow network egress; it applies to sessions created afterwards |
+| Claude Code in the cloud | The environment's Network access, set to Custom |
+| Codex cloud | The environment's internet access setting |
+
 ## Connect and confirm
 
 1. Open the sign-in link in your browser.

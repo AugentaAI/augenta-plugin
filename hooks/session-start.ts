@@ -50,6 +50,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { isCodexHarness } from "./harness";
 import { readAdoption } from "../capture/adoption";
+import { ephemeralProject } from "../capture/environment";
 import { captureEnabled, captureGate, controlUrl, loadProjectConfig, resolveProjectRoot } from "../capture/config";
 import { environmentLabel } from "../capture/platform";
 import { Outbox } from "../capture/outbox";
@@ -239,6 +240,10 @@ if (connectedRoot) {
 // project's only automatic fire ever.
 const markerKey = staleConfig ? `reconnect:${projectPath}` : projectPath;
 if (!staleConfig && readMarkers(legacyMarkerPath)[projectPath]) process.exit(0);
+// A throwaway session outside any checkout cannot keep a connection (connect
+// refuses it), and its home, where this marker lives, is new every time: the
+// prompt could never succeed and would come back every session.
+if (ephemeralProject(projectPath)) process.exit(0);
 if (!firstTime(markerKey)) process.exit(0);
 
 // Codex may show additionalContext verbatim, so its wording stays clean and
