@@ -235,7 +235,11 @@ jobs:
           )"
           printf '{"transcript_path":"%s/.claude/projects/p/s.jsonl","cwd":"%s"}' "$HOME" "$project" \
             | sh -c "$session_start_command" | tee hook-out.json
-          jq -e '.hookSpecificOutput.initialUserMessage == "/augenta:connect"' hook-out.json
+          jq -e '
+            .hookSpecificOutput.hookEventName == "SessionStart" and
+            (.hookSpecificOutput.additionalContext | contains("/augenta:connect")) and
+            ((.hookSpecificOutput | keys | sort) == ["additionalContext", "hookEventName"])
+          ' hook-out.json
 
           # Fire the READ door too, from the installed tree, on a project that
           # never opted in. It needs no network: with no config there is nothing

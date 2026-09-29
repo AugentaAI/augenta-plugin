@@ -97,7 +97,11 @@ describe("session-start, run as the user's harness runs it", () => {
     // hook's own code: the capture body consumed stdin and exited 0, so stdout
     // was EMPTY and the plugin's entire onboarding path was silently dead.
     const parsed = JSON.parse(r.stdout);
-    expect(parsed.hookSpecificOutput?.initialUserMessage).toBe("/augenta:connect");
+    expect(Object.keys(parsed.hookSpecificOutput).sort()).toEqual([
+      "additionalContext",
+      "hookEventName",
+    ]);
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("/augenta:connect");
   });
 
   test("Codex: the same bundle emits only fields accepted by Codex SessionStart", () => {
@@ -111,8 +115,8 @@ describe("session-start, run as the user's harness runs it", () => {
       "additionalContext",
       "hookEventName",
     ]);
-    // With no initialUserMessage nothing auto-fires, so the shipped bundle's one
-    // prompt has to tell the user how to connect.
+    // Nothing auto-fires, so the shipped bundle's one prompt has to tell the
+    // user how to connect.
     expect(parsed.hookSpecificOutput?.additionalContext).toContain("$augenta:connect");
   });
 });

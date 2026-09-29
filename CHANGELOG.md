@@ -47,6 +47,10 @@ release a user can read.
   destinations, capture baseline, cursors or history.
 - Capture health reports missing versus invalid configuration and labels its
   activity as project-wide. Local activity alone does not verify host dispatch.
+- In a project that is not connected yet, a `claude -p` run no longer starts
+  with an extra `/augenta:connect` turn ahead of your own prompt. Interactive
+  sessions are unchanged: Claude still brings up connecting at your first
+  message. No reconnect or hook re-approval is needed.
 
 ### Changed
 

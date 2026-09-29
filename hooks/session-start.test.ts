@@ -3,9 +3,9 @@
  * stranded-outbox drain.
  *
  * Contract under test: an unconnected project fires the connect prompt exactly
- * once per project (`initialUserMessage` = /augenta:connect on Claude Code;
- * Codex omits that unsupported field and shows a user-facing reminder through
- * additionalContext, with no agent-only scaffolding); a connected project is
+ * once per project, through additionalContext alone on both harnesses (agent-
+ * directed on Claude Code, naming /augenta:connect; a user-facing reminder with
+ * no agent-only scaffolding on Codex); a connected project is
  * silent; a previously-prompted project is silent — including one prompted
  * under the pre-0.3.0 `init-prompted.json` map. A config file the current
  * parser REJECTS counts as unconnected and gets its own one-shot reconnect
@@ -77,10 +77,17 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
     expect(fire({ transcript_path: CODEX_TP, cwd: project }, { AUGENTA_CONTROL_URL: "https://augenta.ai" })).toBe("");
   });
 
-  test("Claude Code: fires /augenta:connect with agent-directed context", () => {
+  test("Claude Code: agent-directed context naming /augenta:connect, no initialUserMessage", () => {
     const out = fire({ transcript_path: CLAUDE_TP, cwd: project });
     const parsed = JSON.parse(out);
-    expect(parsed.hookSpecificOutput?.initialUserMessage).toBe("/augenta:connect");
+    // initialUserMessage acts only in `-p` runs, where it would put a connect
+    // turn ahead of a headless caller's own prompt. The hidden context is the
+    // channel that reaches the model interactively, so it is the only one used.
+    expect(Object.keys(parsed.hookSpecificOutput).sort()).toEqual([
+      "additionalContext",
+      "hookEventName",
+    ]);
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("/augenta:connect");
     expect(out).toContain("never be pasted");
   });
 
@@ -162,7 +169,11 @@ describe("a config file the parser rejects is UNCONNECTED, not connected", () =>
   test("a legacy setup.ts config prompts to reconnect instead of going silent", () => {
     writeConfig(LEGACY);
     const parsed = JSON.parse(fire({ transcript_path: CLAUDE_TP, cwd: project }));
-    expect(parsed.hookSpecificOutput?.initialUserMessage).toBe("/augenta:connect");
+    expect(Object.keys(parsed.hookSpecificOutput).sort()).toEqual([
+      "additionalContext",
+      "hookEventName",
+    ]);
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("/augenta:connect");
     expect(parsed.hookSpecificOutput?.additionalContext).toContain("cannot read");
   });
 
