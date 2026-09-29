@@ -1,173 +1,131 @@
 # Changelog
 
-All notable changes to the Augenta plugin. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), except that there is
-no Unreleased section: every entry lands under the version that ships it. This
-project uses [semantic versioning](https://semver.org/spec/v2.0.0.html) — with the caveat that
-it is pre-1.0 and **does not carry old project configs forward**. Where a release
-requires reconnecting, the entry says so.
+All notable changes to the Augenta plugin, newest first. Each version is tagged
+`vX.Y.Z` in this repository.
 
-Both marketplaces install from `main`, so this file is the only account of a
-release a user can read.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+except that there is no Unreleased section: every entry lands under the version
+that ships it. Versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html),
+with one caveat: before 1.0, **old project configs are not carried forward**, and
+an entry that needs you to reconnect says so.
+
+Both marketplaces install from `main` and show no release notes, so this file is
+where to read what changed.
 
 ## [0.11.0] — 2026-09-29
 
-**Reconnect once per browser-connected project**: connections now record their
-destinations in a new format (see Changed). Platform-key configs keep working.
-If an earlier connection from a Git worktree was redirected to the main
-checkout, also connect once from the worktree itself (see Fixed). A browser
-connection's config can now be committed, so a repository points everyone at the
-same Workspaces; each checkout joins through connect (see Added). Codex asks
-once to approve the updated prompt hook. Connect also asks whether to turn on
-automatic recall for the project, which is off unless you choose it and looks
-up memory only, with no answer model. `/augenta:recall` asks for an answer by
-default, whether automatic recall is on or off.
+### Upgrading
+
+- **Reconnect each browser-connected project once.** This version stores the
+  connection in a new format and does not read the old one. Run connect in the project: it
+  asks you to confirm your Workspaces, keeps using your existing Connectors, and
+  keeps the project's environment and any URL overrides. Projects connected with
+  a platform key keep working as they are.
+- **Update Codex's copy of the plugin before reconnecting.** An older cached copy
+  cannot read the new format and asks to reconnect again.
+- **Codex asks once to approve the updated prompt hook**, because its timeout
+  changed.
+- **Worktrees:** if a project in a Git worktree was connected from the main
+  checkout, connect once from the worktree itself (see Fixed).
 
 ### Added
 
-- **Recall can run on each prompt, if you turn it on.** Connect asks whether to
-  turn on automatic recall for the project, with Off pre-selected. When it is on
-  and you submit a prompt, the plugin asks the Workspaces the project feeds what
-  they remember about it. It uses memory-only context mode, with no Augenta
-  answer model. Anything that matches reaches your agent as background it uses
-  only when relevant.
-  - Change it later without reconnecting: ask your agent to turn automatic
-    recall on or off. Nothing else about the connection changes.
-  - A project connected before connect asked keeps it on until you reconnect or
-    change it. Browser-connected projects reconnect for this release anyway, and
-    are asked then.
-  - Pasted blocks and common secret patterns are removed from the prompt first.
-    Commands and replies shorter than three words are skipped.
-  - The lookup waits at most five seconds, including up to two retries. If
-    Augenta is slow, offline or has nothing saved, the prompt goes ahead as
-    usual.
-  - Each prompt leaves a one-way fingerprint of the question in each selected
-    Workspace, as any recall question does. The recalled text itself is not
-    captured back.
-  - Pausing capture with `AUGENTA_CAPTURE_ENABLED=0` also pauses this.
-    `AUGENTA_AUTO_RECALL=0` turns off only this, for every project.
-    `/augenta:recall` keeps working either way.
-  - Codex asks once to approve the updated prompt hook, because its timeout
-    changed.
-- **Share a project's Augenta setup through Git.** A browser-connected
-  `.augenta/config.json` holds no sign-in token, so connect now lets Git see that
-  one file, and nothing else in `.augenta/`. Commit it, and every checkout of the
-  repository points at the same Workspaces.
-  - A checkout with a committed config captures, and sends recall questions,
-    only after its user runs connect there. Connect signs them in if needed, shows the project's Workspaces and
-    the full-record disclosure, and asks whether to use them. They are not asked
-    to choose Workspaces again unless they want to.
-  - Each person sends through a Connector of their own in each Workspace, made
-    the first time they join and reused by their other clones, worktrees and
-    cloud sessions. The committed file names the Workspaces, never a Connector.
-  - Joining needs access to every recorded Workspace, in the same organization;
-    someone may need to add them first. Access is checked before anything is
-    created; if a link then fails, capture stays off, and any link already made
-    is reused by the next join. Codex turns count from when that checkout joined.
-  - A pulled change to the Workspaces, adding or removing one, stops capture in
-    each checkout until someone there confirms it. So does another person
-    signing in on the same machine; records still queued for the first person's
-    Connectors are then not sent, and connect says how much. Each new worktree
-    and cloud checkout joins the same way.
-  - API-key configs hold the key, so connect keeps them out of Git and refuses
-    to write a key into a config Git already tracks.
-  - Everyone sharing a config needs plugin 0.11.0 or newer; older versions
-    cannot read it. If you already reconnected with a pre-release build from
-    `main`, run connect once more: it asks you to confirm your Workspaces and
-    reuses your Connectors.
-- **Cloud sessions are recognized.** Connect notices a session whose machine is
-  discarded when it ends, such as a Claude Code or Codex cloud session, and says
-  before sign-in that the sign-in lasts only for that session. In such a session
-  it refuses to connect a folder that is not in a Git repository, because the
-  connection could not outlast the session. That is the Cowork cloud case: use a
-  local Cowork session instead, which Team and Enterprise plans keep; from
-  October 6, 2026, new Pro and Max Cowork tasks run only in the cloud, where
-  Augenta cannot capture them. Session start stays quiet there rather than
-  asking every session. `AUGENTA_EPHEMERAL=1` or `0` overrides the detection.
-  README's new Cloud sessions section says what runs where.
-
-### Fixed
-
-- On Windows, connect opens the sign-in link through the system's URL handler
-  rather than `cmd /c start`, which re-read the link as a command line: an `&`
-  in a crafted link could have started a second command.
-- A config that becomes unreadable again after an earlier reconnect prompt is
-  raised again, once per unreadable file, rather than turning capture off in
-  silence. Projects whose config was already unreadable see the prompt once more.
-- Connecting from a Git worktree now connects that worktree, where its hooks
-  read configuration. Main and sibling checkouts are separate consent boundaries,
-  including nested worktrees. If an earlier connection was redirected to main,
-  connect once from the worktree and choose its destinations. Main stays unchanged.
-  Symlinked subdirectories follow their physical checkout’s consent boundary.
-- Codex memory follows the same physical boundary. A Task Group counts as
-  this project's when the folder it names physically lies inside the project,
-  however that folder was reached: through macOS's `/tmp` or `/var`, or through
-  a symlinked projects folder. A folder that is only symlinked into the project
-  from elsewhere no longer counts. Memory already captured for such a folder is
-  withdrawn from its Workspaces at the next Codex memory scan. No reconnect is
-  required.
-- Codex connection instructions pass the harness explicitly, including commands
-  requiring elevated access. Missing environment hints no longer label an agent
-  as Claude Code or overwrite an existing label during reconnect.
-- `connect --json --repair-harness --harness codex` repairs only the current
-  project’s verified active agent Connectors, without reconnecting or changing
-  destinations, capture baseline, cursors or history.
-- Capture health reports missing versus invalid configuration and labels its
-  activity as project-wide. Local activity alone does not verify host dispatch.
-- **Connect names a network that blocks Augenta.** Behind an allowlisting proxy,
-  connect used to fail with "cannot reach Augenta: Request was cancelled."
-  before asking anything. Now it checks `augenta.ai`, `auth.augenta.ai` and
-  `api.augenta.ai` and reports which ones this network blocks and why, so you
-  know what to allow; README lists where each environment allows them. Every
-  error message also names a proxy's refusal, a cut connection or a timeout,
-  instead of Node's generic wording.
-- **Proxies the environment names are used.** Where `HTTPS_PROXY` or
-  `HTTP_PROXY` is set, as in cloud sessions and Cowork's VM, connect, recall and
-  the hooks now send through that proxy rather than around it. They also trust a
-  sandbox's own proxy certificate when it leaves one, even behind a transparent
-  proxy, unless `NODE_EXTRA_CA_CERTS` is already set. Using the proxy needs
-  Node.js 22.21 or newer; older versions ignore it as before.
-- Cloud layouts: a Claude Code transcript under `/root/.claude/projects/` is no
-  longer mistaken for Codex when `CODEX_HOME` is the home directory itself. Codex
-  project memory is found under a non-default Codex home such as `/opt/codex`
-  even when the hook's environment does not set `CODEX_HOME`: the plugin reads
-  it from the session's own rollout path.
-- In a project that is not connected yet, a `claude -p` run no longer starts
-  with an extra `/augenta:connect` turn ahead of your own prompt. Interactive
-  sessions are unchanged: Claude still brings up connecting at your first
-  message. No reconnect or hook re-approval is needed.
+- **Automatic recall, if you turn it on.** Connect now asks whether the project
+  should look up past work each time you submit a prompt. Off is pre-selected.
+  When it is on:
+  - The plugin asks the project's Workspaces what they remember about the prompt
+    and passes any match to your agent as background. It asks for saved memory
+    only; no Augenta answer model runs.
+  - Pasted blocks and common secret patterns are removed first. Commands and
+    replies under three words are skipped.
+  - It waits at most five seconds. If Augenta is slow, offline or has nothing
+    saved, the prompt goes ahead as usual.
+  - Each prompt leaves a one-way fingerprint of the question in each Workspace,
+    as any recall does. The recalled text is never captured back.
+  - Ask your agent to turn it on or off at any time, without reconnecting.
+    `AUGENTA_CAPTURE_ENABLED=0` pauses it along with capture, and
+    `AUGENTA_AUTO_RECALL=0` turns off only automatic recall, for every project.
+    `/augenta:recall` works either way.
+  - A project connected before connect asked this keeps it on until you change
+    it or reconnect.
+- **Share a project's setup through Git.** A browser-connected
+  `.augenta/config.json` now holds no sign-in token and no Connector, so you can
+  commit it and everyone who checks out the repository points at the same
+  Workspaces. Git sees only that file; the rest of `.augenta/` stays out.
+  - Each checkout joins once. Connect signs you in if needed, shows the
+    project's Workspaces with the usual disclosure, and asks whether to use them.
+  - You send through your own Connector in each Workspace. It is made the first
+    time you join and reused by your other clones, worktrees and cloud sessions.
+  - You need access to every Workspace the project records, so someone may need
+    to add you. Nothing is created until that access is confirmed.
+  - If a pulled change adds or removes a Workspace, capture stops in each
+    checkout until someone there confirms the new set. The same happens when
+    someone else signs in on that machine, and connect says how much of the
+    first person's queued work was left unsent.
+  - Everyone sharing a config needs 0.11.0 or newer. Platform-key configs hold
+    the key, so connect never lets Git see them.
+- **Cloud sessions.** Connect recognizes a session whose machine is discarded
+  when it ends, such as Claude Code or Codex in the cloud, and says before
+  sign-in that the sign-in lasts only for that session. There it refuses to
+  connect a folder outside a Git repository, because nothing could outlast the
+  session. [README](README.md#cloud-sessions) explains what runs where.
+  `AUGENTA_EPHEMERAL=1` or `0` overrides the detection.
+- **Proxy support.** Where `HTTPS_PROXY` or `HTTP_PROXY` is set, as in cloud
+  sessions and Cowork's VM, connect, recall and the hooks send through that
+  proxy and trust the sandbox's own proxy certificate. This needs Node.js 22.21
+  or newer; older versions ignore the proxy.
 
 ### Changed
 
-- A browser-connected project captures only while this machine has a saved
-  Augenta sign-in for it. If that sign-in is gone, for example in a fresh cloud
-  session or after deleting `~/.augenta/auth.json`, capture stops instead of
-  queueing, and session start says to sign in again. An expired or revoked
-  sign-in still queues, as before.
-- **Reconnect required for browser-connected projects.** Routing is now recorded
-  in `destinations`, replacing `connectorIds`; run connect once per project.
-  The file also records the environment, organization and Workspace names.
-  Reconnect keeps the saved environment, URL overrides still work, and recall
-  checks links live before asking their Workspaces, skipping disabled links
-  while refreshing names for display. An older
-  cached Codex plugin cannot read the new shape and will ask to reconnect;
-  update that install before reconnecting. Two-key API-key configs still work.
-  Reconnect refreshes discovery-derived gateways while preserving explicit
-  overrides. Recall retains actionable Workspace refusal details, and a
-  malformed platform-key assignment fails before replacing the project config.
+- **`/augenta:recall` answers by default.** Augenta's model writes an answer
+  from your Workspaces. Use `/augenta:recall context <question>` for the matching
+  memory without a model call. If the model is unavailable, recall falls back to
+  memory once and your agent says so.
+- **Capture needs this machine's sign-in.** Where the saved sign-in for a
+  browser-connected project is missing, for example in a fresh cloud session or
+  after deleting `~/.augenta/auth.json`, capture stops instead of queueing, and
+  session start says to sign in. An expired sign-in still queues, as before.
+- **Recall checks each Connector before asking.** Disabled links are skipped,
+  and Workspace names are refreshed for display without rewriting the config.
+- **Simpler guides.** Setup, recall and privacy guidance is shorter, with
+  separate pages for [connection settings](docs/configuration.md) and
+  [how the plugin works](docs/architecture.md).
 
-- **Recall asks Augenta's model for an answer by default.** Use
-  `/augenta:recall context <question>` for the matching memory without an Augenta
-  answer-model call, or `answer` to explicitly request the default. The script
-  accepts `--context` and `--answer`, and refuses them together. If the model is
-  unavailable or model access is not acknowledged, the plugin retries once as
-  context and marks that result so your agent explains it is using memory.
-  This recall change needs no reconnect. Both modes retain the 75-second client
-  ceiling for older platforms; each request sends its mode explicitly.
+### Fixed
 
-- Simplified setup, recall, and privacy guidance. Added separate guides for
-  connection settings and how the plugin works. Plugin behavior is unchanged;
-  no reconnect is required.
+- **Blocked networks are named.** Behind an allowlisting proxy, connect used to
+  fail with "Request was cancelled." before asking anything. It now checks
+  `augenta.ai`, `auth.augenta.ai` and `api.augenta.ai` and says which are
+  blocked and why. Other network errors name a proxy refusal, a dropped
+  connection or a timeout instead of Node's generic wording.
+- **Windows sign-in link.** Connect opens it through the system's URL handler
+  instead of `cmd /c start`, which re-read the link as a command line: an `&` in
+  a crafted link could have started a second command.
+- **Worktrees.** Connecting from a Git worktree now connects that worktree,
+  where its hooks read configuration. The main checkout and sibling worktrees,
+  including nested ones, stay separate. Symlinked folders follow the checkout
+  they physically belong to.
+- **Codex memory** counts as this project's only when the folder it names
+  physically lies inside the project, however it was reached (`/tmp`, `/var` or
+  a symlinked projects folder). Memory already captured for a folder that was
+  only symlinked in is withdrawn at the next Codex memory scan.
+- **Codex harness labels.** Connect passes the harness explicitly, and a missing
+  hint no longer labels an agent as Claude Code or overwrites an existing label.
+  `connect --json --repair-harness --harness codex` fixes the labels on this
+  project's own Connectors without reconnecting.
+- **Capture health** tells a missing configuration from an invalid one.
+- **Platform keys.** A key whose Connector assignment is malformed is refused
+  before it replaces the project's config.
+- **Cloud layouts.** A Claude Code transcript under `/root/.claude/projects/` is
+  no longer mistaken for Codex, and Codex memory is found under a non-default
+  Codex home such as `/opt/codex`.
+- **`claude -p` in an unconnected project** no longer starts with an extra
+  `/augenta:connect` turn ahead of your prompt. Interactive sessions are
+  unchanged.
+- **Unreadable configs are always raised.** A config that becomes unreadable
+  after an earlier reconnect prompt gets the prompt again, instead of turning
+  capture off in silence. Projects whose config was already unreadable see it
+  once more.
 
 ## [0.10.2] — 2026-09-11
 
@@ -268,7 +226,7 @@ Command output and interrupted running-tool results remain captured. No reconnec
 - Corrected documentation that said an organization starts with one shared
   `Default Workspace`. Every member is provisioned their own.
 
-## 0.9.2 — 2026-08-17
+## [0.9.2] — 2026-08-17
 
 ### Fixed
 
@@ -288,7 +246,7 @@ Command output and interrupted running-tool results remain captured. No reconnec
 
 - Hook commands changed, so **Codex re-prompts for hook trust** on upgrade.
 
-## 0.9.1 — 2026-08-16
+## [0.9.1] — 2026-08-16
 
 ### Fixed
 
@@ -298,7 +256,7 @@ Command output and interrupted running-tool results remain captured. No reconnec
   It now states the fact and names the invocation to run, which is the whole
   point of the only prompt a project ever gets.
 
-## 0.9.0 — 2026-08-14
+## [0.9.0] — 2026-08-14
 
 ### Changed
 
@@ -314,7 +272,7 @@ Command output and interrupted running-tool results remain captured. No reconnec
   comes from login discovery, and refusing anything else costs nothing — the
   link and code are always printed for the user to open themselves.
 
-## 0.8.0 — 2026-08-13
+## [0.8.0] — 2026-08-13
 
 ### Changed
 
@@ -332,7 +290,7 @@ plugin ships is unchanged, but the ids in an existing `.augenta/config.json` no
 longer resolve. Autonomous clients need re-issued platform keys, since a key is
 assigned to one Connector.
 
-## 0.7.0 — 2026-08-12
+## [0.7.0] — 2026-08-12
 
 ### Changed
 
@@ -352,7 +310,7 @@ Every project connected on an earlier version must re-run `/augenta:connect`.
 There is no fallback read, so an unconverted project has no destination
 configured and captures nothing.
 
-## 0.6.0 — 2026-07-28
+## [0.6.0] — 2026-07-28
 
 ### Added
 
@@ -381,7 +339,7 @@ configured and captures nothing.
 - The platform-key path stays single-destination: it has no consent gate, and its
   config format has no field in which to express a route.
 
-## 0.5.1 — 2026-07-28
+## [0.5.1] — 2026-07-28
 
 ### Fixed
 
@@ -396,7 +354,7 @@ configured and captures nothing.
   between reading the transcript and handing off — because `Stop` scans at the
   end of every turn and session start scans as the backstop.
 
-## 0.5.0 — 2026-07-28
+## [0.5.0] — 2026-07-28
 
 ### Added
 
@@ -422,7 +380,7 @@ configured and captures nothing.
   transcript, cache reads were over five thousand times the counted input volume.
   Codex turns now also record the model.
 
-## 0.4.0 — 2026-07-27
+## [0.4.0] — 2026-07-27
 
 ### Changed
 
@@ -452,7 +410,7 @@ configured and captures nothing.
 A config written before 0.4.0 becomes a one-time reconnect prompt rather than a
 reused credential that fails later as an unexplained 401.
 
-## 0.3.0 — 2026-07-27
+## [0.3.0] — 2026-07-27
 
 ### Added
 
@@ -475,7 +433,7 @@ authentication scheme the platform no longer accepts. They are not migrated:
 reusing the old credential would trade a clear reconnect for an unexplained
 authentication failure.
 
-## 0.2.3 — 2026-07-22
+## [0.2.3] — 2026-07-22
 
 ### Added
 
@@ -484,6 +442,17 @@ authentication failure.
 
 [0.11.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.1...v0.10.2
-[0.10.1]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.10.1
-[0.10.0]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.10.0
-[0.9.3]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.9.3
+[0.10.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.9.3...v0.10.0
+[0.9.3]: https://github.com/AugentaAI/augenta-plugin/compare/v0.9.2...v0.9.3
+[0.9.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.9.1...v0.9.2
+[0.9.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.2.3...v0.3.0
+[0.2.3]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.2.3

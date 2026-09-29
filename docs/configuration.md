@@ -78,8 +78,9 @@ Recall checks each selected link live before sending the question. Disabled or
 inaccessible Connectors, and links whose Workspace no longer matches the saved
 choice, are skipped and reported; reconnect to review those destinations.
 
-Older `connectorIds` configs require a single reconnect per project. They are
-not converted automatically.
+A browser-connected project from 0.10 or earlier needs one reconnect: its config
+is in an older format that is not converted automatically. Connect reuses the
+Connectors it already has.
 
 Sign-in tokens stay in `~/.augenta/auth.json`. The directory uses mode `0700`
 and the file uses `0600`, so only your OS account can access them. Tokens are
