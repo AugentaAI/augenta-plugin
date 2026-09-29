@@ -1843,6 +1843,41 @@ describe("JSON verbs", () => {
     }
   });
 
+  test("a network that blocks Augenta is named host by host, before anything is asked", async () => {
+    // The first request of every verb is discovery; a refused tunnel there used
+    // to reach the user as "cannot reach Augenta: Request was cancelled."
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      requests.push(`GET ${String(url)}`);
+      throw new TypeError("fetch failed", {
+        cause: Object.assign(new Error("Request was cancelled.", {
+          cause: Object.assign(new Error("Proxy response (403) !== 200 when HTTP Tunneling"), { name: "AbortError", code: "UND_ERR_ABORTED" }),
+        }), { code: 0 }),
+      });
+    }) as unknown as typeof fetch;
+    const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true });
+    expect(payload).toMatchObject({
+      status: "error",
+      code: "network_blocked",
+      hosts: [{ host: "control.example.com", ok: false, reason: "a proxy refused it (403)" }],
+    });
+    expect(String(payload.message)).toContain("this network does not let connect reach control.example.com");
+    expect(() => statSync(join(project, ".augenta"))).toThrow();
+  });
+
+  test("a failure every host answers through is reported as itself, not as a block", async () => {
+    let first = true;
+    route({
+      [`${CONTROL}/.well-known/augenta.json`]: () => {
+        if (first) { first = false; throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } }); }
+        return Response.json({ issuer: ISSUER, clientId: "client_public", gateway: GATEWAY });
+      },
+      [`${ISSUER}/.well-known/openid-configuration`]: () => Response.json({ issuer: ISSUER }),
+      [`GET ${GATEWAY}/v1/me`]: () => Response.json({ error: "authentication required" }, { status: 401 }),
+    });
+    expect(await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true }))
+      .toMatchObject({ status: "error", code: "failed", message: expect.stringContaining("connection was cut") });
+  });
+
   test("a throwaway session outside any checkout is refused before anything is asked or sent", async () => {
     process.env.AUGENTA_EPHEMERAL = "1";
     route();

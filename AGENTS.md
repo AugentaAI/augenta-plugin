@@ -186,6 +186,16 @@ opted in, and hooks are a silent no-op without project config. That tail uses
 shell builtins only, because the PATH it would otherwise depend on is the thing
 under suspicion.
 
+A third: behind a proxy the environment names, the runner turns on Node's
+env-proxy support (`NODE_USE_ENV_PROXY`, plus the sandbox's proxy CA through
+`NODE_EXTRA_CA_CERTS`) with **environment variables only, each only if unset,
+and never a CLI flag**. A flag an older Node does not know stops every hook
+dead, while an unknown variable is ignored. The connect and recall CLIs, which the
+skills start with a bare `node`, re-run themselves once with the same variables
+(`reexecForEnvProxy`). A connect failure that could be the network is checked
+host by host (`capture/network.ts`) before it is reported as `network_blocked`:
+only an answer Augenta alone gives counts as reachable, never a proxy's 403 page.
+
 ## Releases
 
 Version changes are atomic, across **eight** values in six files, and the

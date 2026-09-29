@@ -252,6 +252,7 @@ describe("network calls are bounded", () => {
   // test). So assert it structurally: every fetch must carry a signal.
   const sources = [
     "capture/auth.ts",
+    "capture/network.ts",
     "capture/platform.ts",
     "capture/recall-client.ts",
     "capture/ship.ts",

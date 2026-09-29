@@ -100,6 +100,23 @@ describe("describeError", () => {
     }
   });
 
+  test("a proxy's refused tunnel is named, not reported as 'Request was cancelled.'", () => {
+    // ENG-447 reproduced exactly this chain and reported only its middle line.
+    const refused = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("Request was cancelled.", {
+        cause: Object.assign(new Error("Proxy response (403) !== 200 when HTTP Tunneling"), { name: "AbortError", code: "UND_ERR_ABORTED" }),
+      }), { code: 0 }),
+    });
+    expect(describeError(refused)).toBe(
+      "cannot reach Augenta: a proxy refused the connection (403). This network's allowlist may block Augenta's hosts.",
+    );
+    expect(describeError(Object.assign(new Error("fetch failed"), { cause: { code: "ECONNRESET" } }))).toMatch(/connection was cut/);
+    expect(describeError(Object.assign(new Error("fetch failed"), { cause: { code: "SELF_SIGNED_CERT_IN_CHAIN" } })))
+      .toMatch(/TLS certificate could not be verified/);
+    expect(describeError(Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" })))
+      .toMatch(/no answer in time/);
+  });
+
   test("an unrecognized cause still names something, and a plain error passes through", () => {
     expect(
       describeError(Object.assign(new Error("fetch failed"), { cause: { message: "socket hang up" } })),

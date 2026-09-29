@@ -110,6 +110,11 @@ hosts: `augenta.ai`, `auth.augenta.ai` and `api.augenta.ai`.
 | Claude Code in the cloud | The environment's Network access, set to Custom |
 | Codex cloud | The environment's internet access setting |
 
+If a host is blocked, connect says which one, and why, before asking you
+anything. Where the environment names its proxy in `HTTPS_PROXY`, connect,
+recall and the hooks send through it, and trust that sandbox's proxy
+certificate. This needs Node.js 22.21 or newer; older versions ignore the proxy.
+
 ## Connect and confirm
 
 1. Open the sign-in link in your browser.

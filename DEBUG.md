@@ -196,6 +196,18 @@ automatic recall.
 session ends, and `=0` that it is not; either overrides detection
 (`capture/environment.ts`), which otherwise reads `CLAUDE_CODE_REMOTE=true`,
 `CLAUDE_CODE_REMOTE_SESSION_ID`, and, as a heuristic, `CODEX_HOME=/opt/codex`.
+When `HTTPS_PROXY`/`HTTP_PROXY` (either case) is set, `scripts/run-node-hook.sh`
+exports `NODE_USE_ENV_PROXY=1`, `NODE_NO_WARNINGS=1` and, from the first readable
+of `/usr/local/share/ca-certificates/mitm-proxy-ca.crt` and
+`/etc/ssl/certs/ca-certificates.crt`, `NODE_EXTRA_CA_CERTS`, each only if unset.
+The connect and recall CLIs re-run themselves once with the same variables
+(`reexecForEnvProxy` in `runtime/node.ts`), because the skills start them with a
+bare `node`. Only Node 22.21+ and 24+ honor `NODE_USE_ENV_PROXY`. Without it,
+Node ignores the proxy and connects directly. A refused tunnel surfaces as
+`UND_ERR_ABORTED` "Proxy response (403) !== 200 when HTTP Tunneling", two
+causes below "Request was cancelled."; `capture/network.ts` reads the whole chain,
+and on such a failure connect checks each host and returns `network_blocked`.
+
 In such a session, `--probe`, `--workspace` and `--adopt` refuse a project folder
 that is not inside a Git checkout (`ephemeral_project`), and session start stays
 quiet there. The test suites pin `=0` so they behave the same when run inside a

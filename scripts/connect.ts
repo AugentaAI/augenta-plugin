@@ -22,13 +22,14 @@ import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { isMain } from "../runtime/node";
+import { isMain, reexecForEnvProxy } from "../runtime/node";
 // Reported to the platform as Connector metadata. One shared constant rather
 // than a literal per call site — see runtime/version.ts for why.
 import { PLUGIN_VERSION } from "../runtime/version";
 import { ensureAugentaDir, setAugentaIgnore } from "../capture/augenta-dir";
 import { adoptionCovers, writeAdoption } from "../capture/adoption";
 import { ephemeralProject, sessionEnvironment } from "../capture/environment";
+import { classifyNetworkError, diagnoseHosts } from "../capture/network";
 import {
   DEFAULT_CONTROL_URL,
   DEFAULT_GATEWAY,
@@ -1488,6 +1489,25 @@ export async function runJsonVerb(
   try {
     return { ...(await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot })), ...metadata };
   } catch (error) {
+    // A failure that could be the network refusing Augenta is checked host by
+    // host before it is reported, so the answer names what to allow instead of
+    // "Request was cancelled." (ENG-458). Only a confirmed block is reported as
+    // one; if every host answers as Augenta does, the original failure stands.
+    if (classifyNetworkError(error)) {
+      const hosts = await diagnoseHosts(controlUrl(cfg, args.controlUrl));
+      const blocked = hosts.filter((host) => !host.ok);
+      if (blocked.length > 0) {
+        return {
+          status: "error",
+          code: "network_blocked",
+          hosts,
+          message:
+            `this network does not let connect reach ${blocked.map((host) => `${host.host} (${host.reason})`).join(", ")}; ` +
+            `connect needs ${hosts.map((host) => host.host).join(", ")}, so allow them in this environment's network settings`,
+          ...metadata,
+        };
+      }
+    }
     return { status: "error", code: "failed", message: describeError(error), ...metadata };
   }
 }
@@ -1884,6 +1904,8 @@ export async function connectWithApiKey(
 }
 
 if (isMain(import.meta.url)) {
+  // Before anything else: in a proxied sandbox, re-run with Node told to use it.
+  reexecForEnvProxy();
   const argv = process.argv.slice(2);
   // Read straight off argv: parseArgs itself can throw, and a caller that asked
   // for JSON must get JSON back even for a bad flag.

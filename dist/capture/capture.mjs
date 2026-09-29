@@ -1129,9 +1129,92 @@ import { createHash, randomUUID as randomUUID2 } from "node:crypto";
 import { homedir } from "node:os";
 import { join as join6 } from "node:path";
 
+// capture/network.ts
+class DiscoveryError extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+    this.name = "DiscoveryError";
+  }
+}
+var TLS_CODES = /^(CERT_|UNABLE_TO_|SELF_SIGNED_CERT|DEPTH_ZERO_SELF_SIGNED_CERT|ERR_TLS_)/;
+function* causes(error) {
+  let current = error;
+  for (let depth = 0;current && typeof current === "object" && depth < 8; depth++) {
+    yield current;
+    current = current.cause;
+  }
+}
+function classifyNetworkError(error) {
+  for (const link of causes(error)) {
+    if (link instanceof DiscoveryError) {
+      return link.status === 404 ? undefined : { kind: "proxy_refused", status: link.status };
+    }
+    const proxy = /^Proxy response \((\d{3})\)/.exec(String(link.message ?? ""));
+    if (proxy)
+      return { kind: "proxy_refused", status: Number(proxy[1]) };
+    const code = typeof link.code === "string" ? link.code : undefined;
+    if (code === "ENOTFOUND" || code === "EAI_AGAIN")
+      return { kind: "dns", code };
+    if (code === "ECONNREFUSED")
+      return { kind: "refused", code };
+    if (code === "ECONNRESET" || code === "EPIPE" || code === "UND_ERR_SOCKET")
+      return { kind: "reset", code };
+    if (code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT" || link.name === "TimeoutError") {
+      return { kind: "timeout", ...code ? { code } : {} };
+    }
+    if (code && TLS_CODES.test(code))
+      return { kind: "tls", code };
+  }
+  return;
+}
+var PRODUCTION = { control: "https://augenta.ai", issuer: "https://auth.augenta.ai", gateway: "https://api.augenta.ai" };
+async function check(fetcher, url, timeoutMs, isAugenta) {
+  const host = new URL(url).host;
+  try {
+    const response = await fetcher(url, { signal: AbortSignal.timeout(timeoutMs) });
+    const body = await response.json().catch(() => {
+      return;
+    });
+    return isAugenta(response, body) ? { host, ok: true } : { host, ok: false, reason: `answered ${response.status}, not as Augenta does` };
+  } catch (error) {
+    const failure = classifyNetworkError(error);
+    return {
+      host,
+      ok: false,
+      reason: !failure ? "no answer" : failure.kind === "proxy_refused" ? `a proxy refused it (${failure.status})` : failure.kind === "dns" ? "the name did not resolve" : failure.kind === "refused" ? "the connection was refused" : failure.kind === "reset" ? "the connection was cut" : failure.kind === "timeout" ? "no answer in time" : "its TLS certificate was not trusted"
+    };
+  }
+}
+async function diagnoseHosts(controlUrl, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 3000;
+  const fetcher = options.fetcher ?? ((url, init) => fetch(url, { ...init, signal: init.signal }));
+  const control = controlUrl.replace(/\/+$/, "");
+  let issuer;
+  let gateway;
+  const discovery = await check(fetcher, `${control}/.well-known/augenta.json`, timeoutMs, (response, body) => {
+    const document = body;
+    if (!response.ok || typeof document?.issuer !== "string")
+      return false;
+    issuer = document.issuer;
+    gateway = typeof document.gateway === "string" ? document.gateway : undefined;
+    return true;
+  });
+  if (!discovery.ok && control === PRODUCTION.control) {
+    issuer = PRODUCTION.issuer;
+    gateway = PRODUCTION.gateway;
+  }
+  const rest = await Promise.all([
+    issuer ? check(fetcher, `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`, timeoutMs, (response, body) => response.ok && typeof body?.issuer === "string") : undefined,
+    gateway ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) => response.status === 401 && typeof body?.error === "string") : undefined
+  ]);
+  return [discovery, ...rest.filter((item) => Boolean(item))];
+}
+
 // runtime/node.ts
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { accessSync, constants, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 async function readStdin() {
@@ -1154,6 +1237,44 @@ function canonical(path) {
   } catch {
     return absolute;
   }
+}
+var CA_BUNDLES = ["/usr/local/share/ca-certificates/mitm-proxy-ca.crt", "/etc/ssl/certs/ca-certificates.crt"];
+function nodeHonorsEnvProxy(version) {
+  const [major = 0, minor = 0] = version.split(".").map(Number);
+  return major >= 24 || major === 22 && minor >= 21;
+}
+function readable(path) {
+  try {
+    accessSync(path, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function envProxyReexecEnv(env, nodeVersion, runningUnderBun, isReadable = readable) {
+  const proxied = Boolean(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy);
+  if (!proxied || env.NODE_USE_ENV_PROXY || env.AUGENTA_PROXY_REEXEC || runningUnderBun || !nodeHonorsEnvProxy(nodeVersion))
+    return;
+  const ca = env.NODE_EXTRA_CA_CERTS ? undefined : CA_BUNDLES.find(isReadable);
+  return {
+    ...env,
+    NODE_USE_ENV_PROXY: "1",
+    AUGENTA_PROXY_REEXEC: "1",
+    NODE_NO_WARNINGS: env.NODE_NO_WARNINGS ?? "1",
+    ...ca ? { NODE_EXTRA_CA_CERTS: ca } : {}
+  };
+}
+function reexecForEnvProxy() {
+  const next = envProxyReexecEnv(process.env, process.versions.node, Boolean(process.versions.bun));
+  if (!next)
+    return;
+  const result = spawnSync(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
+    stdio: "inherit",
+    env: next
+  });
+  if (result.error)
+    return;
+  process.exit(result.status ?? 1);
 }
 function openBrowser(command) {
   const opener = command[0];
@@ -1283,10 +1404,15 @@ async function refreshTokens(profile) {
 }
 async function augentaOAuthConfig(controlUrl) {
   const response = await fetch(`${controlUrl.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const host = new URL(controlUrl).host;
   if (!response.ok) {
-    throw new Error("Augenta sign-in is not configured for this environment");
+    if (response.status === 404)
+      throw new Error("Augenta sign-in is not configured for this environment");
+    throw new DiscoveryError(response.status, `${host} answered ${response.status} instead of Augenta's sign-in discovery; a proxy or network allowlist may be answering for it`);
   }
-  const value = await response.json();
+  const value = await response.json().catch(() => {
+    throw new DiscoveryError(response.status, `${host} did not answer with Augenta's sign-in discovery; a proxy or captive page may be answering for it`);
+  });
   if (!value.issuer || !value.clientId || !value.gateway) {
     throw new Error("Augenta returned incomplete sign-in configuration");
   }

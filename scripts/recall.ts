@@ -37,7 +37,7 @@
  * prompt hook asks too and an entrypoint may not import another entrypoint.
  * This file is the command: its flags, its question, its ceilings, its output.
  */
-import { isMain } from "../runtime/node";
+import { isMain, reexecForEnvProxy } from "../runtime/node";
 import { describeError } from "../capture/platform";
 import { resolveProject, type ResolvedProject } from "../capture/project";
 import { askWorkspaces, type RecallPayload } from "../capture/recall-client";
@@ -235,6 +235,8 @@ function printPayload(payload: RecallPayload): void {
 }
 
 if (isMain(import.meta.url)) {
+  // Before anything else: in a proxied sandbox, re-run with Node told to use it.
+  reexecForEnvProxy();
   const argv = process.argv.slice(2);
   // Read straight off argv: parseArgs itself can throw, and a caller that asked
   // for JSON must get JSON back even for a bad flag.

@@ -99,6 +99,18 @@ default, whether automatic recall is on or off.
   destinations, capture baseline, cursors or history.
 - Capture health reports missing versus invalid configuration and labels its
   activity as project-wide. Local activity alone does not verify host dispatch.
+- **Connect names a network that blocks Augenta.** Behind an allowlisting proxy,
+  connect used to fail with "cannot reach Augenta: Request was cancelled."
+  before asking anything. Now it checks `augenta.ai`, `auth.augenta.ai` and
+  `api.augenta.ai` and reports which ones this network blocks and why, so you
+  know what to allow; README lists where each environment allows them. Every
+  error message also names a proxy's refusal, a cut connection or a timeout,
+  instead of Node's generic wording.
+- **Proxies the environment names are used.** Where `HTTPS_PROXY` or
+  `HTTP_PROXY` is set, as in cloud sessions and Cowork's VM, connect, recall and
+  the hooks now send through that proxy rather than around it, and trust the
+  sandbox's proxy certificate unless `NODE_EXTRA_CA_CERTS` is already set. This
+  needs Node.js 22.21 or newer; older versions ignore the proxy as before.
 - Cloud layouts: a Claude Code transcript under `/root/.claude/projects/` is no
   longer mistaken for Codex when `CODEX_HOME` is the home directory itself. Codex
   project memory is found under a non-default Codex home such as `/opt/codex`
