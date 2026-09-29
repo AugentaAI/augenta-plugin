@@ -135,28 +135,35 @@ export function reexecForEnvProxy(): void {
 }
 
 /**
+ * The program that opens a URL on each platform: fixed here, never taken from
+ * input, and never a shell. Windows once went through `cmd /c start "" <url>`,
+ * which re-parses the URL as a command line, so an `&` in a query string would
+ * start a second command; `url.dll`'s handler takes the URL as data.
+ */
+export function urlOpener(platform: NodeJS.Platform = process.platform): [file: string, ...args: string[]] {
+  if (platform === "darwin") return ["open"];
+  if (platform === "win32") return ["rundll32", "url.dll,FileProtocolHandler"];
+  return ["xdg-open"];
+}
+
+/**
  * Best-effort browser launch for the interactive connect command.
  *
- * Every argument is passed as an argv array with no shell, so nothing here is
- * interpreted by a shell. The remaining exposure is the URL itself: it arrives
- * from login discovery, and handing an arbitrary string to `open`/`xdg-open`
- * would let a non-https scheme (`file:`, or a registered app handler) reach the
- * platform opener. Discovery is only as trustworthy as AUGENTA_CONTROL_URL, so
- * the scheme is checked here rather than assumed.
+ * The program is a constant ({@link urlOpener}) and the URL is its last argv
+ * entry, with no shell, so nothing here is interpreted as a command. The
+ * remaining exposure is the URL itself: it arrives from login discovery, and
+ * handing an arbitrary string to the platform opener would let a non-https
+ * scheme (`file:`, or a registered app handler) reach it. Discovery is only as
+ * trustworthy as AUGENTA_CONTROL_URL, so the scheme is checked here rather than
+ * assumed; an https URL cannot begin with `-`, so it is never read as an option.
  *
  * Refusing costs nothing: the caller always prints the URL and user code, so a
  * skipped or failed open just means the user clicks the link themselves.
- *
- * (The previous Bun.spawnSync form passed the same URL to the same openers —
- * CodeQL simply could not model Bun's API. Moving to node's spawnSync made an
- * existing path analyzable rather than introducing a new one.)
  */
-export function openBrowser(command: string[]): void {
-  const opener = command[0];
-  if (!opener) return;
-  const url = command[command.length - 1];
-  if (!url || !isHttpsUrl(url)) return;
-  spawnSync(opener, command.slice(1), { stdio: "ignore" });
+export function openBrowser(url: string): void {
+  if (!isHttpsUrl(url)) return;
+  const [file, ...args] = urlOpener();
+  spawnSync(file, [...args, url], { stdio: "ignore" });
 }
 
 function isHttpsUrl(value: string): boolean {

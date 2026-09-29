@@ -88,6 +88,9 @@ default, whether automatic recall is on or off.
 
 ### Fixed
 
+- On Windows, connect opens the sign-in link through the system's URL handler
+  rather than `cmd /c start`, which re-read the link as a command line: an `&`
+  in a crafted link could have started a second command.
 - A config that becomes unreadable again after an earlier reconnect prompt is
   raised again, once per unreadable file, rather than turning capture off in
   silence. Projects whose config was already unreadable see the prompt once more.

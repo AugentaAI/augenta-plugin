@@ -71,11 +71,11 @@ import * as nodeRuntime from "../runtime/node";
 // Measured, not assumed: this mock is scoped to this file. A sibling test importing
 // `runtime/node` in the same `bun test` run still gets the real `openBrowser`, so
 // nothing here weakens another file's coverage.
-const browserLaunches: string[][] = [];
+const browserLaunches: string[] = [];
 mock.module("../runtime/node", () => ({
   ...nodeRuntime,
-  openBrowser: (command: string[]) => {
-    browserLaunches.push(command);
+  openBrowser: (url: string) => {
+    browserLaunches.push(url);
   },
 }));
 
@@ -1648,13 +1648,8 @@ describe("JSON verbs", () => {
 
     await startLogin(baseArgs);
 
-    expect(browserLaunches).toHaveLength(1);
-    // The URL is the last argument whichever opener the platform picked
-    // (`open` on darwin, `xdg-open` elsewhere), so assert that rather than an
-    // argv shape that differs by OS.
-    const launch = browserLaunches[0] ?? [];
-    expect(launch.length).toBeGreaterThan(1);
-    expect(launch.at(-1)).toBe(`${ISSUER}/device?user_code=OPEN-CODE`);
+    // Only the URL crosses: the opener program is fixed per platform (urlOpener).
+    expect(browserLaunches).toEqual([`${ISSUER}/device?user_code=OPEN-CODE`]);
   });
 
   test("await-login reports pending while the link is still good", async () => {

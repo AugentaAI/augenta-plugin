@@ -240,14 +240,18 @@ function reexecForEnvProxy() {
     return;
   process.exit(result.status ?? 1);
 }
-function openBrowser(command) {
-  const opener = command[0];
-  if (!opener)
+function urlOpener(platform = process.platform) {
+  if (platform === "darwin")
+    return ["open"];
+  if (platform === "win32")
+    return ["rundll32", "url.dll,FileProtocolHandler"];
+  return ["xdg-open"];
+}
+function openBrowser(url) {
+  if (!isHttpsUrl(url))
     return;
-  const url = command[command.length - 1];
-  if (!url || !isHttpsUrl(url))
-    return;
-  spawnSync(opener, command.slice(1), { stdio: "ignore" });
+  const [file, ...args] = urlOpener();
+  spawnSync(file, [...args, url], { stdio: "ignore" });
 }
 function isHttpsUrl(value) {
   try {
@@ -386,13 +390,6 @@ async function augentaOAuthConfig(controlUrl) {
     gateway: value.gateway.replace(/\/+$/, "")
   };
 }
-function browserCommand(url) {
-  if (process.platform === "darwin")
-    return ["open", url];
-  if (process.platform === "win32")
-    return ["cmd", "/c", "start", "", url];
-  return ["xdg-open", url];
-}
 var pendingLoginPath = () => join2(authRoot(), "pending-login.json");
 function savePendingLogin(pending) {
   ensureAuthRoot();
@@ -443,7 +440,7 @@ async function beginDeviceLogin(config, opts = {}) {
   };
   if (opts.openBrowser !== false) {
     try {
-      openBrowser(browserCommand(pending.verificationUri));
+      openBrowser(pending.verificationUri);
     } catch {}
   }
   return pending;

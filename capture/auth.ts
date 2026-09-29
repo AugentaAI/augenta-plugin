@@ -232,15 +232,6 @@ export async function augentaOAuthConfig(
   };
 }
 
-/** Per-platform "open this URL" command. Best effort — the caller always has the
- *  URL and code to show, so a wrong or missing opener costs nothing. `start`'s
- *  first quoted argument is the window title, hence the empty one. */
-export function browserCommand(url: string): string[] {
-  if (process.platform === "darwin") return ["open", url];
-  if (process.platform === "win32") return ["cmd", "/c", "start", "", url];
-  return ["xdg-open", url];
-}
-
 /**
  * An authorization in flight. Persisted between the two halves of the device
  * grant so an agent-driven connect can hand the user a link in one bounded call
@@ -343,7 +334,7 @@ export async function beginDeviceLogin(
   };
   if (opts.openBrowser !== false) {
     try {
-      openBrowser(browserCommand(pending.verificationUri));
+      openBrowser(pending.verificationUri);
     } catch {
       // The URL and code remain usable on headless systems.
     }

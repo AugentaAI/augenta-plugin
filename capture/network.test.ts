@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { classifyNetworkError, diagnoseHosts, DiscoveryError } from "./network";
-import { envProxyReexecEnv, nodeHonorsEnvProxy } from "../runtime/node";
+import { envProxyReexecEnv, nodeHonorsEnvProxy, urlOpener } from "../runtime/node";
 
 /** Exactly what Node 22.21 and 25.2 threw for a CONNECT an allowlisting proxy
  *  refused (measured through a local proxy, not assumed). */
@@ -138,5 +138,22 @@ describe("the CLI re-run for a proxied sandbox", () => {
       .toEqual({ AUGENTA_PROXY_REEXEC: "1", NODE_EXTRA_CA_CERTS: "/usr/local/share/ca-certificates/mitm-proxy-ca.crt" });
     // Without a proxy in use, the system bundle alone is no reason to re-run.
     expect(envProxyReexecEnv({}, "24.0.0", false, (path) => path.includes("ca-certificates.crt"))).toBeUndefined();
+  });
+});
+
+describe("the browser opener", () => {
+  test("is a fixed program on every platform, and never a shell", () => {
+    // The sign-in URL comes from the network. It may only ever be the opener's
+    // last argument; `cmd /c start` re-parsed it as a command line on Windows,
+    // where an `&` in the query string starts a second command.
+    const shells = new Set(["cmd", "cmd.exe", "sh", "bash", "powershell", "pwsh"]);
+    for (const platform of ["darwin", "win32", "linux", "freebsd"] as const) {
+      const [file, ...args] = urlOpener(platform);
+      expect(shells.has(file.toLowerCase())).toBe(false);
+      expect(args.some((arg) => arg.includes("://"))).toBe(false);
+    }
+    expect(urlOpener("darwin")).toEqual(["open"]);
+    expect(urlOpener("win32")).toEqual(["rundll32", "url.dll,FileProtocolHandler"]);
+    expect(urlOpener("linux")).toEqual(["xdg-open"]);
   });
 });
