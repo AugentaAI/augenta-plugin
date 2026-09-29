@@ -524,6 +524,9 @@ describe("platform-key connection", () => {
 
     const { path } = await connectWithApiKey(project, "sk-aug-new.secret", "https://gw.example.com/");
     expect(JSON.parse(readFileSync(path, "utf8")).autoRecall).toBe(true);
+    // An explicit answer on the command line wins over the carried one.
+    await connectWithApiKey(project, "sk-aug-new.secret", "https://gw.example.com/", false);
+    expect(JSON.parse(readFileSync(path, "utf8")).autoRecall).toBe(false);
   });
 
   /* --verify-only. The file path is the documented way to configure an autonomous
@@ -2138,6 +2141,38 @@ describe("JSON verbs", () => {
     expect(cursor.links["connector_ws-scratch"]).toBeGreaterThan(0);
   });
 
+  test("another person reconnecting here never sees the first person's Connectors, and hears what stays unsent", async () => {
+    await signIn();
+    route();
+    await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] });
+    new Outbox(project).append([{ src: "claude-code", sid: "s", proj: project, ts: new Date().toISOString(), seq: 0, kind: "msg", role: "user", text: "the first person's" }]);
+    await signIn("user_2"); // a plain member: the first person's link reads as not found
+    requests = [];
+    const payload = await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] });
+    expect(payload).toMatchObject({ status: "connected", destinations: [{ connectorId: "connector_new_user_2" }] });
+    expect(payload).not.toHaveProperty("unresolvedConnectorIds");
+    expect(JSON.stringify(payload)).not.toContain('"connector_new"');
+    expect(payload.unsentFromAnotherSignIn).toBeGreaterThan(0);
+    expect(requests).not.toContain(`GET ${GATEWAY}/v1/connectors/connector_new`);
+  });
+
+  test("an undetected harness does not relabel, or PATCH, a link that has one", async () => {
+    const keys = ["CODEX_THREAD_ID", "CODEX_SANDBOX", "CODEX_HOME", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "CLAUDECODE"];
+    const saved = keys.map((key) => process.env[key]);
+    try {
+      for (const key of keys) delete process.env[key];
+      await signIn();
+      route();
+      await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, harness: "codex", workspaces: ["ws-default"] });
+      requests = [];
+      expect(await runJsonVerb({ projectRoot: project }, { json: true, adopt: true })).toMatchObject({ status: "adopted" });
+      expect(requests.some((request) => request.startsWith("PATCH "))).toBe(false);
+      expect(links.get("connector_new")!.harness).toBe("codex");
+    } finally {
+      keys.forEach((key, index) => { if (saved[index] === undefined) delete process.env[key]; else process.env[key] = saved[index]; });
+    }
+  });
+
   test("another person joining on this machine starts at the end of the spool", async () => {
     await signIn();
     route();
@@ -2145,7 +2180,11 @@ describe("JSON verbs", () => {
     new Outbox(project).append([{ src: "claude-code", sid: "s", proj: project, ts: new Date().toISOString(), seq: 0, kind: "msg", role: "user", text: "the first person's" }]);
     await signIn("user_2"); // same organization, same profile id, another person
     expect(captureEnabled(loadProjectConfig(project))).toBe(false);
-    expect(await runJsonVerb({ projectRoot: project }, { json: true, adopt: true })).toMatchObject({ status: "adopted" });
+    const joined = await runJsonVerb({ projectRoot: project }, { json: true, adopt: true });
+    // Reported, not silent: those records could go only through the first person's links.
+    expect(joined.status).toBe("adopted");
+    expect(typeof joined.unsentFromAnotherSignIn).toBe("number");
+    expect(joined.unsentFromAnotherSignIn as number).toBeGreaterThan(0);
     const cursor = JSON.parse(readFileSync(new Outbox(project).cursorPath, "utf8")) as { links: Record<string, number> };
     // Their link never carries the first person's records.
     expect(Object.keys(cursor.links)).toEqual(["connector_new_user_2"]);

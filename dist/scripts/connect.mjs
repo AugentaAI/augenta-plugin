@@ -1766,9 +1766,20 @@ function legacyConnectorIds(projectRoot) {
     return [];
   }
 }
-function priorCandidateIds(projectRoot) {
-  const local = readLinks(projectRoot)?.links.map((link) => link.connectorId) ?? [];
+function priorCandidateIds(projectRoot, signedIn) {
+  const links = readLinks(projectRoot);
+  const local = links && links.userId === signedIn.userId ? links.links.map((link) => link.connectorId) : [];
   return [...new Set([...local, ...legacyConnectorIds(projectRoot)])];
+}
+function unsentFromAnotherSignIn(projectRoot, userId) {
+  const previous = readLinks(projectRoot);
+  if (!previous || previous.userId === userId)
+    return 0;
+  try {
+    return new Outbox(projectRoot).pendingByteCount();
+  } catch {
+    return 0;
+  }
 }
 async function priorLinks(profileId, gateway, ids, userId) {
   const links = [];
@@ -1826,7 +1837,7 @@ async function linkForWorkspace(projectRoot, args, profileId, gateway, workspace
   const existing = adoptable.find((link) => link.kind === "agent" && link.status === "active" && link.workspaceId === workspace.id && link.ownerUserId === owner.userId);
   if (existing) {
     const metadata = { ...existing.metadata ?? {}, ...fields.metadata };
-    if (existing.name === fields.name && existing.projectName === fields.projectName && existing.harness === fields.harness && existing.client === fields.client && existing.description === fields.description && sameMetadata(existing.metadata, metadata)) {
+    if (existing.name === fields.name && existing.projectName === fields.projectName && (fields.harness === undefined || existing.harness === fields.harness) && existing.client === fields.client && existing.description === fields.description && sameMetadata(existing.metadata, metadata)) {
       return { connector: existing, action: "adopted" };
     }
     const { kind: _kind, workspaceId: _workspaceId, ...mutableFields } = fields;
@@ -1893,6 +1904,7 @@ async function establishConnectors(projectRoot, args, profileId, gateway, connec
   if (verifiedIds.length === 0)
     return { results, removed, unresolvedConnectorIds };
   const previous = loadProjectConfig(projectRoot);
+  const unsent = unsentFromAnotherSignIn(projectRoot, connection.owner.userId);
   const configPath2 = writeOAuthConfig(projectRoot, {
     profileId,
     userId: connection.owner.userId,
@@ -1909,7 +1921,7 @@ async function establishConnectors(projectRoot, args, profileId, gateway, connec
     const freshKeys = results.filter((result) => result.connectorId && (result.action === "created" || !priorConnectorIds.includes(result.connectorId))).map((result) => result.connectorId);
     new Outbox(projectRoot).registerDestinations(verifiedIds, { freshKeys });
   } catch {}
-  return { results, removed, unresolvedConnectorIds, configPath: configPath2 };
+  return { results, removed, unresolvedConnectorIds, configPath: configPath2, ...unsent > 0 ? { unsentFromAnotherSignIn: unsent } : {} };
 }
 async function linkWorkspaces(projectRoot, args, profileId, gateway, owner, workspaces, candidates) {
   const results = [];
@@ -1944,7 +1956,7 @@ async function connectProject(projectRoot, args) {
   const prior = priorConnection(projectRoot);
   const selected = await selectOrCreateProfile(oauth, prior?.profileId);
   console.log(`Signed in as ${selected.me.user.name || selected.me.user.email} to ${selected.me.org.name} (${selected.me.org.id}).`);
-  const priorIds = priorCandidateIds(projectRoot);
+  const priorIds = priorCandidateIds(projectRoot, { userId: selected.me.user.id });
   const owner = { userId: selected.me.user.id, projectKey: prior?.projectKey ?? randomUUID4() };
   const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds, owner.userId);
   const available = await listWorkspaces(selected.profileId, gateway);
@@ -1957,6 +1969,9 @@ async function connectProject(projectRoot, args) {
   if (prior?.controlUrl && prior.controlUrl !== control) {
     console.log(`This project is moving from ${environmentLabel(prior.controlUrl)} to ${environment}.`);
   }
+  if (prior && isTrackedByGit(projectRoot, ".augenta/config.json")) {
+    console.log("Git tracks this project's .augenta/config.json, so the set you choose changes the Workspaces for everyone who pulls it.");
+  }
   const workspaces = await selectedWorkspaces(selected.profileId, gateway, selected.me.org.name, [
     ...(prior?.workspaces ?? []).map((workspace) => workspace.workspaceId),
     ...resolvedPrior.links.map((link) => link.workspaceId)
@@ -1965,7 +1980,7 @@ async function connectProject(projectRoot, args) {
     throw new Error("choose at least one Workspace");
   }
   const autoRecall = args.autoRecall ?? await askAutoRecall(loadProjectConfig(projectRoot)?.autoRecall);
-  const { results, removed, unresolvedConnectorIds, configPath: written } = await establishConnectors(projectRoot, { ...args, autoRecall }, selected.profileId, gateway, {
+  const { results, removed, unresolvedConnectorIds, configPath: written, unsentFromAnotherSignIn: unsent } = await establishConnectors(projectRoot, { ...args, autoRecall }, selected.profileId, gateway, {
     controlUrl: control,
     org: selected.me.org,
     discoveredGateway,
@@ -1993,6 +2008,9 @@ async function connectProject(projectRoot, args) {
     }
     if (unresolvedConnectorIds.length > 0) {
       console.log(`Dropped ${unresolvedConnectorIds.join(", ")}: this project listed ${unresolvedConnectorIds.length === 1 ? "that Connector" : "those Connectors"} but ${unresolvedConnectorIds.length === 1 ? "it is" : "they are"} no longer readable with this sign-in.`);
+    }
+    if (unsent) {
+      console.log(`${unsent} bytes of records captured here under another person's sign-in were not sent and will not be: they could go only through that person's own Connectors.`);
     }
   }
 }
@@ -2062,7 +2080,6 @@ async function probeConnection(resolved, args) {
   const change = environmentChange(cfg, args);
   const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
-  const priorIds = priorCandidateIds(resolved.projectRoot);
   const alreadyConnected = {
     alreadyConnected: Boolean(cfg),
     ...current ? { current } : {},
@@ -2087,7 +2104,7 @@ async function probeConnection(resolved, args) {
   return {
     ...step,
     ...alreadyConnected,
-    ...await priorDestinations(usable[0].profileId, gateway, usable[0].me.user.id, prior, priorIds, step.workspaces)
+    ...await priorDestinations(usable[0].profileId, gateway, usable[0].me.user.id, prior, priorCandidateIds(resolved.projectRoot, { userId: usable[0].me.user.id }), step.workspaces)
   };
 }
 async function startLogin(args) {
@@ -2241,14 +2258,14 @@ async function connectToWorkspaces(resolved, args) {
     };
   }
   const workspaces = available.filter((item) => requested.includes(item.id));
-  const { results, removed, unresolvedConnectorIds, configPath: configPath2 } = await establishConnectors(resolved.projectRoot, args, picked.profileId, gateway, {
+  const { results, removed, unresolvedConnectorIds, configPath: configPath2, unsentFromAnotherSignIn: unsent } = await establishConnectors(resolved.projectRoot, args, picked.profileId, gateway, {
     controlUrl: control,
     org: picked.me.org,
     discoveredGateway,
     owner: { userId: picked.me.user.id, projectKey: prior?.projectKey ?? randomUUID4() },
     knownProject: Boolean(prior?.projectKey),
     recorded: prior?.workspaces
-  }, workspaces, priorCandidateIds(resolved.projectRoot), available);
+  }, workspaces, priorCandidateIds(resolved.projectRoot, { userId: picked.me.user.id }), available);
   const destinations = results.filter((result) => result.connectorId);
   const failed = results.filter((result) => !result.connectorId);
   if (destinations.length === 0) {
@@ -2272,6 +2289,7 @@ async function connectToWorkspaces(resolved, args) {
     } : {},
     ...removed.length > 0 ? { removed } : {},
     ...unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {},
+    ...unsent ? { unsentFromAnotherSignIn: unsent } : {},
     organization: picked.me.org.name,
     ...environmentChange(prior, args),
     autoRecall: loadProjectConfig(resolved.projectRoot)?.autoRecall ? "on" : "off",
@@ -2430,7 +2448,7 @@ async function adoptProject(resolved, args) {
     };
   }
   const previous = readLinks(resolved.projectRoot)?.links.map((link) => link.connectorId) ?? [];
-  const prior = await priorLinks(picked.profileId, gateway, previous, owner.userId);
+  const prior = await priorLinks(picked.profileId, gateway, priorCandidateIds(resolved.projectRoot, { userId: owner.userId }), owner.userId);
   const candidates = await adoptionCandidates(picked.profileId, gateway, owner, workspaces, prior.links, true);
   const unchecked = workspaces.filter((workspace) => candidates.get(workspace.id) instanceof Error);
   if (unchecked.length > 0) {
@@ -2463,6 +2481,7 @@ async function adoptProject(resolved, args) {
     workspaceName,
     action
   }));
+  const unsent = unsentFromAnotherSignIn(resolved.projectRoot, owner.userId);
   writeLinks(resolved.projectRoot, {
     profileId: picked.profileId,
     userId: owner.userId,
@@ -2477,6 +2496,7 @@ async function adoptProject(resolved, args) {
   return {
     status: "adopted",
     destinations,
+    ...unsent > 0 ? { unsentFromAnotherSignIn: unsent } : {},
     organization,
     autoRecall: autoRecallSetting(cfg),
     captureHealth: captureHealth(resolved.projectRoot)
@@ -2630,7 +2650,7 @@ async function verifyProjectKey(projectRoot, endpointOverride) {
   const gateway = gatewayBase(cfg, endpointOverride);
   return { connector: await verifyApiKeyConnection(apiKey, gateway), gateway };
 }
-async function connectWithApiKey(projectRoot, apiKey, endpoint2) {
+async function connectWithApiKey(projectRoot, apiKey, endpoint2, autoRecall) {
   const prior = loadProjectConfig(projectRoot);
   const gateway = gatewayBase(prior, endpoint2);
   const connector = await verifyApiKeyConnection(apiKey, gateway);
@@ -2638,7 +2658,7 @@ async function connectWithApiKey(projectRoot, apiKey, endpoint2) {
     path: writeApiKeyConfig(projectRoot, apiKey, gateway === DEFAULT_GATEWAY ? undefined : gateway, {
       org: { id: connector.orgId },
       destinations: [{ connectorId: connector.id, workspaceId: connector.workspaceId }],
-      autoRecall: prior?.autoRecall ?? false,
+      autoRecall: autoRecall ?? prior?.autoRecall ?? false,
       ...prior?.controlUrl ? { controlUrl: prior.controlUrl } : {},
       ...prior?.ingestUrl ? { ingestUrl: prior.ingestUrl } : {}
     }),
@@ -2674,7 +2694,7 @@ if (isMain(import.meta.url)) {
       console.log(`The platform key in .augenta/config.json is accepted by ${gateway} and resolves to Connector ${connector.id} (${connector.status}, ${connector.direction}). Nothing was written.`);
     } else if (args.apiKey?.trim()) {
       const existed = existsSync7(join9(projectRoot, ".augenta", "config.json"));
-      const { path, connector } = await connectWithApiKey(projectRoot, args.apiKey.trim(), args.endpoint);
+      const { path, connector } = await connectWithApiKey(projectRoot, args.apiKey.trim(), args.endpoint, args.autoRecall);
       console.log(`${existed ? "Updated" : "Wrote"} ${path} (0600). Platform-key capture is enabled through Connector ${connector.id}.`);
       console.log("Off switch: delete .augenta/config.json, or set AUGENTA_CAPTURE_ENABLED=0.");
     } else if (!input.isTTY) {

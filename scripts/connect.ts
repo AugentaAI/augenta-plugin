@@ -696,10 +696,36 @@ function legacyConnectorIds(projectRoot: string): string[] {
   }
 }
 
-/** This checkout's own prior links first, then a pre-release config's. */
-function priorCandidateIds(projectRoot: string): string[] {
-  const local = readLinks(projectRoot)?.links.map((link) => link.connectorId) ?? [];
+/**
+ * This checkout's prior links first, then a pre-release config's. Local links
+ * count only when the person signed in now made them: after someone else signed
+ * in on this machine they are that person's, and even resolving them would name
+ * their Connectors in this person's output.
+ */
+function priorCandidateIds(projectRoot: string, signedIn: { userId: string }): string[] {
+  const links = readLinks(projectRoot);
+  // The person, not the profile: someone who moved this project to another
+  // organization or environment still owns their old links, and still hears
+  // which of them no longer resolve.
+  const local = links && links.userId === signedIn.userId
+    ? links.links.map((link) => link.connectorId)
+    : [];
   return [...new Set([...local, ...legacyConnectorIds(projectRoot)])];
+}
+
+/**
+ * Bytes queued here under another person's links, which joining as this person
+ * leaves unsent for good: they could go only through that person's links, under
+ * their sign-in, and never through this person's. Reported, not silent.
+ */
+function unsentFromAnotherSignIn(projectRoot: string, userId: string): number {
+  const previous = readLinks(projectRoot);
+  if (!previous || previous.userId === userId) return 0;
+  try {
+    return new Outbox(projectRoot).pendingByteCount();
+  } catch {
+    return 0;
+  }
 }
 
 /**
@@ -858,7 +884,8 @@ async function linkForWorkspace(
     if (
       existing.name === fields.name &&
       existing.projectName === fields.projectName &&
-      existing.harness === fields.harness &&
+      // An undetected harness sends nothing, so it matches whatever label is there.
+      (fields.harness === undefined || existing.harness === fields.harness) &&
       existing.client === fields.client &&
       existing.description === fields.description &&
       sameMetadata(existing.metadata, metadata)
@@ -1006,6 +1033,8 @@ async function establishConnectors(
    *  the config, so they must be reported rather than vanishing. */
   unresolvedConnectorIds: string[];
   configPath?: string;
+  /** Queued bytes another person's links here will now never send. */
+  unsentFromAnotherSignIn?: number;
 }> {
   const prior = preresolved ?? (await priorLinks(profileId, gateway, priorConnectorIds, connection.owner.userId));
   const adoptable = prior.links;
@@ -1058,6 +1087,7 @@ async function establishConnectors(
 
   if (verifiedIds.length === 0) return { results, removed, unresolvedConnectorIds };
   const previous = loadProjectConfig(projectRoot);
+  const unsent = unsentFromAnotherSignIn(projectRoot, connection.owner.userId);
   const configPath = writeOAuthConfig(projectRoot, {
     profileId,
     userId: connection.owner.userId,
@@ -1087,7 +1117,7 @@ async function establishConnectors(
   } catch {
     /* the shipper reconciles the set on its own; never fail a connect over this */
   }
-  return { results, removed, unresolvedConnectorIds, configPath };
+  return { results, removed, unresolvedConnectorIds, configPath, ...(unsent > 0 ? { unsentFromAnotherSignIn: unsent } : {}) };
 }
 
 /**
@@ -1156,7 +1186,7 @@ export async function connectProject(
   console.log(
     `Signed in as ${selected.me.user.name || selected.me.user.email} to ${selected.me.org.name} (${selected.me.org.id}).`,
   );
-  const priorIds = priorCandidateIds(projectRoot);
+  const priorIds = priorCandidateIds(projectRoot, { userId: selected.me.user.id });
   const owner: LinkOwner = { userId: selected.me.user.id, projectKey: prior?.projectKey ?? randomUUID() };
   const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds, owner.userId);
   const available = await listWorkspaces(selected.profileId, gateway);
@@ -1178,6 +1208,11 @@ export async function connectProject(
   if (prior?.controlUrl && prior.controlUrl !== control) {
     console.log(`This project is moving from ${environmentLabel(prior.controlUrl)} to ${environment}.`);
   }
+  if (prior && isTrackedByGit(projectRoot, ".augenta/config.json")) {
+    console.log(
+      "Git tracks this project's .augenta/config.json, so the set you choose changes the Workspaces for everyone who pulls it.",
+    );
+  }
 
   // Pre-selected: the Workspaces the project records, and any this person still
   // links into. The answer must still re-affirm them.
@@ -1196,7 +1231,7 @@ export async function connectProject(
   }
   const autoRecall = args.autoRecall ?? (await askAutoRecall(loadProjectConfig(projectRoot)?.autoRecall));
 
-  const { results, removed, unresolvedConnectorIds, configPath: written } =
+  const { results, removed, unresolvedConnectorIds, configPath: written, unsentFromAnotherSignIn: unsent } =
     await establishConnectors(
       projectRoot,
       { ...args, autoRecall },
@@ -1252,6 +1287,11 @@ export async function connectProject(
     if (unresolvedConnectorIds.length > 0) {
       console.log(
         `Dropped ${unresolvedConnectorIds.join(", ")}: this project listed ${unresolvedConnectorIds.length === 1 ? "that Connector" : "those Connectors"} but ${unresolvedConnectorIds.length === 1 ? "it is" : "they are"} no longer readable with this sign-in.`,
+      );
+    }
+    if (unsent) {
+      console.log(
+        `${unsent} bytes of records captured here under another person's sign-in were not sent and will not be: they could go only through that person's own Connectors.`,
       );
     }
   }
@@ -1383,7 +1423,6 @@ export async function probeConnection(
   const change = environmentChange(cfg, args);
   const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
-  const priorIds = priorCandidateIds(resolved.projectRoot);
   const alreadyConnected = {
     alreadyConnected: Boolean(cfg),
     ...(current ? { current } : {}),
@@ -1412,7 +1451,7 @@ export async function probeConnection(
       gateway,
       usable[0]!.me.user.id,
       prior,
-      priorIds,
+      priorCandidateIds(resolved.projectRoot, { userId: usable[0]!.me.user.id }),
       step.workspaces as Workspace[],
     )),
   };
@@ -1637,7 +1676,7 @@ export async function connectToWorkspaces(
   // Iterate in LIVE-LIST order rather than flag order, so the config is
   // byte-deterministic however the caller happened to order its arguments.
   const workspaces = available.filter((item) => requested.includes(item.id));
-  const { results, removed, unresolvedConnectorIds, configPath } = await establishConnectors(
+  const { results, removed, unresolvedConnectorIds, configPath, unsentFromAnotherSignIn: unsent } = await establishConnectors(
     resolved.projectRoot,
     args,
     picked.profileId,
@@ -1651,7 +1690,7 @@ export async function connectToWorkspaces(
       recorded: prior?.workspaces,
     },
     workspaces,
-    priorCandidateIds(resolved.projectRoot),
+    priorCandidateIds(resolved.projectRoot, { userId: picked.me.user.id }),
     available,
   );
   const destinations = results.filter((result) => result.connectorId);
@@ -1689,6 +1728,7 @@ export async function connectToWorkspaces(
     // caller can say they are gone instead of them vanishing from the config
     // unmentioned.
     ...(unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {}),
+    ...(unsent ? { unsentFromAnotherSignIn: unsent } : {}),
     organization: picked.me.org.name,
     ...environmentChange(prior, args),
     autoRecall: loadProjectConfig(resolved.projectRoot)?.autoRecall ? "on" : "off",
@@ -1888,7 +1928,12 @@ async function adoptProject(resolved: ResolvedProject, args: Args): Promise<Json
     };
   }
   const previous = readLinks(resolved.projectRoot)?.links.map((link) => link.connectorId) ?? [];
-  const prior = await priorLinks(picked.profileId, gateway, previous, owner.userId);
+  const prior = await priorLinks(
+    picked.profileId,
+    gateway,
+    priorCandidateIds(resolved.projectRoot, { userId: owner.userId }),
+    owner.userId,
+  );
   const candidates = await adoptionCandidates(picked.profileId, gateway, owner, workspaces, prior.links, true);
   const unchecked = workspaces.filter((workspace) => candidates.get(workspace.id) instanceof Error);
   if (unchecked.length > 0) {
@@ -1921,6 +1966,7 @@ async function adoptProject(resolved: ResolvedProject, args: Args): Promise<Json
     workspaceName,
     action: action!,
   }));
+  const unsent = unsentFromAnotherSignIn(resolved.projectRoot, owner.userId);
   writeLinks(resolved.projectRoot, {
     profileId: picked.profileId,
     userId: owner.userId,
@@ -1940,6 +1986,7 @@ async function adoptProject(resolved: ResolvedProject, args: Args): Promise<Json
   return {
     status: "adopted",
     destinations,
+    ...(unsent > 0 ? { unsentFromAnotherSignIn: unsent } : {}),
     organization,
     autoRecall: autoRecallSetting(cfg),
     captureHealth: captureHealth(resolved.projectRoot),
@@ -2201,6 +2248,8 @@ export async function connectWithApiKey(
   projectRoot: string,
   apiKey: string,
   endpoint?: string,
+  /** An explicit `--auto-recall` answer; otherwise the prior one carries forward. */
+  autoRecall?: boolean,
 ): Promise<{ path: string; connector: Connector }> {
   const prior = loadProjectConfig(projectRoot);
   const gateway = gatewayBase(prior, endpoint);
@@ -2213,9 +2262,10 @@ export async function connectWithApiKey(
       {
         org: { id: connector.orgId },
         destinations: [{ connectorId: connector.id, workspaceId: connector.workspaceId }],
-        // A key rotation must not revert an explicit `--auto-recall off`; the
-        // whole-file write would otherwise drop the answer and turn it back on.
-        autoRecall: prior?.autoRecall ?? false,
+        // An explicit flag wins. Otherwise a key rotation must not revert an
+        // earlier `--auto-recall off`; the whole-file write would otherwise drop
+        // the answer and turn it back on.
+        autoRecall: autoRecall ?? prior?.autoRecall ?? false,
         ...(prior?.controlUrl ? { controlUrl: prior.controlUrl } : {}),
         ...(prior?.ingestUrl ? { ingestUrl: prior.ingestUrl } : {}),
       },
@@ -2282,6 +2332,7 @@ if (isMain(import.meta.url)) {
         projectRoot,
         args.apiKey.trim(),
         args.endpoint,
+        args.autoRecall,
       );
       console.log(
         `${existed ? "Updated" : "Wrote"} ${path} (0600). Platform-key capture is enabled through Connector ${connector.id}.`,

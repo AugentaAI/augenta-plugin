@@ -342,6 +342,11 @@ the config.
 If `unresolvedConnectorIds` is present, say that this project listed those
 Connectors but they are no longer readable, so they have been dropped.
 
+If `unsentFromAnotherSignIn` is present (on `connected`, `partially_connected` or
+`adopted`), say that records captured in this checkout under another person's
+sign-in were not sent and will not be: they could go only through that person's
+own Connectors, never through this user's.
+
 On `partially_connected`, report the truth in that order: which destinations
 **are** live now (capture to them is on) — including the full-record and
 secret-scrubbing points above, which apply to them exactly as on `connected` —
@@ -370,7 +375,9 @@ node "$CONNECT" --harness <harness> --json --auto-recall <on|off>
 If `--probe` reported `configTracked: true`, say first that git tracks the config,
 so the change applies to everyone who pulls it once it is committed. On
 `auto_recall_updated`, confirm the new `autoRecall` value. On `not_connected`,
-the project has no readable connection: run the connect flow instead. Setting
+the project has no readable connection: run the connect flow instead. On
+`not_joined`, this checkout has not joined the project's connection: offer to
+join it first (step 1), then change the setting. Setting
 `AUGENTA_AUTO_RECALL=0` in the environment that starts the coding app turns it off
 for every project. `/augenta:recall` keeps working whatever this setting is.
 

@@ -61,12 +61,14 @@ default, whether automatic recall is on or off.
     the first time they join and reused by their other clones, worktrees and
     cloud sessions. The committed file names the Workspaces, never a Connector.
   - Joining needs access to every recorded Workspace, in the same organization;
-    someone may need to add them first. Nothing is created unless all of them
-    are reachable. Codex turns count from when that checkout joined.
+    someone may need to add them first. Access is checked before anything is
+    created; if a link then fails, capture stays off, and any link already made
+    is reused by the next join. Codex turns count from when that checkout joined.
   - A pulled change to the Workspaces, adding or removing one, stops capture in
     each checkout until someone there confirms it. So does another person
-    signing in on the same machine. Each new worktree and cloud checkout joins
-    the same way.
+    signing in on the same machine; records still queued for the first person's
+    Connectors are then not sent, and connect says how much. Each new worktree
+    and cloud checkout joins the same way.
   - API-key configs hold the key, so connect keeps them out of Git and refuses
     to write a key into a config Git already tracks.
   - Everyone sharing a config needs plugin 0.11.0 or newer; older versions
@@ -86,6 +88,9 @@ default, whether automatic recall is on or off.
 
 ### Fixed
 
+- A config that becomes unreadable again after an earlier reconnect prompt is
+  raised again, once per unreadable file, rather than turning capture off in
+  silence. Projects whose config was already unreadable see the prompt once more.
 - Connecting from a Git worktree now connects that worktree, where its hooks
   read configuration. Main and sibling checkouts are separate consent boundaries,
   including nested worktrees. If an earlier connection was redirected to main,

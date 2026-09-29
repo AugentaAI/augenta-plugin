@@ -287,7 +287,8 @@ deliberate:
   inaccessible or retargeted links are unresolved; failed checks prevent the
   question from being sent and remain failures, not evidence of deletion.
   Deduplicate by Workspace only after checking every selected link, so another
-  active link to the same Workspace can still be used. The recall API separately
+  active link to the same Workspace can still be used. (A browser checkout holds
+  one link per recorded Workspace, so this is defensive there.) The recall API separately
   authorizes Workspace membership; that alone does not detect a disabled link.
   Keep a Workspace refusal's code and message in `failed` alongside affected
   unresolved ids; an active link can still lack read access, and reconnecting
