@@ -302,8 +302,10 @@ jobs:
             (.hooks | length == $hooks)
           ' codex-plugin-read.json
 
-          # .codexignore prunes the Codex bundle, so whether dist/ survives that
-          # pruning is a genuinely separate question from the Claude leg above.
+          # Codex made its own copy of the tree with its own installer, so whether
+          # every bundle the manifest names reached THAT copy is a separate question
+          # from the Claude leg above. It copies the whole tree today (no ignore
+          # file prunes it), but that is observed behavior, not a contract.
           jq -r '.hooks[][].hooks[].command' "$codex_plugin_root/hooks/hooks.json" \
             | grep -o 'dist/[A-Za-z0-9_/.-]*' | sort -u > codex-bundles.txt
           test -s codex-bundles.txt
@@ -311,8 +313,7 @@ jobs:
             test -s "$codex_plugin_root/$rel" || { echo "missing shipped bundle: $rel"; exit 1; }
           done < codex-bundles.txt
 
-          # .codexignore prunes the bundle, so the skill-invoked CLIs need the
-          # same derived check the Claude leg makes.
+          # The same derived check the Claude leg makes, for the skill-invoked CLIs.
           for skill in "$codex_plugin_root"/skills/*/SKILL.md; do
             grep -oh 'dist/scripts/[A-Za-z0-9_-]*\.mjs' "$skill" | sort -u > codex-skill-bundles.txt
             test -s codex-skill-bundles.txt || { echo "skill invokes no bundle: $skill"; exit 1; }
@@ -335,7 +336,7 @@ jobs:
           ' codex-hook-out.json
 
           # The Codex branch of the prompt hook, with a prompt, on the same
-          # unconnected project: silent and stateless from the pruned bundle too.
+          # unconnected project: silent and stateless from the Codex install too.
           printf '{"transcript_path":"%s/.codex/sessions/2026/06/24/rollout-2026-06-24T00-00-00-a.jsonl","cwd":"%s","prompt":"what did we decide about sign-in"}' \
             "$HOME" "$codex_project" \
             | node "$codex_plugin_root/dist/hooks/user-prompt.mjs" > codex-prompt-out.txt

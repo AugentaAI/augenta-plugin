@@ -131,6 +131,12 @@ under `.claude-plugin/` or `.codex-plugin/`. Claude auto-discovers
 `hooks/hooks.json`, so `.claude-plugin/plugin.json` must not declare `hooks`.
 Codex requires the explicit `hooks` declaration in `.codex-plugin/plugin.json`.
 
+Neither harness prunes an install. Codex's `plugin add` copies the whole tree —
+tests, `.github/`, a git marketplace's `.git`, and a local path's `node_modules` —
+and reads no ignore file; an inert `.codexignore` was removed after it had been
+maintained for months on the belief that it did. Treat everything committed as
+shipped.
+
 Keep `CLAUDE_PLUGIN_ROOT` quoted in hook commands and express hook timeouts in
 seconds. Any harness-specific instructional wording must remain portable:
 describe the current harness's native user-input mechanism and never add
