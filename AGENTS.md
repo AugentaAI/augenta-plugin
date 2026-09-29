@@ -13,9 +13,11 @@ git diff --check
 ```
 
 `bun install` is first because dependency resolution is a build input, not just
-setup — see the runtime-boundary section below. `bun run build` refuses to run on
-an unpinned Bun or a checkout resolving dependencies from elsewhere, so a failed
-build there is telling you which of the two to fix.
+setup — see the runtime-boundary section below. It also installs the pinned Bun
+itself, which `bun run` then uses, so any global Bun can bootstrap the checkout.
+`bun run build` refuses to run on an unpinned Bun or a checkout resolving
+dependencies from elsewhere, so a failed build there is telling you which of the
+two to fix.
 
 Run `claude plugin validate . --strict` for the Claude package. The bundled
 Codex plugin-creator validator currently rejects Codex's supported `hooks`
@@ -76,9 +78,15 @@ the bundler's output is a build input. Two of them do:
   the older `get: () => mod[key]` form, 1.4.1 something else again — so one
   version off rewrites every bundle. `scripts/build.ts` reads the same file
   CI does and refuses to build on any other Bun, naming the version and how to
-  install it. Do not re-type the number into a workflow; a contract test fails
-  that. To move the pin, edit `.bun-version` and commit the rebuilt `dist/` with
-  it.
+  install it. The same number is the exact `bun` devDependency, so after
+  `bun install` the `bun run build` script builds on the pin whatever Bun is
+  global; `.bun-version` remains because CI needs a Bun before it can run
+  `bun install`. Do not re-type the number into a workflow; contract tests fail
+  that, and fail the two pins disagreeing. To move the pin, edit both and commit
+  the rebuilt `dist/` with them. `trustedDependencies` lists `bun` because its
+  binary comes from a postinstall script. Declaring that list replaces Bun's
+  default allowlist, so a dependency added later whose postinstall matters has
+  to be listed there too; `bun install` only prints that it blocked one.
 - **Where `node_modules` resolved from.** Bun labels every bundled module with
   its path relative to the build root, so a checkout that resolves a dependency
   from an ancestor directory bakes `../../../node_modules/…` into the bytes. A
@@ -125,6 +133,12 @@ This repository is one plugin for Claude Code and Codex. Keep runtime skills in
 under `.claude-plugin/` or `.codex-plugin/`. Claude auto-discovers
 `hooks/hooks.json`, so `.claude-plugin/plugin.json` must not declare `hooks`.
 Codex requires the explicit `hooks` declaration in `.codex-plugin/plugin.json`.
+
+Neither harness prunes an install. Codex's `plugin add` copies the whole tree —
+tests, `.github/`, a git marketplace's `.git`, and a local path's `node_modules` —
+and reads no ignore file; an inert `.codexignore` was removed after it had been
+maintained for months on the belief that it did. Treat everything committed as
+shipped.
 
 Keep `CLAUDE_PLUGIN_ROOT` quoted in hook commands and express hook timeouts in
 seconds. Any harness-specific instructional wording must remain portable:

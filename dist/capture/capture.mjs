@@ -1319,6 +1319,8 @@ import {
   mkdirSync as mkdirSync7,
   readFileSync as readFileSync7,
   readdirSync,
+  readlinkSync,
+  realpathSync as realpathSync2,
   renameSync as renameSync5,
   statSync as statSync3,
   writeFileSync as writeFileSync7
@@ -1449,11 +1451,42 @@ function scanClaudeMemory(transcriptPath) {
   walk(root);
   return { complete, documents };
 }
-function isScopedToProject(scope, projectRoot) {
+var MAX_SYMLINK_HOPS = 40;
+function symlinkTarget(path) {
+  try {
+    return lstatSync(path).isSymbolicLink() ? resolve2(dirname4(path), readlinkSync(path)) : undefined;
+  } catch {
+    return;
+  }
+}
+function physicalPath(path) {
+  let existing = resolve2(path);
+  const missing = [];
+  let hops = 0;
+  while (true) {
+    try {
+      return join9(realpathSync2(existing), ...missing);
+    } catch {}
+    const target = symlinkTarget(existing);
+    if (target !== undefined) {
+      if (++hops > MAX_SYMLINK_HOPS)
+        return;
+      existing = target;
+      continue;
+    }
+    const parent = dirname4(existing);
+    if (parent === existing)
+      return resolve2(path);
+    missing.unshift(basename(existing));
+    existing = parent;
+  }
+}
+function isScopedToProject(scope, root) {
   if (!isAbsolute(scope))
     return false;
-  const root = resolve2(projectRoot);
-  const target = resolve2(scope);
+  const target = physicalPath(scope);
+  if (target === undefined)
+    return false;
   const rel = relative(root, target);
   return rel === "" || !rel.startsWith(".." + sep) && rel !== ".." && !isAbsolute(rel);
 }
@@ -1488,6 +1521,9 @@ function markdownH1s(text) {
 function parseCodexTaskGroups(text, projectRoot) {
   const headings = markdownH1s(text);
   const documents = [];
+  const root = physicalPath(projectRoot);
+  if (root === undefined)
+    return documents;
   for (let i = 0;i < headings.length; i++) {
     const heading = headings[i];
     const taskGroup = /^Task Group:\s*(.+?)\s*$/.exec(heading.title);
@@ -1501,7 +1537,7 @@ function parseCodexTaskGroups(text, projectRoot) {
     if (!scopeMatch)
       continue;
     const scope = scopeMatch[1].trim().replace(/^['"]|['"]$/g, "");
-    if (!isScopedToProject(scope, projectRoot))
+    if (!isScopedToProject(scope, root))
       continue;
     const identity = sha256(`${header}\x00${scope}`).slice(0, 24);
     documents.push({
@@ -1764,7 +1800,7 @@ function sniffHarness(line) {
 
 // runtime/node.ts
 import { spawnSync } from "node:child_process";
-import { realpathSync as realpathSync2 } from "node:fs";
+import { realpathSync as realpathSync3 } from "node:fs";
 import { resolve as resolve3 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 async function readStdin() {
@@ -1783,7 +1819,7 @@ function isMain(metaUrl) {
 function canonical(path) {
   const absolute = resolve3(path);
   try {
-    return realpathSync2.native(absolute);
+    return realpathSync3.native(absolute);
   } catch {
     return absolute;
   }

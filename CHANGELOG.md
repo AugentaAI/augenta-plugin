@@ -39,6 +39,13 @@ release a user can read.
   including nested worktrees. If an earlier connection was redirected to main,
   connect once from the worktree and choose its destinations. Main stays unchanged.
   Symlinked subdirectories follow their physical checkout’s consent boundary.
+- Codex memory follows the same physical boundary. A Task Group counts as
+  this project's when the folder it names physically lies inside the project,
+  however that folder was reached: through macOS's `/tmp` or `/var`, or through
+  a symlinked projects folder. A folder that is only symlinked into the project
+  from elsewhere no longer counts. Memory already captured for such a folder is
+  withdrawn from its Workspaces at the next Codex memory scan. No reconnect is
+  required.
 - Codex connection instructions pass the harness explicitly, including commands
   requiring elevated access. Missing environment hints no longer label an agent
   as Claude Code or overwrite an existing label during reconnect.
@@ -47,6 +54,10 @@ release a user can read.
   destinations, capture baseline, cursors or history.
 - Capture health reports missing versus invalid configuration and labels its
   activity as project-wide. Local activity alone does not verify host dispatch.
+- In a project that is not connected yet, a `claude -p` run no longer starts
+  with an extra `/augenta:connect` turn ahead of your own prompt. Interactive
+  sessions are unchanged: Claude still brings up connecting at your first
+  message. No reconnect or hook re-approval is needed.
 
 ### Changed
 

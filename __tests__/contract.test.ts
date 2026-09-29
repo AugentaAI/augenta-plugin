@@ -1398,4 +1398,19 @@ describe("the committed dist/ is reproducible", () => {
       expect(yaml, `${file} hardcodes the Bun version ${pinnedBun}`).not.toContain(`bun-version: "${pinnedBun}"`);
     }
   });
+
+  test("the bun devDependency is exactly the .bun-version pin", () => {
+    // `bun install` fetches this devDependency into node_modules/.bin, and
+    // `bun run` puts that directory first on PATH, so `bun run build` builds on
+    // the pin whatever Bun a contributor has globally. .bun-version stays because
+    // CI needs a Bun before it can run `bun install` at all. That makes two
+    // copies of one number, which is safe only while they cannot differ quietly;
+    // an exact match also rejects a range, which would let the lockfile move it.
+    const packageJson = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf8"));
+    expect(packageJson.devDependencies?.bun, "the bun devDependency does not match .bun-version").toBe(pinnedBun);
+    // Its binary comes from a postinstall script. Without an explicit trust
+    // entry that runs only while Bun's built-in allowlist happens to include
+    // `bun`, and a skipped script leaves node_modules/.bin/bun a placeholder.
+    expect(packageJson.trustedDependencies, "the bun devDependency's postinstall is not trusted").toContain("bun");
+  });
 });

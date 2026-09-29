@@ -192,6 +192,90 @@ describe("Codex Task Group memory", () => {
     expect(captured.flatMap((doc) => [doc.data.text]).join("\n")).not.toContain("global section");
   });
 
+  test("scope is decided physically: an alias into the project matches, a symlink out of it does not", () => {
+    // The project lookup resolves symlinks, so a Task Group recorded through a
+    // symlinked path belongs to the physical checkout, and a folder that is only
+    // linked INTO the project does not. Explicit links keep this platform-neutral.
+    const aliasHome = mkdtempSync(join(tmpdir(), "aug-memory-alias-"));
+    const outside = mkdtempSync(join(tmpdir(), "aug-memory-outside-"));
+    try {
+      const alias = join(aliasHome, "project");
+      symlinkSync(project, alias, "dir");
+      mkdirSync(join(project, "packages", "app"), { recursive: true });
+      symlinkSync(outside, join(project, "linked"), "dir");
+      // Dangling links still point somewhere; a loop points nowhere at all.
+      symlinkSync(join(outside, "gone"), join(project, "dangling-out"), "dir");
+      symlinkSync(join(project, "not-yet"), join(aliasHome, "dangling-in"), "dir");
+      symlinkSync(join(project, "loop-b"), join(project, "loop-a"), "dir");
+      symlinkSync(join(project, "loop-a"), join(project, "loop-b"), "dir");
+      const text = [
+        "# Task Group: Through an alias",
+        `applies_to: cwd=${alias}`,
+        "The project root, reached through a symlink.",
+        "# Task Group: Child through an alias",
+        `applies_to: cwd=${join(alias, "packages", "app")}`,
+        "An existing child, reached through the symlink.",
+        "# Task Group: Deleted child through an alias",
+        `applies_to: cwd=${join(alias, "since-deleted")}`,
+        "A directory that no longer exists resolves through its nearest ancestor.",
+        "# Task Group: Linked out of the project",
+        `applies_to: cwd=${join(project, "linked")}`,
+        "Lexically inside the project, physically outside it.",
+        "# Task Group: Below the outward link",
+        `applies_to: cwd=${join(project, "linked", "missing")}`,
+        "Still outside, although the tail does not exist.",
+        "# Task Group: Dangling link out",
+        `applies_to: cwd=${join(project, "dangling-out", "sub")}`,
+        "Its target is gone, but it pointed outside the project.",
+        "# Task Group: Dangling link in",
+        `applies_to: cwd=${join(aliasHome, "dangling-in")}`,
+        "Its target does not exist yet, but it points into the project.",
+        "# Task Group: Symlink loop",
+        `applies_to: cwd=${join(project, "loop-a")}`,
+        "No physical location, so never in scope.",
+      ].join("\n");
+      const inScope = [
+        "Task Group: Through an alias",
+        "Task Group: Child through an alias",
+        "Task Group: Deleted child through an alias",
+        "Task Group: Dangling link in",
+      ];
+
+      expect(parseCodexTaskGroups(text, project).map((group) => group.title)).toEqual(inScope);
+      // The root is resolved too, so a caller holding a logical root agrees.
+      expect(parseCodexTaskGroups(text, alias).map((group) => group.title)).toEqual(inScope);
+    } finally {
+      rmSync(aliasHome, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test("memory captured for a folder that becomes a symlink out of the project is withdrawn", () => {
+    // Scope is re-decided on every complete scan, so a Task Group whose folder
+    // leaves the project's physical scope is tombstoned, like any document that
+    // disappears. This is the retention change the release notes describe.
+    const outside = mkdtempSync(join(tmpdir(), "aug-memory-outside-"));
+    try {
+      const folder = join(project, "vendored");
+      mkdirSync(folder);
+      writeFileSync(
+        join(codexHome, "memories", "MEMORY.md"),
+        `# Task Group: Vendored\napplies_to: cwd=${folder}\nVendored notes.`,
+      );
+      expect(captureAgentMemory({ projectRoot: project, harness: "codex", codexHome }))
+        .toMatchObject({ changed: 1, tombstones: 0, complete: true });
+
+      rmSync(folder, { recursive: true });
+      symlinkSync(outside, folder, "dir");
+      expect(captureAgentMemory({ projectRoot: project, harness: "codex", codexHome }))
+        .toMatchObject({ changed: 0, tombstones: 1, complete: true });
+      const [live, tombstone] = docs(project);
+      expect(tombstone!.data).toMatchObject({ documentId: live!.data.documentId, deleted: true, text: "" });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   test("a custom CODEX_HOME source is used and an absent MEMORY.md cannot tombstone prior state", () => {
     const source = join(codexHome, "memories", "MEMORY.md");
     writeFileSync(source, `# Task Group: Current\napplies_to: cwd=${project}\nTracked.`);

@@ -59,8 +59,9 @@ assertion starts lying.
 | `.github/gates/workflow-pipefail-grep.sh` | three pipelines whose reported status is not the status of the thing that mattered: `… \| grep -q` under `pipefail`, `curl … \| bash`, and a command substitution piping into a consumer that stops short |
 
 The two privileged helpers they exercise live in `.github/scripts/`, not `scripts/` —
-`scripts/` is the plugin's *runtime* surface and ships to users, while `.codexignore`
-prunes `.github/` from the Codex bundle.
+`scripts/` is the plugin's *runtime* surface, which the hooks and skills invoke, and
+nothing an installed plugin runs reaches `.github/`. Both still ship: an install
+copies the whole tree.
 
 ## The autonomous edges
 

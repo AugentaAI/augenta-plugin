@@ -9,7 +9,7 @@
  * Run: bun test capture/config.test.ts
  */
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -38,7 +38,9 @@ function writeConfig(root: string, config: unknown): void {
 beforeEach(() => {
   saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
   for (const k of ENV_KEYS) delete process.env[k];
-  project = mkdtempSync(join(tmpdir(), "aug-cfg-"));
+  // Physical path: the project lookup realpaths, and macOS tmpdir() is under the
+  // /var → /private/var symlink, so a logical fixture never compares equal there.
+  project = realpathSync(mkdtempSync(join(tmpdir(), "aug-cfg-")));
 });
 afterEach(() => {
   for (const k of ENV_KEYS) {

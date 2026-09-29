@@ -213,7 +213,8 @@ describe("resolveProject in a linked worktree", () => {
       { cwd: project },
     );
     // Deliberately OUTSIDE the repo, mirroring how the harnesses lay worktrees out.
-    worktree = join(mkdtempSync(join(tmpdir(), "aug-wt-")), "checkout");
+    // Physical, like `project` above: resolveProject realpaths its lookup.
+    worktree = join(realpathSync(mkdtempSync(join(tmpdir(), "aug-wt-"))), "checkout");
     execFileSync("git", ["worktree", "add", "-q", worktree, "-b", "wt"], {
       cwd: project,
     });

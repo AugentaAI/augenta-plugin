@@ -1,15 +1,19 @@
 /**
  * Augenta SessionStart hook — two jobs, via `hookSpecificOutput`:
  *
- *  Unconnected project → prompt exactly once per project: auto-fire the connect
- *  skill on Claude Code, ask the user to invoke it on Codex.
- *  SessionStart is the earliest point a plugin can act. Claude Code accepts an
- *  `initialUserMessage`, which creates the first connect turn on its own. Codex's
- *  SessionStart schema accepts only `hookEventName` and `additionalContext`, so
- *  it receives the user-facing reminder and the user invokes `$augenta:connect`
- *  (or asks to connect) explicitly. Because that reminder is the one automatic
- *  prompt the project will ever get, it must NAME that invocation — narrating a
- *  connection the hook is not starting would leave the user with no next step.
+ *  Unconnected project → prompt exactly once per project, through
+ *  `additionalContext` on both harnesses; nothing starts a turn on its own.
+ *  SessionStart is the earliest point a plugin can act. On Claude Code that
+ *  context is hidden model context, so it is agent-directed: the model acts on
+ *  it at the user's first turn and runs the connect skill. Claude Code's
+ *  `initialUserMessage` is deliberately NOT used. It applies only to `-p` runs,
+ *  where it would put a connect turn ahead of a headless caller's own prompt,
+ *  and does nothing in an interactive session. Codex's SessionStart schema
+ *  accepts only `hookEventName` and `additionalContext`, so it receives the
+ *  user-facing reminder and the user invokes `$augenta:connect` (or asks to
+ *  connect) explicitly. Because that reminder is the one automatic prompt the
+ *  project will ever get, it must NAME that invocation — narrating a connection
+ *  the hook is not starting would leave the user with no next step.
  *
  *  Run-once-per-project guarantee: fire only when the project has NO USABLE
  *  `.augenta/config.json` AND has not been auto-prompted before. The prompted
@@ -197,8 +201,8 @@ try {
 
 // Codex may show additionalContext verbatim, so its wording stays clean and
 // user-facing; Claude Code's is agent-directed and may carry scaffolding.
-// Nothing auto-starts on Codex (no initialUserMessage), so these state the fact
-// AND the invocation — this is the project's only automatic prompt, and one that
+// Nothing auto-starts on either harness, so these state the fact AND the
+// invocation — this is the project's only automatic prompt, and one that
 // narrated a connection nobody is making would strand the user with no next step.
 const codexContext = staleConfig
   ? `Augenta's saved connection for this project can no longer be read, so capture is off. Run ${connectAction} to reconnect it.`
@@ -219,15 +223,7 @@ const claudeContext = staleConfig
 
 const additionalContext = codex ? codexContext : claudeContext;
 
-process.stdout.write(
-  JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "SessionStart",
-      additionalContext,
-      // Codex rejects unknown SessionStart fields, including Claude Code's
-      // initialUserMessage. Keep the shared hook schema-valid for both harnesses.
-      ...(codex ? {} : { initialUserMessage: "/augenta:connect" }),
-    },
-  }),
-);
+// The same two fields on both harnesses: Codex rejects any other SessionStart
+// key, and Claude Code's initialUserMessage is -p only (see the header).
+process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }));
 process.exit(0);

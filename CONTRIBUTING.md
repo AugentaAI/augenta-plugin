@@ -6,9 +6,10 @@ follow it if anything here differs.
 
 ## Set up and check your change
 
-Install [Bun](https://bun.sh) at the version in [.bun-version](.bun-version)
-and Node 20 or newer. Bun builds and tests the code. Node runs the plugin
-that users install.
+Install [Bun](https://bun.sh) and Node 20 or newer. Bun builds and tests the
+code. Node runs the plugin that users install. Your Bun only bootstraps the
+checkout: `bun install` fetches the exact version pinned in
+[.bun-version](.bun-version), and `bun run` scripts use it.
 
 Run these commands in this checkout, in order:
 
