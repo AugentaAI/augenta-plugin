@@ -1113,6 +1113,20 @@ describe("manifests — cross-harness packaging and one version", () => {
     }
   });
 
+  test("entries ship under the release version, never an Unreleased section", () => {
+    /* AGENTS.md → Releases: a CHANGELOG entry lands with its version bump. #40–#45
+       parked entries under [Unreleased] at 0.10.2, so `main` shipped them under
+       the old number, and installs cached per version had no new one to fetch.
+       This catches the parking; a bump itself is still the author's to make. */
+    const changelog = readFileSync(join(PLUGIN_ROOT, "CHANGELOG.md"), "utf8");
+    const headings = [...changelog.matchAll(/^## \[([^\]]+)\]/gm)].map((m) => m[1]!);
+    expect(
+      headings.map((heading) => heading.toLowerCase()),
+      "CHANGELOG.md has an [Unreleased] section",
+    ).not.toContain("unreleased");
+    expect(headings[0], "the newest CHANGELOG heading is not RELEASE_VERSION").toBe(RELEASE_VERSION);
+  });
+
   test("the versioned marketplace descriptions track the release", () => {
     // AGENTS.md → Releases: descriptions carry the version in prose, so they go
     // stale silently unless something pins them to the same bump.

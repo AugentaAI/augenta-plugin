@@ -214,6 +214,14 @@ is the only account of a release a user can read — the marketplaces install fr
 nobody can look up. Write it in the user's terms: what changed for a connected
 project, and whether reconnecting is required.
 
+The converse holds too: a CHANGELOG entry ships with its version bump, in the
+same PR, under that version's heading. There is no `[Unreleased]` section to
+park entries in. Installed copies are cached per version directory, so a merged
+change that leaves the version alone may never reach an existing install, while
+new installs get it under the old number — which is how the user-facing changes
+from #40–#45 all shipped as 0.10.2 before 0.11.0. A contract test fails an
+`[Unreleased]` heading, and a newest heading that is not the release version.
+
 **Do not cite private-repo issues or PRs in commit messages or PR
 descriptions.** This repository is public and its commit log is part of what
 users read; a bare `#123` against a repository nobody can open is noise at best
