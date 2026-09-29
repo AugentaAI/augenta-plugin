@@ -1,15 +1,24 @@
 # Changelog
 
 All notable changes to the Augenta plugin. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
-[semantic versioning](https://semver.org/spec/v2.0.0.html) — with the caveat that
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), except that there is
+no Unreleased section: every entry lands under the version that ships it. This
+project uses [semantic versioning](https://semver.org/spec/v2.0.0.html) — with the caveat that
 it is pre-1.0 and **does not carry old project configs forward**. Where a release
 requires reconnecting, the entry says so.
 
 Both marketplaces install from `main`, so this file is the only account of a
 release a user can read.
 
-## [Unreleased]
+## [0.11.0] — 2026-09-29
+
+**Reconnect once per browser-connected project**: connections now record their
+destinations in a new format (see Changed). Platform-key configs keep working.
+If an earlier connection from a Git worktree was redirected to the main
+checkout, also connect once from the worktree itself (see Fixed). Codex asks
+once to approve the updated prompt hook. Recall now also runs automatically on
+each prompt, from memory only with no answer model, and `/augenta:recall` asks
+for an answer by default.
 
 ### Added
 
@@ -399,8 +408,8 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
-[Unreleased]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.1...HEAD
-[0.10.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.1...HEAD
+[0.11.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.2...v0.11.0
+[0.10.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.10.1
 [0.10.0]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.10.0
 [0.9.3]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.9.3

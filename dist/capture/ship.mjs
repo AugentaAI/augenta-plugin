@@ -15903,7 +15903,7 @@ function isHttpsUrl(value) {
 }
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.10.2";
+var PLUGIN_VERSION = "0.11.0";
 
 // capture/ship.ts
 import { join as join7, dirname as dirname2 } from "node:path";

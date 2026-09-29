@@ -633,7 +633,7 @@ function isHttpsUrl(value) {
 }
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.10.2";
+var PLUGIN_VERSION = "0.11.0";
 
 // capture/auth.ts
 import {
