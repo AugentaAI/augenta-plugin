@@ -1119,7 +1119,13 @@ describe("manifests — cross-harness packaging and one version", () => {
        the old number, and installs cached per version had no new one to fetch.
        This catches the parking; a bump itself is still the author's to make. */
     const changelog = readFileSync(join(PLUGIN_ROOT, "CHANGELOG.md"), "utf8");
-    const headings = [...changelog.matchAll(/^## \[([^\]]+)\]/gm)].map((m) => m[1]!);
+    /* Brackets are OPTIONAL here, unlike the link-definition test above: every
+       heading from 0.9.2 down is unbracketed, so a plain `## Unreleased` is the
+       local convention rather than a typo, and a bracket-only match would read
+       straight past the parked section it exists to catch. */
+    const headings = [...changelog.matchAll(/^## \[?([^\]\n]+?)\]?(?:\s+—.*)?$/gm)].map(
+      (m) => m[1]!,
+    );
     expect(
       headings.map((heading) => heading.toLowerCase()),
       "CHANGELOG.md has an [Unreleased] section",
