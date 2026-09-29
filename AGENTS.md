@@ -83,7 +83,10 @@ the bundler's output is a build input. Two of them do:
   global; `.bun-version` remains because CI needs a Bun before it can run
   `bun install`. Do not re-type the number into a workflow; contract tests fail
   that, and fail the two pins disagreeing. To move the pin, edit both and commit
-  the rebuilt `dist/` with them.
+  the rebuilt `dist/` with them. `trustedDependencies` lists `bun` because its
+  binary comes from a postinstall script. Declaring that list replaces Bun's
+  default allowlist, so a dependency added later whose postinstall matters has
+  to be listed there too; `bun install` only prints that it blocked one.
 - **Where `node_modules` resolved from.** Bun labels every bundled module with
   its path relative to the build root, so a checkout that resolves a dependency
   from an ancestor directory bakes `../../../node_modules/…` into the bytes. A
