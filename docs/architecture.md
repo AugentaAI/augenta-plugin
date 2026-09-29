@@ -41,10 +41,12 @@ The [connect script](../scripts/connect.ts) gives you a browser sign-in link. It
 lists the Workspaces you can use and asks for the complete set this project
 should send to. Nothing is selected on your behalf.
 
-Each Workspace gets its own Connector. The project config stores those
-Connector ids inside `destinations`, the chosen Workspace ids and names,
-organization, control URL, gateway, and a reference to your saved sign-in.
-Only Connector ids route capture; the server still authorizes every read.
+Each Workspace gets its own Connector, owned by the person who connected. The
+project config stores the chosen Workspace ids and names, a project key,
+organization, control URL, gateway, and a reference to your saved sign-in; it
+names no Connector, so it can be committed. Each checkout keeps its own
+Connector ids in `.augenta/state/links.json`. Only those ids route capture; the
+server still authorizes every write and read.
 Recall checks each selected Connector is active and still points to its saved
 Workspace before asking it, and refreshes display names best-effort without
 rewriting config. Tokens stay in a
@@ -53,8 +55,10 @@ private file in your home folder. See [connection settings](configuration.md).
 Capture checks for `.augenta/config.json` in the working folder and its
 parents. With no readable config, it saves and sends nothing. A browser
 connection also needs this machine's saved sign-in for it and this checkout's
-join (`.augenta/state/adopted.json`, written by connect), because its config may
-be committed and arrive in checkouts whose users never chose its Workspaces. Session start
+own links (`.augenta/state/links.json`, written by connect), because its config
+may be committed and arrive in checkouts whose users never chose its Workspaces.
+Joining links the person's own Connector in each recorded Workspace, reusing one
+their other checkouts made for the same project key. Session start
 can offer to connect an unconnected project once.
 
 Connect, recall, capture and health use the same local config lookup. It stops

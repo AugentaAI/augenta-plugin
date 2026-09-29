@@ -835,7 +835,9 @@ describe("the consent gate is plural, explicit, and fully disclosed", () => {
       /left in place and idle/,
       /subset of the set the user just confirmed/,
       /platform-key path stays single-destination/i,
-      /`destinations\[\]\.connectorId` is the \*\*only\*\* routing key read/i,
+      /A Connector id is the \*\*only\*\* routing key read/i,
+      /A Connector belongs to one person, so each person links their own/,
+      /Connect adopts only a link whose `ownerUserId` is the signed-in person/,
       /a scalar is not read forward/i,
     ]) {
       expect(agents).toMatch(phrase);

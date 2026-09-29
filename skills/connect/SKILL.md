@@ -152,7 +152,9 @@ When `alreadyConnected` is `true`, `current.authMode` is `oauth` and `adopted` i
 `false`, this checkout has the project's `.augenta/config.json` but has not joined
 it, so capture is off here. The file was usually committed by a teammate, or
 carried into a new worktree or cloud checkout. Joining uses the recorded
-Workspaces as they are; it does not choose again.
+Workspaces as they are; it does not choose again. It links the user's **own**
+Connector in each of them, reusing one they already have for this project, so
+records they send go through a link that belongs to them.
 
 Before asking, name `current.organization`, every entry in `current.destinations`,
 and `current.environment` when it is not `prod`. Say, as in step 3, that each of
@@ -177,9 +179,11 @@ checkout's consent, so do not ask a second yes/no.
   say the project was connected in `organization` and this sign-in is to another
   one; offer to sign in to that organization, or to choose different Workspaces. On
   `destinations_unreachable`, name each `unreachable` Workspace and say the user
-  may need to be added to it by someone who administers it; capture stays off in
-  this checkout until every recorded Workspace is reachable. On
-  `environment_mismatch`, report `message`.
+  may need to be added to it by someone who administers it; nothing was created,
+  and capture stays off in this checkout until every recorded Workspace is
+  reachable. On `join_failed`, report `message` and each `failed` entry; capture
+  stays off, and joining again retries. On `environment_mismatch`, report
+  `message`.
 - **Choose different Workspaces**: continue with steps 2 and 3. When
   `configTracked` is `true`, say first that git tracks the config, so the new
   selection changes the destinations for everyone who pulls it.
@@ -329,8 +333,11 @@ still joins with connect. If the project should keep it private, the user can ad
 `.augenta/` to the repository's `.gitignore`.
 
 If `removed` is non-empty, name each removed Workspace: this project **no longer
-sends** to it. Its Connector is **left in place and idle** — nothing was disabled
-or deleted; the user can remove it in Augenta if they want it gone.
+sends** to it. When the entry has a `connectorId`, that Connector is the user's
+own and is **left in place and idle** — nothing was disabled or deleted; the user
+can remove it in Augenta if they want it gone. When `--probe` reported
+`configTracked: true`, say that the Workspace is dropped for everyone who pulls
+the config.
 
 If `unresolvedConnectorIds` is present, say that this project listed those
 Connectors but they are no longer readable, so they have been dropped.

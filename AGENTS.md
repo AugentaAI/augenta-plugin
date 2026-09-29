@@ -244,12 +244,14 @@ change in words instead — "pairs with the platform change that pages
 Augenta remains opt-in per project. Do not change telemetry APIs, payloads,
 consent semantics, or capture behavior without an explicit product decision.
 OAuth tokens stay in the owner-only global `~/.augenta/auth.json`; a connected
-project stores a profile reference, URLs, organization and destinations. Only
-`destinations[].connectorId` routes; organization and Workspace coordinates
+project stores a profile reference, URLs, organization and the Workspaces it
+feeds. Only Connector ids route — for a browser connection, this checkout's own
+links in `.augenta/state/links.json`; organization and Workspace coordinates
 record the user's choices for display and never become authorization inputs. Capture must stay a
 silent no-op without project config — and, for a browser connection, without this
-machine's sign-in for its profile and this checkout's adoption of its destinations
-(`captureGate` in `capture/config.ts`) — and `AUGENTA_CAPTURE_ENABLED=0` remains
+machine's sign-in for its profile and this checkout's own links into exactly the
+recorded Workspaces, made by the person signed in here (`captureGate` in
+`capture/config.ts`) — and `AUGENTA_CAPTURE_ENABLED=0` remains
 the global kill switch.
 
 **Recall is a READ, and its invariants are its own.** Recall — explicit through
@@ -270,7 +272,7 @@ deliberate:
   connection, this checkout's join of it. A committed config reaches checkouts
   whose users never affirmed its Workspaces, so recall from one that has not
   joined returns `not_joined` and sends nothing. That check lives in the request
-  layer and is the adoption marker, never the capture switch. Deleting the config
+  layer and is the checkout's own links, never the capture switch. Deleting the config
   remains the one off switch for both, and README says so in those words. Automatic
   recall IS gated on the switch — see below — and that gate lives in the hook,
   never in the shared request layer.
@@ -377,22 +379,41 @@ and silence never authorizes any. A user can cancel the flow without connecting;
 `choose` with no auto-select knob to flip.
 
 **A committed config is the project's recorded decision; each checkout joins
-it.** A browser connection's `config.json` holds no credential, so connect writes
+it.** A browser connection's `config.json` holds no credential and no Connector:
+a `projectKey` and the `workspaces` it feeds. So connect writes
 `.augenta/.gitignore` in the shared form (`SHARED_IGNORE`), which lets that one
 file be committed and every clone, worktree or cloud checkout point at the same
 Workspaces. Its presence is therefore not a checkout's consent. A checkout
-captures only after connect writes `.augenta/state/adopted.json` there, which it
-does when the user answers the destination question in that checkout or chooses
-to use the recorded set with `--adopt`. That choice is shown with the same
+captures only once connect writes its own links to `.augenta/state/links.json`,
+which it does when the user answers the destination question in that checkout or
+chooses to use the recorded set with `--adopt`. That choice is shown with the same
 full-record and union-audience disclosure, and it is one answer, never a second
-yes/no. Joining is all or nothing: every recorded destination must be an active
-link the user can read, in its recorded Workspace, under the sign-in the config
-was connected with; otherwise nothing is written and capture stays off. The
-marker names the destinations it covers, so a pulled change that adds one stops
-capture until someone in that checkout confirms the new set. Codex eligibility
-starts at the later of `captureSince` and the adoption. An API-key config holds
-its key and is never committable: its writer keeps the local form and refuses a
-config git already tracks, and the capture hook resets a shared form back.
+yes/no. Joining is all or nothing: the user must be able to use every recorded
+Workspace under the sign-in the config was connected with, and every link must
+be made and verified; otherwise nothing is written here, capture stays off, and
+the shared file is never touched. The links route only while they name exactly
+the recorded Workspaces, under the sign-in stored on this machine and the person
+it belongs to, so a pulled change to the Workspaces — an addition or a removal —
+or another person signing in here stops capture until someone in that checkout
+confirms the set. Codex eligibility starts when the checkout joined. An API-key
+config holds its key and is never committable: its writer keeps the local form
+and refuses a config git already tracks, and the capture hook resets a shared
+form back.
+
+**A Connector belongs to one person, so each person links their own.** The
+platform accepts records through a Connector only from its owner or an
+organization manager, and shows a plain member's read of someone else's as not
+found. A shared config naming the committer's Connectors would therefore route a
+teammate's capture through links that refuse them, or, for a manager, through a
+link that is not theirs under their name. Connect adopts only a link whose
+`ownerUserId` is the signed-in person, and checks the owner again after creating
+one and before repairing one: the platform lets a manager use anyone's link, so
+the plugin is the only guard. Identity is (person, `projectKey`, Workspace): each
+link carries the project's key in its metadata, which is how a fresh clone,
+worktree or cloud session finds its user's existing link instead of minting one
+every session. Matching is never by folder name, which is not unique across an
+organization. A lookup that fails creates nothing, and another person's link id
+is never named in any output.
 
 **A valid selection is the consent; a second yes/no is not asked.** This holds
 for the destination set as well as for creation — a user who just answered the
@@ -434,9 +455,9 @@ disk and still shipping, so no confirmation may claim a destination was dropped
 unless a config was actually written. Empty destination sets are rejected;
 canceling an already-connected flow changes nothing. Deleting
 `.augenta/config.json` remains the only off switch. Reconnecting never moves an
-existing Connector to a different Workspace — a destination gets its own link,
-created once and adopted thereafter, so history already attached to a link keeps
-its route. A non-production `environment` must be stated to the user before they
+existing Connector to a different Workspace — a destination gets its own link
+per person, created once and adopted thereafter, so history already attached to
+a link keeps its route. A non-production `environment` must be stated to the user before they
 answer.
 
 **The platform-key path stays single-destination.** `--api-key` has no consent
@@ -478,12 +499,20 @@ outside a comment; keep it that way.
 carried forward. A config this version cannot parse becomes session-start's
 one-time reconnect prompt, which is a clear ask; reusing an old credential or
 routing decision would instead surface later as an unexplained 401. This release
-requires one reconnect per OAuth project because `destinations` replaces `connectorIds`.
+requires one reconnect per OAuth project because `destinations` replaces
+`connectorIds`, and, for a browser connection, `workspaces` plus the checkout's
+links replace `destinations` in the shared file. The prompt is keyed to the
+unreadable file's bytes, so a later format change is raised again even for a
+project that reconnected through an earlier one.
 
-`destinations[].connectorId` is the **only** routing key read. A scalar is not read
-forward, and `connectorIds` is not read either. `workspaceId`, `workspaceName` and
-`org` record the selected destinations for display and consent checking; org ids
-and names are never sent, and recall retains only its existing Workspace selector.
-A config keyed the old way is unparseable and becomes the reconnect prompt, as
-does an older `authMode` or an unreadable file. Only connect writes the file;
+A Connector id is the **only** routing key read: `destinations[].connectorId` in
+an API-key config, and this checkout's `links.json` for a browser one, composed
+into the same `destinations` in memory. A scalar is not read forward, and
+`connectorIds` is not read either. `workspaceId`, `workspaceName` and `org`
+record the selected destinations for display and consent checking; org ids and
+names are never sent, and recall retains only its existing Workspace selector.
+A config keyed an old way is unparseable and becomes the reconnect prompt, as
+does an older `authMode` or an unreadable file. Connect may reuse a Connector an
+old browser config listed, but only one the signed-in person owns, verified live,
+after they answer the destination question again. Only connect writes the file;
 recall refreshes names in its output without writing them back.

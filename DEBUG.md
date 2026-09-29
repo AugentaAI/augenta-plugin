@@ -164,7 +164,7 @@ dev with no variable set at runtime. Both are recorded in the config.
 | `~/.augenta/pending-login.json` | `--login` | abandons an in-flight grant |
 | `~/.augenta/state/connect-prompted.json` | SessionStart | the one-time connect offer, and the join notice for a connected checkout that is not capturing, fire again |
 | `<project>/.augenta/config.json` | connect | disconnects the project from all destinations; capture returns to a silent no-op. If it is committed, the next pull brings it back |
-| `<project>/.augenta/state/adopted.json` | connect (`--workspace`, `--adopt`) | this checkout stops capturing until it joins again; the config and its destinations are untouched |
+| `<project>/.augenta/state/links.json` | connect (`--workspace`, `--adopt`) | this checkout stops capturing until it joins again; the shared config is untouched, and joining again reuses your Connectors for the project |
 
 A stale `pending-login.json` from another environment is self-healing: the next
 `--await-login` recognizes the foreign issuer, clears it, and asks for a fresh
@@ -327,8 +327,10 @@ node <plugin-root>/dist/scripts/connect.mjs --json --repair-harness --harness co
 
 Use `claude-code` for a verified Claude Code project. The explicit value is
 required; the command uses the saved profile and endpoint, ignoring ambient URL
-overrides, and checks each link's recorded Workspace and revision before PATCH.
-It never reconnects, changes routes, rewrites config, or resets `captureSince`.
+overrides, and checks each link's recorded Workspace, owner and revision before
+PATCH: it repairs only this checkout's own links, so it needs a checkout that has
+joined. It never reconnects, changes routes, rewrites config, or resets
+`captureSince`.
 Partial failure returns an error with separate `repaired` and `failed` lists;
 successful repairs remain applied. A missing or obsolete config must be connected
 through the normal consent flow first. For new connections, pass `--harness`

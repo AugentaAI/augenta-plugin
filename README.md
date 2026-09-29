@@ -93,12 +93,17 @@ connection lasts only if its `.augenta/config.json` is committed to the
 repository (see [Share a project's setup](#share-a-projects-setup)); each new
 session then signs in and joins it.
 
-- **Claude Code in the cloud** (claude.ai/code) does not install plugins, so
-  Augenta does not run there.
+- **Claude Code in the cloud** (claude.ai/code) does not install the plugins
+  that your repository or your own settings turn on, so Augenta does not run
+  there. The one way a plugin reaches these sessions is your organization's
+  server-managed settings, which a Team or Enterprise Owner sets; Augenta has
+  not been tested that way.
 - **Cowork in the cloud** runs the plugin on Anthropic's machine while your
   project folder stays on your computer, so connect cannot connect it. Run the
-  task as a **local** Cowork session instead. An organization owner can make
-  local the default by turning off "Run Cowork in the cloud".
+  task as a **local** Cowork session instead. On Team and Enterprise plans an
+  Owner controls this with Organization settings → Cowork → "Run Cowork in the
+  cloud". From October 6, 2026, new Cowork tasks on Pro and Max plans run only
+  in the cloud, so Augenta cannot capture them.
 - **Codex cloud** has internet access off by default.
 
 Wherever commands run behind a network allowlist, Augenta needs these three
@@ -108,7 +113,7 @@ hosts: `augenta.ai`, `auth.augenta.ai` and `api.augenta.ai`.
 | --- | --- |
 | Cowork, local or cloud | Organization settings → Capabilities → Code execution → Allow network egress; it applies to sessions created afterwards |
 | Claude Code in the cloud | The environment's Network access, set to Custom |
-| Codex cloud | The environment's internet access setting |
+| Codex cloud | The environment's internet access setting, with all HTTP methods allowed: sign-in, capture and recall send POST requests, which the GET, HEAD and OPTIONS-only setting blocks |
 
 If a host is blocked, connect says which one, and why, before asking you
 anything. Where the environment names its proxy in `HTTPS_PROXY`, connect,
@@ -216,7 +221,7 @@ recall command keep working either way.
 
 Connect handles setup for you. Your project stores its connection in
 `.augenta/config.json`: sign-in profile reference, environment URLs, organization
-and chosen destinations. Sign-in tokens stay in your private global profile.
+and chosen Workspaces. Sign-in tokens stay in your private global profile.
 Older `connectorIds` configs need one reconnect per project. See
 [connection settings](docs/configuration.md) for file details and changing Workspaces.
 
@@ -228,11 +233,17 @@ rest of `.augenta/` stays out of Git on its own. To keep the config private
 instead, add `.augenta/` to your repository's `.gitignore`.
 
 A checkout with a committed config does not capture, or send recall questions,
-until its user runs connect there once. Connect signs them in if needed, shows the project's Workspaces, and
-asks whether to use them. They may need to be added to those Workspaces first.
-The same applies to each new worktree and cloud checkout. Everyone sharing a
-config needs plugin 0.11.0 or newer. API-key configs hold the key, so connect
-never makes them committable.
+until its user runs connect there once. Connect signs them in if needed, shows
+the project's Workspaces, and asks whether to use them. Each person then sends
+through a Connector of their own in each Workspace, made the first time they
+join and reused by their later clones, worktrees and cloud sessions. They need
+access to every one of those Workspaces, so someone may need to add them first.
+
+A pulled change to the project's Workspaces stops capture in each checkout until
+someone there confirms the new set. So does another person signing in on the
+same machine. Everyone sharing a config needs plugin 0.11.0 or newer; older
+versions cannot read it. API-key configs hold the key, so connect never makes
+them committable.
 
 ## Connecting CI or a service
 

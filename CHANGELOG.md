@@ -57,23 +57,30 @@ default, whether automatic recall is on or off.
     only after its user runs connect there. Connect signs them in if needed, shows the project's Workspaces and
     the full-record disclosure, and asks whether to use them. They are not asked
     to choose Workspaces again unless they want to.
-  - Joining needs every recorded Workspace to be reachable with their own
-    sign-in, in the same organization; they may need to be added first. Codex
-    turns count from when that checkout joined.
-  - A pulled change that adds a Workspace stops capture in each checkout until
-    someone there confirms it. Each new worktree and cloud checkout joins the
-    same way.
+  - Each person sends through a Connector of their own in each Workspace, made
+    the first time they join and reused by their other clones, worktrees and
+    cloud sessions. The committed file names the Workspaces, never a Connector.
+  - Joining needs access to every recorded Workspace, in the same organization;
+    someone may need to add them first. Nothing is created unless all of them
+    are reachable. Codex turns count from when that checkout joined.
+  - A pulled change to the Workspaces, adding or removing one, stops capture in
+    each checkout until someone there confirms it. So does another person
+    signing in on the same machine. Each new worktree and cloud checkout joins
+    the same way.
   - API-key configs hold the key, so connect keeps them out of Git and refuses
     to write a key into a config Git already tracks.
-  - Everyone sharing a config needs plugin 0.11.0 or newer. If you already
-    reconnected with a pre-release build from `main`, run connect once more; it
-    only asks you to confirm your Workspaces.
+  - Everyone sharing a config needs plugin 0.11.0 or newer; older versions
+    cannot read it. If you already reconnected with a pre-release build from
+    `main`, run connect once more: it asks you to confirm your Workspaces and
+    reuses your Connectors.
 - **Cloud sessions are recognized.** Connect notices a session whose machine is
   discarded when it ends, such as a Claude Code or Codex cloud session, and says
   before sign-in that the sign-in lasts only for that session. In such a session
   it refuses to connect a folder that is not in a Git repository, because the
   connection could not outlast the session. That is the Cowork cloud case: use a
-  local Cowork session instead. Session start stays quiet there rather than
+  local Cowork session instead, which Team and Enterprise plans keep; from
+  October 6, 2026, new Pro and Max Cowork tasks run only in the cloud, where
+  Augenta cannot capture them. Session start stays quiet there rather than
   asking every session. `AUGENTA_EPHEMERAL=1` or `0` overrides the detection.
   README's new Cloud sessions section says what runs where.
 
