@@ -133,6 +133,10 @@ function loadProjectConfig(projectRoot) {
         settings[key] = raw.trim().replace(/\/+$/, "");
       }
     }
+    if (value.autoRecall !== undefined && typeof value.autoRecall !== "boolean")
+      return;
+    if (typeof value.autoRecall === "boolean")
+      settings.autoRecall = value.autoRecall;
     if (value.org !== undefined) {
       if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
         return;
@@ -584,7 +588,7 @@ function detectedHarness(explicit, env = process.env) {
 }
 
 // scripts/connect.ts
-import { chmodSync as chmodSync3, existsSync as existsSync6, writeFileSync as writeFileSync5 } from "node:fs";
+import { chmodSync as chmodSync3, existsSync as existsSync6, readFileSync as readFileSync5, renameSync as renameSync4, rmSync, writeFileSync as writeFileSync5 } from "node:fs";
 import { basename, join as join7 } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -1148,6 +1152,12 @@ function parseArgs(argv) {
       args.health = true;
     } else if (flag === "--repair-harness") {
       args.repairHarness = true;
+    } else if (flag === "--auto-recall") {
+      const value = valueFor(flag, i++);
+      if (value !== "on" && value !== "off") {
+        throw new Error("--auto-recall must be on or off");
+      }
+      args.autoRecall = value === "on";
     } else if (flag === "--probe") {
       args.probe = true;
     } else if (flag === "--login") {
@@ -1190,6 +1200,7 @@ function writeOAuthConfig(projectRoot, connection) {
     discoveredGateway: connection.discoveredGateway,
     org: { id: connection.org.id, name: connection.org.name },
     destinations: connection.destinations.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+    autoRecall: connection.autoRecall ?? false,
     ingestUrl: connection.ingestUrl
   }, null, 2)}
 `, { mode: 384 });
@@ -1214,6 +1225,22 @@ async function choose(prompt, values, label) {
       throw new Error(`invalid selection: ${answer.trim() || "(empty)"}`);
     }
     return selected;
+  } finally {
+    rl.close();
+  }
+}
+async function askAutoRecall(current) {
+  if (!input.isTTY) {
+    throw new Error("run augenta:connect in an interactive terminal");
+  }
+  const fallback = current ?? false;
+  console.log("Automatic recall looks up what these Workspaces remember about each prompt you submit, and hands any match to your agent. Your agent can still ask with /augenta:recall either way.");
+  const rl = createInterface({ input, output });
+  try {
+    const answer = (await rl.question(`Turn on automatic recall for this project? [${fallback ? "Y/n" : "y/N"}]: `)).trim().toLowerCase();
+    if (!answer)
+      return fallback;
+    return answer === "y" || answer === "yes";
   } finally {
     rl.close();
   }
@@ -1469,12 +1496,14 @@ async function establishConnectors(projectRoot, args, profileId, gateway, connec
   });
   if (verifiedIds.length === 0)
     return { results, removed, unresolvedConnectorIds };
+  const previous = loadProjectConfig(projectRoot);
   const configPath2 = writeOAuthConfig(projectRoot, {
     profileId,
     ...connection,
     endpoint: gateway,
     destinations: results.filter((result) => Boolean(result.connectorId)).map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
-    ingestUrl: loadProjectConfig(projectRoot)?.ingestUrl
+    autoRecall: args.autoRecall ?? previous?.autoRecall ?? false,
+    ingestUrl: previous?.ingestUrl
   });
   try {
     const freshKeys = results.filter((result) => result.action === "created" && result.connectorId).map((result) => result.connectorId);
@@ -1503,7 +1532,8 @@ async function connectProject(projectRoot, args) {
   if (workspaces.length === 0) {
     throw new Error("choose at least one Workspace");
   }
-  const { results, removed, unresolvedConnectorIds, configPath: written } = await establishConnectors(projectRoot, args, selected.profileId, gateway, { controlUrl: control, org: selected.me.org, discoveredGateway }, workspaces, priorIds, available, resolvedPrior);
+  const autoRecall = args.autoRecall ?? await askAutoRecall(loadProjectConfig(projectRoot)?.autoRecall);
+  const { results, removed, unresolvedConnectorIds, configPath: written } = await establishConnectors(projectRoot, { ...args, autoRecall }, selected.profileId, gateway, { controlUrl: control, org: selected.me.org, discoveredGateway }, workspaces, priorIds, available, resolvedPrior);
   const live = results.filter((result) => result.connectorId);
   const failed = results.filter((result) => !result.connectorId);
   if (live.length > 0) {
@@ -1511,6 +1541,7 @@ async function connectProject(projectRoot, args) {
     if (live.length > 1) {
       console.log("Each of those receives the full record, so the audience is the union of everyone with access to any of them.");
     }
+    console.log(`Automatic recall is ${autoRecall ? "on" : "off"} for this project.`);
   } else {
     console.log("No destination could be linked. No config was written.");
   }
@@ -1768,12 +1799,16 @@ async function connectToWorkspaces(resolved, args) {
     ...unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {},
     organization: picked.me.org.name,
     ...environmentChange(prior, args),
+    autoRecall: loadProjectConfig(resolved.projectRoot)?.autoRecall ? "on" : "off",
     configPath: configPath2
   };
 }
 function environmentChange(cfg, args) {
   const next = controlUrl(cfg, args.controlUrl);
   return cfg?.controlUrl && cfg.controlUrl !== next ? { environmentChange: { from: environmentLabel(cfg.controlUrl), to: environmentLabel(next) } } : {};
+}
+function autoRecallSetting(cfg) {
+  return cfg.autoRecall === undefined ? "on_by_default" : cfg.autoRecall ? "on" : "off";
 }
 function savedConnection(cfg) {
   if (!cfg)
@@ -1782,7 +1817,8 @@ function savedConnection(cfg) {
     authMode: cfg.authMode,
     environment: environmentLabel(cfg.controlUrl),
     organization: cfg.org?.name ?? cfg.org?.id,
-    destinations: cfg.destinations ?? []
+    destinations: cfg.destinations ?? [],
+    autoRecall: autoRecallSetting(cfg)
   };
 }
 async function runJsonVerb(resolved, args) {
@@ -1839,14 +1875,36 @@ async function repairHarness(projectRoot, args) {
     failed
   };
 }
+function setAutoRecall(projectRoot, autoRecall) {
+  if (!loadProjectConfig(projectRoot)) {
+    return {
+      status: "error",
+      code: "not_connected",
+      message: "this project has no readable connection; connect it first, then change automatic recall"
+    };
+  }
+  const path = configPath(projectRoot);
+  const raw = JSON.parse(readFileSync5(path, "utf8"));
+  raw.autoRecall = autoRecall;
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync5(tmp, `${JSON.stringify(raw, null, 2)}
+`, { mode: 384 });
+    renameSync4(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+  chmodSync3(path, 384);
+  return { status: "auto_recall_updated", autoRecall: autoRecall ? "on" : "off" };
+}
 async function dispatchJsonVerb(resolved, args) {
   if (args.repairHarness) {
-    if (args.health || args.probe || args.login || args.awaitLogin || args.verifyOnly || args.workspaces !== undefined || args.createWorkspace !== undefined || args.apiKey || args.endpoint || args.controlUrl || args.profile) {
+    if (args.health || args.probe || args.login || args.awaitLogin || args.verifyOnly || args.workspaces !== undefined || args.createWorkspace !== undefined || args.apiKey || args.endpoint || args.controlUrl || args.profile || args.autoRecall !== undefined) {
       return { status: "error", code: "conflicting_verbs", message: "--repair-harness uses the saved project connection; combine it only with --json, --project and --harness" };
     }
     return repairHarness(resolved.projectRoot, args);
   }
-  if (args.health && (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe)) {
+  if (args.health && (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe || args.autoRecall !== undefined)) {
     return { status: "error", code: "conflicting_verbs", message: "--health is a local read-only operation; run it by itself with --json" };
   }
   if (args.apiKey) {
@@ -1862,6 +1920,16 @@ async function dispatchJsonVerb(resolved, args) {
       code: "conflicting_verbs",
       message: "--create-workspace and --workspace are separate steps; create first, then ask for the complete destination set again and pass it with --workspace"
     };
+  }
+  if (args.autoRecall !== undefined && !args.workspaces?.length) {
+    if (args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe || args.verifyOnly || args.endpoint || args.controlUrl || args.profile) {
+      return {
+        status: "error",
+        code: "conflicting_verbs",
+        message: "--auto-recall changes only this project's setting; run it alone with --json, or pass it with --workspace while connecting"
+      };
+    }
+    return setAutoRecall(resolved.projectRoot, args.autoRecall);
   }
   if (args.createWorkspace !== undefined) {
     return createWorkspaceForSelection(resolved, args);
@@ -1879,7 +1947,7 @@ async function dispatchJsonVerb(resolved, args) {
   return {
     status: "error",
     code: "no_verb",
-    message: "--json requires one of --probe, --login, --await-login, --create-workspace <name>, or --workspace <id> (repeatable)"
+    message: "--json requires one of --probe, --login, --await-login, --create-workspace <name>, --workspace <id> (repeatable), or --auto-recall on|off"
   };
 }
 async function verifyApiKeyConnection(apiKey, gateway) {

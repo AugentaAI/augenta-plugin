@@ -320,7 +320,7 @@ describe("the connect skill drives connect itself", () => {
   test("drives every JSON verb the CLI exposes", () => {
     // Word-boundary, not substring: a renamed `--workspaces` would satisfy
     // `toContain("--workspace")` VACUOUSLY while the CLI verb no longer exists.
-    for (const verb of ["--json", "--probe", "--login", "--await-login", "--create-workspace", "--workspace", "--profile"]) {
+    for (const verb of ["--json", "--probe", "--login", "--await-login", "--create-workspace", "--workspace", "--profile", "--auto-recall"]) {
       expect(skill).toMatch(new RegExp(`${verb}(?![\\w-])`));
     }
   });
@@ -684,6 +684,22 @@ describe("the recall skill drives recall itself", () => {
     expect(readme).toContain("AUGENTA_AUTO_RECALL=0");
     const connect = readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8").replace(/\s+/g, " ");
     expect(connect).toMatch(/each prompt they submit is also asked of those Workspaces/);
+  });
+
+  test("automatic recall is the project's own answer, Off by default, and never gates /augenta:recall", () => {
+    /* The owner's decision: connect asks, with Off pre-selected, and records the
+       answer; a config that predates the question keeps running. The gate lives
+       in the hook only (the shared request layer must stay ungated, above), and
+       the explicit skill must keep working whichever way it was answered. */
+    const hook = readFileSync(join(PLUGIN_ROOT, "hooks", "auto-recall.ts"), "utf8");
+    expect(hook).toContain("cfg.autoRecall === false");
+    const connect = readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8").replace(/\s+/g, " ");
+    expect(connect).toMatch(/\*\*Off, pre-selected\*\*/);
+    expect(connect).toMatch(/either way you can still run `\/augenta:recall` yourself/);
+    expect(connect).toMatch(/Always pass `--auto-recall`/);
+    expect(connect).toContain("## Change only automatic recall");
+    const recall = readFileSync(join(SKILLS_DIR, "recall", "SKILL.md"), "utf8").replace(/\s+/g, " ");
+    expect(recall).toMatch(/when the project turned it off at connect; asking with this skill still works/);
   });
 });
 

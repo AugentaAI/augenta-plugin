@@ -59,6 +59,13 @@ export interface ProjectConfig {
   apiKey?: string;
   endpoint?: string;
   discoveredGateway?: string;
+  /**
+   * Whether the prompt hook asks this project's Workspaces about each prompt.
+   * Connect records the user's answer explicitly. Absent means a config written
+   * before the question existed, which keeps the behaviour it was connected
+   * with (on); only `false` turns it off. The env switches still win.
+   */
+  autoRecall?: boolean;
   projectRoot: string;
 }
 
@@ -107,6 +114,7 @@ export function loadProjectConfig(
       discoveredGateway?: unknown;
       controlUrl?: unknown;
       ingestUrl?: unknown;
+      autoRecall?: unknown;
       org?: { id?: unknown; name?: unknown };
     };
     if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince)))) return undefined;
@@ -120,6 +128,8 @@ export function loadProjectConfig(
         settings[key] = raw.trim().replace(/\/+$/, "");
       }
     }
+    if (value.autoRecall !== undefined && typeof value.autoRecall !== "boolean") return undefined;
+    if (typeof value.autoRecall === "boolean") settings.autoRecall = value.autoRecall;
     if (value.org !== undefined) {
       if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim()) return undefined;
       if (value.org.name !== undefined && typeof value.org.name !== "string") return undefined;

@@ -3,7 +3,7 @@
  *
  * Two front ends over the same core. A human running this in a terminal gets the
  * interactive prompts. An agent runs the `--json` verbs — `--probe`, `--login`,
- * `--await-login`, `--create-workspace`, `--workspace` — each of which returns
+ * `--await-login`, `--create-workspace`, `--workspace`, `--auto-recall` — each of which returns
  * one JSON object and exits, so the sign-in link reaches the user in a bounded
  * call instead of after a poll loop nobody can see. No verb accepts or emits a
  * credential: tokens go browser → `~/.augenta/auth.json`, and `--api-key` stays
@@ -18,7 +18,7 @@
  */
 import { captureHealth } from "../capture/health";
 import { detectedHarness } from "../capture/harness";
-import { chmodSync, existsSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -30,6 +30,7 @@ import { ensureAugentaDir } from "../capture/augenta-dir";
 import {
   DEFAULT_CONTROL_URL,
   DEFAULT_GATEWAY,
+  configPath,
   controlUrl,
   gatewayBase,
   loadProjectConfig,
@@ -90,6 +91,9 @@ interface Args {
   health?: boolean;
   /** Correct only the selected Connectors' metadata; never rewrite consent. */
   repairHarness?: boolean;
+  /** The project's automatic-recall answer. With `--workspace` it is part of
+   *  the one config write; alone it changes only that setting. */
+  autoRecall?: boolean;
   login?: boolean;
   awaitLogin?: boolean;
   waitSeconds?: number;
@@ -170,6 +174,12 @@ export function parseArgs(argv: string[]): Args {
       args.health = true;
     } else if (flag === "--repair-harness") {
       args.repairHarness = true;
+    } else if (flag === "--auto-recall") {
+      const value = valueFor(flag, i++);
+      if (value !== "on" && value !== "off") {
+        throw new Error("--auto-recall must be on or off");
+      }
+      args.autoRecall = value === "on";
     } else if (flag === "--probe") {
       args.probe = true;
     } else if (flag === "--login") {
@@ -232,6 +242,9 @@ export function writeOAuthConfig(
     org: Organization;
     destinations: readonly Destination[];
     ingestUrl?: string;
+    /** Always written explicitly; `false` when the caller has no answer, which
+     *  is the question's default. */
+    autoRecall?: boolean;
   },
 ): string {
   if (connection.destinations.length === 0) {
@@ -251,6 +264,7 @@ export function writeOAuthConfig(
         discoveredGateway: connection.discoveredGateway,
         org: { id: connection.org.id, name: connection.org.name },
         destinations: connection.destinations.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+        autoRecall: connection.autoRecall ?? false,
         ingestUrl: connection.ingestUrl,
       },
       null,
@@ -290,6 +304,30 @@ async function choose<T>(
       throw new Error(`invalid selection: ${answer.trim() || "(empty)"}`);
     }
     return selected;
+  } finally {
+    rl.close();
+  }
+}
+
+/**
+ * The automatic-recall question. An empty answer keeps the project's current
+ * explicit choice, and otherwise means off, which is the question's default.
+ */
+async function askAutoRecall(current: boolean | undefined): Promise<boolean> {
+  if (!input.isTTY) {
+    throw new Error("run augenta:connect in an interactive terminal");
+  }
+  const fallback = current ?? false;
+  console.log(
+    "Automatic recall looks up what these Workspaces remember about each prompt you submit, and hands any match to your agent. Your agent can still ask with /augenta:recall either way.",
+  );
+  const rl = createInterface({ input, output });
+  try {
+    const answer = (
+      await rl.question(`Turn on automatic recall for this project? [${fallback ? "Y/n" : "y/N"}]: `)
+    ).trim().toLowerCase();
+    if (!answer) return fallback;
+    return answer === "y" || answer === "yes";
   } finally {
     rl.close();
   }
@@ -836,6 +874,7 @@ async function establishConnectors(
     });
 
   if (verifiedIds.length === 0) return { results, removed, unresolvedConnectorIds };
+  const previous = loadProjectConfig(projectRoot);
   const configPath = writeOAuthConfig(projectRoot, {
     profileId,
     ...connection,
@@ -843,7 +882,10 @@ async function establishConnectors(
     destinations: results
       .filter((result): result is DestinationResult & { connectorId: string } => Boolean(result.connectorId))
       .map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
-    ingestUrl: loadProjectConfig(projectRoot)?.ingestUrl,
+    // The answer given now, else the project's previous explicit answer. A
+    // config that never recorded one gets the question's default, off.
+    autoRecall: args.autoRecall ?? previous?.autoRecall ?? false,
+    ingestUrl: previous?.ingestUrl,
   });
   // Stamp the outbox's destination map here, while we still know which links were
   // just CREATED. A newly added Workspace must not inherit the pending tail a
@@ -902,11 +944,12 @@ export async function connectProject(
   if (workspaces.length === 0) {
     throw new Error("choose at least one Workspace");
   }
+  const autoRecall = args.autoRecall ?? (await askAutoRecall(loadProjectConfig(projectRoot)?.autoRecall));
 
   const { results, removed, unresolvedConnectorIds, configPath: written } =
     await establishConnectors(
       projectRoot,
-      args,
+      { ...args, autoRecall },
       selected.profileId,
       gateway,
       { controlUrl: control, org: selected.me.org, discoveredGateway },
@@ -928,6 +971,7 @@ export async function connectProject(
         "Each of those receives the full record, so the audience is the union of everyone with access to any of them.",
       );
     }
+    console.log(`Automatic recall is ${autoRecall ? "on" : "off"} for this project.`);
   } else {
     console.log("No destination could be linked. No config was written.");
   }
@@ -1348,6 +1392,7 @@ export async function connectToWorkspaces(
     ...(unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {}),
     organization: picked.me.org.name,
     ...environmentChange(prior, args),
+    autoRecall: loadProjectConfig(resolved.projectRoot)?.autoRecall ? "on" : "off",
     configPath,
   };
 }
@@ -1359,6 +1404,12 @@ function environmentChange(cfg: ProjectConfig | undefined, args: Args): { enviro
     : {};
 }
 
+/** How the project answered the automatic-recall question. `on_by_default` is a
+ *  config written before connect asked: it still runs, but nobody chose it. */
+function autoRecallSetting(cfg: ProjectConfig): "on" | "off" | "on_by_default" {
+  return cfg.autoRecall === undefined ? "on_by_default" : cfg.autoRecall ? "on" : "off";
+}
+
 function savedConnection(cfg: ProjectConfig | undefined) {
   if (!cfg) return undefined;
   return {
@@ -1366,6 +1417,7 @@ function savedConnection(cfg: ProjectConfig | undefined) {
     environment: environmentLabel(cfg.controlUrl),
     organization: cfg.org?.name ?? cfg.org?.id,
     destinations: cfg.destinations ?? [],
+    autoRecall: autoRecallSetting(cfg),
   };
 }
 
@@ -1424,6 +1476,38 @@ async function repairHarness(projectRoot: string, args: Args): Promise<JsonPaylo
     harness: args.harness, repaired, failed };
 }
 
+/**
+ * Change only the project's automatic-recall answer. It neither reconnects nor
+ * touches the destinations, `captureSince` or any other field, so the Codex
+ * capture boundary and every cursor stay where they are.
+ *
+ * Patched at the JSON level and replaced atomically: a torn write here would
+ * leave a config that drops destinations the user consented to, which the
+ * whole-file writer's contract exists to prevent. Allowed for either auth mode,
+ * because the patch never reads or rewrites the credential itself.
+ */
+function setAutoRecall(projectRoot: string, autoRecall: boolean): JsonPayload {
+  if (!loadProjectConfig(projectRoot)) {
+    return {
+      status: "error",
+      code: "not_connected",
+      message: "this project has no readable connection; connect it first, then change automatic recall",
+    };
+  }
+  const path = configPath(projectRoot);
+  const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  raw.autoRecall = autoRecall;
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+  chmodSync(path, 0o600);
+  return { status: "auto_recall_updated", autoRecall: autoRecall ? "on" : "off" };
+}
+
 async function dispatchJsonVerb(
   resolved: ResolvedProject,
   args: Args,
@@ -1431,12 +1515,12 @@ async function dispatchJsonVerb(
   if (args.repairHarness) {
     if (args.health || args.probe || args.login || args.awaitLogin || args.verifyOnly ||
         args.workspaces !== undefined || args.createWorkspace !== undefined || args.apiKey ||
-        args.endpoint || args.controlUrl || args.profile) {
+        args.endpoint || args.controlUrl || args.profile || args.autoRecall !== undefined) {
       return { status: "error", code: "conflicting_verbs", message: "--repair-harness uses the saved project connection; combine it only with --json, --project and --harness" };
     }
     return repairHarness(resolved.projectRoot, args);
   }
-  if (args.health && (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe)) {
+  if (args.health && (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe || args.autoRecall !== undefined)) {
     return { status: "error", code: "conflicting_verbs", message: "--health is a local read-only operation; run it by itself with --json" };
   }
   // The platform-key path writes a secret given on the command line, so it stays
@@ -1462,6 +1546,20 @@ async function dispatchJsonVerb(
         "--create-workspace and --workspace are separate steps; create first, then ask for the complete destination set again and pass it with --workspace",
     };
   }
+  // Alone, --auto-recall changes one setting of an existing connection. With
+  // --workspace it rides along in that call's single config write instead.
+  if (args.autoRecall !== undefined && !args.workspaces?.length) {
+    if (args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe ||
+        args.verifyOnly || args.endpoint || args.controlUrl || args.profile) {
+      return {
+        status: "error",
+        code: "conflicting_verbs",
+        message:
+          "--auto-recall changes only this project's setting; run it alone with --json, or pass it with --workspace while connecting",
+      };
+    }
+    return setAutoRecall(resolved.projectRoot, args.autoRecall);
+  }
   if (args.createWorkspace !== undefined) {
     return createWorkspaceForSelection(resolved, args);
   }
@@ -1474,7 +1572,7 @@ async function dispatchJsonVerb(
     status: "error",
     code: "no_verb",
     message:
-      "--json requires one of --probe, --login, --await-login, --create-workspace <name>, or --workspace <id> (repeatable)",
+      "--json requires one of --probe, --login, --await-login, --create-workspace <name>, --workspace <id> (repeatable), or --auto-recall on|off",
   };
 }
 

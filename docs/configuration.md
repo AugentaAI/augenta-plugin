@@ -51,12 +51,15 @@ For browser sign-in, the project file looks like this:
   "org": { "id": "org_…", "name": "Example" },
   "destinations": [
     { "connectorId": "connector_…", "workspaceId": "ws-…", "workspaceName": "Platform" }
-  ]
+  ],
+  "autoRecall": false
 }
 ```
 
 `profileId` points to your saved sign-in. `destinations` lists the links and
-Workspaces you chose. It must be a non-empty array; each entry requires
+Workspaces you chose. `autoRecall` records your answer to connect's automatic
+recall question; it must be `true` or `false` if present. A config without it
+predates the question and keeps automatic recall on until you reconnect. It must be a non-empty array; each entry requires
 `connectorId` and `workspaceId`, while `workspaceName` is optional. The project
 file has no sign-in token; it records the organization and Workspaces you chose
 so the plugin can name them without asking the server. The server still decides
@@ -142,7 +145,8 @@ If your job calls the API directly, it does not need this file. Send
 | --- | --- |
 | Stop capture and recall for one project | Delete that project's `.augenta/config.json` |
 | Pause capture and automatic recall across projects, but keep the recall command | Set `AUGENTA_CAPTURE_ENABLED=0` in the environment that starts your coding app |
-| Turn off only automatic recall | Set `AUGENTA_AUTO_RECALL=0` in the environment that starts your coding app |
+| Turn automatic recall on or off for one project | Ask your agent, which runs connect with `--json --auto-recall on` or `off`; nothing else in the config changes |
+| Turn off only automatic recall, for every project | Set `AUGENTA_AUTO_RECALL=0` in the environment that starts your coding app |
 | Resume paused capture or automatic recall | Remove that variable and restart the app with the new environment |
 
 Disconnecting does not erase local buffers or records already sent. Removing
@@ -158,7 +162,7 @@ a Workspace from the selected set also leaves its existing records in place.
 | A refused API key | Check the key and whether its Connector is enabled; browser connect would replace the key setup |
 | “Nothing remembered” | That Workspace may not have saved memory yet |
 | “Recall unavailable” | Recall is not available in the connected Augenta environment |
-| No automatic recall on a prompt | Nothing matched, the prompt was a command or very short, Augenta did not answer within five seconds, or the sign-in needs renewing; ask with the recall command to see why |
+| No automatic recall on a prompt | Automatic recall is off for the project, nothing matched, the prompt was a command or very short, Augenta did not answer within five seconds, or the sign-in needs renewing; ask with the recall command to see why |
 | A notice about discarded records | Those records will not be retried; check the named connection |
 
 For an unresolved problem, [report a bug](https://github.com/AugentaAI/augenta-plugin/issues).

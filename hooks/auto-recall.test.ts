@@ -180,6 +180,17 @@ describe("runAutoRecall: gated like capture, asked like recall", () => {
     expect(context).not.toContain("platform-test-key");
   });
 
+  test("a project that answered off asks nothing; one that never answered still asks", async () => {
+    writeConfig({ authMode: "api-key", apiKey: "platform-test-key", endpoint: GATEWAY, autoRecall: false });
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => memory("we chose device sign-in") });
+    expect(await run()).toBeUndefined();
+    expect(recallCalls()).toHaveLength(0);
+
+    // Absent predates the question: it keeps the behaviour it was connected with.
+    apiKeyProject();
+    expect(await run()).toStartWith(AUTO_RECALL_SENTINEL);
+  });
+
   test("a signed-in project checks its link live, then asks with the stored token and never refreshes", async () => {
     await oauthProject();
     route({ [`POST ${GATEWAY}/v1/recall`]: () => memory("remembered") });

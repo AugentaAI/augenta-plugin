@@ -171,8 +171,11 @@ with these differences:
   retried. Anything short of an answer adds nothing, and the prompt proceeds.
 - It never refreshes a sign-in itself. A stale token is renewed by the
   background sender, and the hook waits for it within the budget.
-- It runs only while capture is enabled, and `AUGENTA_AUTO_RECALL=0` turns off
-  only this path. A 429 pauses it until the server's retry time.
+- It runs only while capture is enabled and the project's `autoRecall` answer is
+  not `false`. Connect asks that question with Off pre-selected; a config from
+  before the question existed keeps it on. `AUGENTA_AUTO_RECALL=0` turns off
+  only this path, for every project. A 429 pauses it until the server's retry
+  time.
 
 The added text starts with a fixed marker. Capture drops every transcript copy
 of it, in both apps and both channels, so recalled memory is not saved again.

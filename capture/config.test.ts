@@ -107,6 +107,19 @@ describe("loadProjectConfig", () => {
     expect(experiencesUrl()).toBe(`${DEFAULT_GATEWAY}/v1/experiences`);
   });
 
+  test("autoRecall is an optional boolean; absent stays absent, anything else is unparseable", () => {
+    const base = { authMode: "api-key", apiKey: "k" };
+    writeConfig(project, { ...base, autoRecall: false });
+    expect(loadProjectConfig(project)?.autoRecall).toBe(false);
+    writeConfig(project, { ...base, autoRecall: true });
+    expect(loadProjectConfig(project)?.autoRecall).toBe(true);
+    // Absent is a config written before connect asked; it must not read as off.
+    writeConfig(project, base);
+    expect(loadProjectConfig(project)?.autoRecall).toBeUndefined();
+    writeConfig(project, { ...base, autoRecall: "off" });
+    expect(loadProjectConfig(project)).toBeUndefined();
+  });
+
   test("parses platform-key mode and optional endpoint", () => {
     writeConfig(project, { authMode: "api-key", apiKey: "key-test", endpoint: "https://gw.example.com/" });
     expect(loadProjectConfig(project)).toEqual({

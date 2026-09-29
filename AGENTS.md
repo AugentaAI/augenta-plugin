@@ -302,6 +302,13 @@ hook context. Everything above still holds; these are the additions:
   disclosure: capture already sends each prompt to these same Workspaces. What it
   adds is one stored fingerprint of the question per Workspace per prompt, and
   README, SECURITY.md and the connect skill say so.
+- **It is the project's own answer.** Connect asks whether to turn it on, with
+  Off pre-selected, in the same round as the Workspace question, and records the
+  answer as `autoRecall` in the project config. Only an explicit `false` stops
+  it: a config written before the question existed keeps the behaviour it was
+  connected with. `--auto-recall on|off` alone changes only that key, patched
+  atomically, never `captureSince` or the destinations. The answer never gates
+  the explicit recall skill, which the model may run whenever it helps.
 - **Same body, same destinations, context mode.** `{query, workspace}` only, to
   recorded destinations whose links check out live, in `?mode=context` — no
   Augenta-side model runs and no prompt reaches an external model on this path.
@@ -329,7 +336,8 @@ hook context. Everything above still holds; these are the additions:
 
 **No credential passes through the agent.** The line is what a process *handles*,
 not who starts it. The agent is the normal caller of `scripts/connect.ts --json`
-(`--probe`, `--login`, `--await-login`, `--create-workspace`, `--workspace`):
+(`--probe`, `--login`, `--await-login`, `--create-workspace`, `--workspace`,
+`--auto-recall`):
 those verbs never accept a credential as an argument
 and never emit an access token, refresh token, or device code in their payload,
 so tokens travel browser → `~/.augenta/auth.json` without touching a transcript.

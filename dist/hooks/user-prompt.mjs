@@ -133,6 +133,10 @@ function loadProjectConfig(projectRoot) {
         settings[key] = raw.trim().replace(/\/+$/, "");
       }
     }
+    if (value.autoRecall !== undefined && typeof value.autoRecall !== "boolean")
+      return;
+    if (typeof value.autoRecall === "boolean")
+      settings.autoRecall = value.autoRecall;
     if (value.org !== undefined) {
       if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
         return;
@@ -1826,6 +1830,8 @@ async function runAutoRecall(input, options = {}) {
       return;
     const cfg = projectConfig(input.cwd);
     if (!cfg || !captureEnabled(cfg))
+      return;
+    if (cfg.autoRecall === false)
       return;
     const query = autoRecallQuery(input.prompt);
     if (!query)

@@ -16,17 +16,24 @@ release a user can read.
 destinations in a new format (see Changed). Platform-key configs keep working.
 If an earlier connection from a Git worktree was redirected to the main
 checkout, also connect once from the worktree itself (see Fixed). Codex asks
-once to approve the updated prompt hook. Recall now also runs automatically on
-each prompt, from memory only with no answer model, and `/augenta:recall` asks
-for an answer by default.
+once to approve the updated prompt hook. Connect also asks whether to turn on
+automatic recall for the project, which is off unless you choose it and looks
+up memory only, with no answer model. `/augenta:recall` asks for an answer by
+default, whether automatic recall is on or off.
 
 ### Added
 
-- **Recall now runs on each prompt.** In a connected project, when you submit a
-  prompt, the plugin asks the Workspaces the project feeds what they remember
-  about it. It uses memory-only context mode, with no Augenta answer model.
-  Anything that matches reaches your agent as background it uses only when
-  relevant.
+- **Recall can run on each prompt, if you turn it on.** Connect asks whether to
+  turn on automatic recall for the project, with Off pre-selected. When it is on
+  and you submit a prompt, the plugin asks the Workspaces the project feeds what
+  they remember about it. It uses memory-only context mode, with no Augenta
+  answer model. Anything that matches reaches your agent as background it uses
+  only when relevant.
+  - Change it later without reconnecting: ask your agent to turn automatic
+    recall on or off. Nothing else about the connection changes.
+  - A project connected before connect asked keeps it on until you reconnect or
+    change it. Browser-connected projects reconnect for this release anyway, and
+    are asked then.
   - Pasted blocks and common secret patterns are removed from the prompt first.
     Commands and replies shorter than three words are skipped.
   - The lookup waits at most five seconds, including up to two retries. If
@@ -36,10 +43,10 @@ for an answer by default.
     Workspace, as any recall question does. The recalled text itself is not
     captured back.
   - Pausing capture with `AUGENTA_CAPTURE_ENABLED=0` also pauses this.
-    `AUGENTA_AUTO_RECALL=0` turns off only this. `/augenta:recall` keeps working
-    either way.
-  - No reconnect is required. Codex asks once to approve the updated prompt
-    hook, because its timeout changed.
+    `AUGENTA_AUTO_RECALL=0` turns off only this, for every project.
+    `/augenta:recall` keeps working either way.
+  - Codex asks once to approve the updated prompt hook, because its timeout
+    changed.
 
 ### Fixed
 

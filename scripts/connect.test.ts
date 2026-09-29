@@ -18,6 +18,7 @@ import {
   statSync,
   symlinkSync,
   mkdirSync,
+  readdirSync,
   realpathSync,
   writeFileSync,
 } from "node:fs";
@@ -103,6 +104,13 @@ afterEach(() => {
 });
 
 describe("parseArgs", () => {
+  test("--auto-recall takes exactly on or off", () => {
+    expect(parseArgs(["--auto-recall", "on"])).toEqual({ autoRecall: true });
+    expect(parseArgs(["--auto-recall", "off"])).toEqual({ autoRecall: false });
+    expect(() => parseArgs(["--auto-recall", "yes"])).toThrow("--auto-recall must be on or off");
+    expect(() => parseArgs(["--auto-recall", "--json"])).toThrow("--auto-recall requires a value");
+  });
+
   test("--verify-only is a boolean and takes no value", () => {
     expect(parseArgs(["--verify-only"])).toEqual({ verifyOnly: true });
     // It must not swallow the next token the way a value flag does, or
@@ -335,6 +343,8 @@ describe("project config writers", () => {
       authMode: "oauth",
       captureSince: expect.any(String),
       ...connectionRecord("profile_123", ["connector_456", "connector_789"], "https://dev.example.com"),
+      // Explicit even with no answer given: off is the question's default.
+      autoRecall: false,
     });
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(readFileSync(join(project, ".augenta", ".gitignore"), "utf8")).toBe("*\n");
@@ -1644,7 +1654,62 @@ describe("JSON verbs", () => {
         org: { id: "org_1", name: "Example Org" },
         endpoint: GATEWAY,
         discoveredGateway: GATEWAY,
+        autoRecall: false,
       });
+    expect(payload.autoRecall).toBe("off");
+  });
+
+  test("--auto-recall rides along with --workspace, and a reconnect keeps the explicit answer", async () => {
+    await signIn();
+    route();
+    const on = await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"], autoRecall: true });
+    expect(on.autoRecall).toBe("on");
+    expect(loadProjectConfig(project)?.autoRecall).toBe(true);
+
+    // No flag on the reconnect: the previous EXPLICIT answer is kept, not reset.
+    await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] });
+    expect(loadProjectConfig(project)?.autoRecall).toBe(true);
+  });
+
+  test("a config that never recorded an answer is connected with automatic recall off", async () => {
+    await signIn();
+    route();
+    await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] });
+    // Simulate a config written before the question existed.
+    const path = join(project, ".augenta", "config.json");
+    const legacy = JSON.parse(readFileSync(path, "utf8"));
+    delete legacy.autoRecall;
+    writeFileSync(path, JSON.stringify(legacy));
+    expect(loadProjectConfig(project)?.autoRecall).toBeUndefined();
+
+    await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] });
+    expect(loadProjectConfig(project)?.autoRecall).toBe(false);
+  });
+
+  test("--auto-recall alone changes that one setting and nothing else", async () => {
+    await signIn();
+    route();
+    await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] });
+    const path = join(project, ".augenta", "config.json");
+    const before = JSON.parse(readFileSync(path, "utf8"));
+
+    const payload = await runJsonVerb({ projectRoot: project }, { json: true, autoRecall: true });
+    expect(payload).toMatchObject({ status: "auto_recall_updated", autoRecall: "on" });
+    const after = JSON.parse(readFileSync(path, "utf8"));
+    // captureSince in particular: moving it would reset which Codex turns count.
+    expect(after).toEqual({ ...before, autoRecall: true });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(readdirSync(join(project, ".augenta")).filter((name) => name.includes(".tmp"))).toEqual([]);
+  });
+
+  test("--auto-recall alone needs a readable connection and refuses other verbs", async () => {
+    expect(await runJsonVerb({ projectRoot: project }, { json: true, autoRecall: false }))
+      .toMatchObject({ status: "error", code: "not_connected" });
+    expect(() => statSync(join(project, ".augenta", "config.json"))).toThrow();
+    for (const extra of [{ probe: true }, { login: true }, { createWorkspace: "x" }, { health: true }, { repairHarness: true, harness: "codex" as const }]) {
+      expect(await runJsonVerb({ projectRoot: project }, { json: true, autoRecall: false, ...extra }))
+        .toMatchObject({ status: "error", code: "conflicting_verbs" });
+    }
   });
 
   test("connecting SEVERAL Workspaces creates one Connector each", async () => {

@@ -133,6 +133,10 @@ function loadProjectConfig(projectRoot) {
         settings[key] = raw.trim().replace(/\/+$/, "");
       }
     }
+    if (value.autoRecall !== undefined && typeof value.autoRecall !== "boolean")
+      return;
+    if (typeof value.autoRecall === "boolean")
+      settings.autoRecall = value.autoRecall;
     if (value.org !== undefined) {
       if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
         return;

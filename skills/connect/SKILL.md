@@ -15,8 +15,8 @@ Connection is per project and is the user's consent boundary.
 
 You run the connect script yourself and drive it with `--json`. Each verb returns
 one JSON object and exits. The user's only jobs are answering the Workspace
-question, naming a new Workspace if they choose to create one, and, if they are
-not signed in yet, clicking one link.
+question and the automatic-recall question beside it, naming a new Workspace if
+they choose to create one, and, if they are not signed in yet, clicking one link.
 
 ## The script
 
@@ -189,9 +189,9 @@ from `signedInAs`:
   activity, its raw transcript lines, and its project memory, complete, in each;
 - so **anyone with access to any selected Workspace can read this project's
   captured activity** — the audience is the union of all of them;
-- that each prompt they submit is also asked of those Workspaces as a recall
-  question, so what they remember can be added to the conversation
-  (`AUGENTA_AUTO_RECALL=0` turns just that off);
+- that if they turn on automatic recall (asked alongside), each prompt they
+  submit is also asked of those Workspaces as a recall question, so what they
+  remember can be added to the conversation;
 - and, if `environment` is not `prod`, which environment this is.
 
 For Codex, also explain that capture starts with native turns beginning after
@@ -207,6 +207,14 @@ destinations, add `Create a new Workspace` as the final numbered option, and say
 `Reply with every number you want. Choose at least one Workspace.` A valid
 numbered selection is the user's consent: run the verb from that selection
 without asking for a second yes/no confirmation.
+
+**Ask about automatic recall in the same round**, as a second question alongside
+the Workspace question (in plain text, as a second line to answer `on` or
+`off`). It is a separate setting, not a confirmation of the selection. Offer
+**Off, pre-selected**, and On; pre-select On only when `current.autoRecall` is
+`on`. Say that On asks the selected Workspaces about every prompt they submit and
+adds what they remember to the conversation, and that **either way you can still
+run `/augenta:recall` yourself** whenever remembered context would help.
 
 An empty answer or `none` is not a valid destination set: ask again and do not
 run the verb. If the user cancels the flow, acknowledge and stop; for an already
@@ -232,11 +240,11 @@ not create the Workspace again. On `status: "error"`, report `message`; do not
 claim creation succeeded.
 
 ```bash
-node "$CONNECT" --harness <harness> --json --workspace <id> --workspace <id>
+node "$CONNECT" --harness <harness> --json --workspace <id> --workspace <id> --auto-recall <on|off>
 ```
 
 Repeat `--workspace` once per selected Workspace. Pass the `id`s, never the
-names. The arguments are exactly the entries the user selected from the list you
+names. Always pass `--auto-recall` with the user's answer to the second question. The arguments are exactly the entries the user selected from the list you
 rendered — never a destination the user did not select, and never one they
 dropped. If `--probe` returned `need_profile`, ask which organization first and
 add `--profile <profileId>`.
@@ -257,7 +265,8 @@ each of them, through that entry's `connectorId`. When there is more than one,
 restate that the full record goes to each, so the audience is the union. Name the
 environment if it is not `prod`. Restate that raw transcript records are
 structurally sanitized but **not** secret-scrubbed, and that this now applies to
-every destination you just named.
+every destination you just named. Say whether automatic recall is on or off, from
+`autoRecall`.
 
 If `removed` is non-empty, name each removed Workspace: this project **no longer
 sends** to it. Its Connector is **left in place and idle** — nothing was disabled
@@ -281,6 +290,20 @@ Mention that deleting `.augenta/config.json` or setting
 `AUGENTA_CAPTURE_ENABLED=0` disables activity and memory capture. A completed
 connection always has at least one Workspace; deleting the config is how the user
 turns capture off.
+
+## Change only automatic recall
+
+When the user asks to turn automatic recall on or off for this project, change
+just that setting. It does not reconnect or touch the destinations:
+
+```bash
+node "$CONNECT" --harness <harness> --json --auto-recall <on|off>
+```
+
+On `auto_recall_updated`, confirm the new `autoRecall` value. On `not_connected`,
+the project has no readable connection: run the connect flow instead. Setting
+`AUGENTA_AUTO_RECALL=0` in the environment that starts the coding app turns it off
+for every project. `/augenta:recall` keeps working whatever this setting is.
 
 On `status: "error"`, report `message`. `unknown_workspace` means an id did not
 match the organization's live list and **nothing was created** — re-run `--probe`
