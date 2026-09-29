@@ -38,6 +38,21 @@ describe("isCodexHarness", () => {
       else process.env.CODEX_HOME = previous;
     }
   });
+
+  test("cloud layouts: CODEX_HOME set to the home directory never claims a Claude transcript", () => {
+    const previous = process.env.CODEX_HOME;
+    try {
+      process.env.CODEX_HOME = "/root";
+      expect(isCodexHarness("/root/.claude/projects/-home-claude/d688a6fb-9a94-591f-b86c-f7c53e027035.jsonl")).toBe(false);
+      process.env.CODEX_HOME = "/opt/codex";
+      expect(isCodexHarness("/opt/codex/sessions/2026/09/29/rollout-2026-09-29T15-38-38-01a0edd1-660f-79a1-8901-385b3b2aca0a.jsonl")).toBe(true);
+      delete process.env.CODEX_HOME;
+      expect(isCodexHarness("/opt/codex/sessions/2026/09/29/rollout-2026-09-29T15-38-38-01a0edd1-660f-79a1-8901-385b3b2aca0a.jsonl")).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previous;
+    }
+  });
 });
 
 describe("sniffHarness (G9) — content fallback when the path matches neither pattern", () => {

@@ -70,6 +70,11 @@ default, whether automatic recall is on or off.
   destinations, capture baseline, cursors or history.
 - Capture health reports missing versus invalid configuration and labels its
   activity as project-wide. Local activity alone does not verify host dispatch.
+- Cloud layouts: a Claude Code transcript under `/root/.claude/projects/` is no
+  longer mistaken for Codex when `CODEX_HOME` is the home directory itself. Codex
+  project memory is found under a non-default Codex home such as `/opt/codex`
+  even when the hook's environment does not set `CODEX_HOME`: the plugin reads
+  it from the session's own rollout path.
 - In a project that is not connected yet, a `claude -p` run no longer starts
   with an extra `/augenta:connect` turn ahead of your own prompt. Interactive
   sessions are unchanged: Claude still brings up connecting at your first

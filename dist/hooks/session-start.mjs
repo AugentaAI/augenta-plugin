@@ -586,6 +586,8 @@ function isCodexHarness(transcriptPath) {
   if (!transcriptPath)
     return false;
   const p = transcriptPath.replace(/\\/g, "/");
+  if (/\/\.claude\/projects\//.test(p))
+    return false;
   const configuredHome = process.env.CODEX_HOME?.replace(/\\/g, "/").replace(/\/+$/, "");
   return /\/\.codex\//.test(p) || /\/rollout-[^/]*\.jsonl$/i.test(p) || Boolean(configuredHome && (p === configuredHome || p.startsWith(configuredHome + "/")));
 }
@@ -1435,8 +1437,14 @@ function parseCodexTaskGroups(text, projectRoot) {
   }
   return documents;
 }
-function scanCodexMemory(projectRoot, codexHome) {
-  const root = codexHome ?? process.env.CODEX_HOME ?? join8(homedir2(), ".codex");
+function codexHomeFromRollout(transcriptPath) {
+  if (!transcriptPath)
+    return;
+  const match = /^(.+)[\\/]sessions[\\/]\d{4}[\\/]\d{2}[\\/]\d{2}[\\/]rollout-[^\\/]*\.jsonl$/i.exec(transcriptPath);
+  return match?.[1];
+}
+function scanCodexMemory(projectRoot, codexHome, transcriptPath) {
+  const root = codexHome ?? process.env.CODEX_HOME ?? codexHomeFromRollout(transcriptPath) ?? join8(homedir2(), ".codex");
   const path = join8(root, "memories", "MEMORY.md");
   try {
     if (!existsSync7(path))
@@ -1559,7 +1567,7 @@ function makeTombstone(source, projectRoot, previous, capturedAt) {
   };
 }
 function captureAgentMemory(opts) {
-  const scan = opts.harness === "codex" ? scanCodexMemory(opts.projectRoot, opts.codexHome) : scanClaudeMemory(opts.transcriptPath);
+  const scan = opts.harness === "codex" ? scanCodexMemory(opts.projectRoot, opts.codexHome, opts.transcriptPath) : scanClaudeMemory(opts.transcriptPath);
   const empty = { spooled: 0, changed: 0, tombstones: 0, complete: scan.complete };
   if (scan.documents.length === 0 && !scan.complete)
     return empty;
