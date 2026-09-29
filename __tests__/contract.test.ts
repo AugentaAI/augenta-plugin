@@ -1408,5 +1408,9 @@ describe("the committed dist/ is reproducible", () => {
     // an exact match also rejects a range, which would let the lockfile move it.
     const packageJson = JSON.parse(readFileSync(join(PLUGIN_ROOT, "package.json"), "utf8"));
     expect(packageJson.devDependencies?.bun, "the bun devDependency does not match .bun-version").toBe(pinnedBun);
+    // Its binary comes from a postinstall script. Without an explicit trust
+    // entry that runs only while Bun's built-in allowlist happens to include
+    // `bun`, and a skipped script leaves node_modules/.bin/bun a placeholder.
+    expect(packageJson.trustedDependencies, "the bun devDependency's postinstall is not trusted").toContain("bun");
   });
 });

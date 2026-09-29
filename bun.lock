@@ -20,6 +20,9 @@
       },
     },
   },
+  "trustedDependencies": [
+    "bun",
+  ],
   "packages": {
     "@opentelemetry/api": ["@opentelemetry/api@1.9.1", "", {}, "sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q=="],
 
