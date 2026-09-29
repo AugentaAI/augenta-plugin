@@ -81,7 +81,7 @@ import {
   chmodSync as chmodSync2,
   existsSync as existsSync2,
   mkdirSync as mkdirSync2,
-  readFileSync,
+  readFileSync as readFileSync2,
   renameSync,
   statSync,
   unlinkSync,
@@ -93,7 +93,13 @@ import { join as join2 } from "node:path";
 
 // capture/augenta-dir.ts
 import { join } from "node:path";
-import { chmodSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+var LOCAL_IGNORE = `*
+`;
+var SHARED_IGNORE = `*
+!/.gitignore
+!/config.json
+`;
 function ensureAugentaDir(projectRoot) {
   const dir = join(projectRoot, ".augenta");
   try {
@@ -103,10 +109,19 @@ function ensureAugentaDir(projectRoot) {
     } catch {}
     const ignore = join(dir, ".gitignore");
     if (!existsSync(ignore))
-      writeFileSync(ignore, `*
-`);
+      writeFileSync(ignore, LOCAL_IGNORE);
   } catch {}
   return dir;
+}
+function setAugentaIgnore(projectRoot, form) {
+  const path = join(ensureAugentaDir(projectRoot), ".gitignore");
+  const wanted = form === "shared" ? SHARED_IGNORE : LOCAL_IGNORE;
+  try {
+    const current = readFileSync(path, "utf8");
+    if (current === wanted || current !== LOCAL_IGNORE && current !== SHARED_IGNORE)
+      return;
+    writeFileSync(path, wanted);
+  } catch {}
 }
 
 // capture/auth.ts
@@ -133,7 +148,7 @@ function readAuthStore() {
     ensureAuthRoot();
     if (existsSync2(authPath()))
       chmodSync2(authPath(), 384);
-    const parsed = JSON.parse(readFileSync(authPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
       return { version: 1, profiles: {} };
     }
@@ -250,7 +265,7 @@ function savePendingLogin(pending) {
 }
 function readPendingLogin() {
   try {
-    const parsed = JSON.parse(readFileSync(pendingLoginPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(pendingLoginPath(), "utf8"));
     if (typeof parsed.deviceCode !== "string" || typeof parsed.clientId !== "string" || typeof parsed.issuer !== "string" || typeof parsed.expiresAt !== "number" || parsed.expiresAt <= Date.now()) {
       return;
     }
@@ -428,9 +443,12 @@ function storedProfileUpdatedAt(profileId) {
   const ms = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN;
   return Number.isFinite(ms) ? ms : undefined;
 }
+function hasStoredProfile(profileId) {
+  return storedProfile(profileId) !== undefined;
+}
 function storedProfile(profileId) {
   try {
-    const parsed = JSON.parse(readFileSync(authPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object")
       return;
     return Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
@@ -489,13 +507,55 @@ function takeAuthNotice(projectRoot) {
 }
 
 // capture/config.ts
-import { readFileSync as readFileSync2 } from "node:fs";
-import { join as join4 } from "node:path";
+import { readFileSync as readFileSync4 } from "node:fs";
+import { join as join5 } from "node:path";
+
+// capture/adoption.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
+function adoptionPath(projectRoot) {
+  return join3(projectRoot, ".augenta", "state", "adopted.json");
+}
+function readAdoption(projectRoot) {
+  try {
+    const value = JSON.parse(readFileSync3(adoptionPath(projectRoot), "utf8"));
+    if (typeof value.profileId !== "string" || !value.profileId)
+      return;
+    if (!Array.isArray(value.connectorIds) || !value.connectorIds.every((id) => typeof id === "string" && id.length > 0))
+      return;
+    if (typeof value.adoptedAt !== "string" || !Number.isFinite(Date.parse(value.adoptedAt)))
+      return;
+    return {
+      profileId: value.profileId,
+      connectorIds: [...value.connectorIds],
+      adoptedAt: new Date(value.adoptedAt).toISOString()
+    };
+  } catch {
+    return;
+  }
+}
+function writeAdoption(projectRoot, adoption) {
+  const dir = join3(ensureAugentaDir(projectRoot), "state");
+  mkdirSync3(dir, { recursive: true });
+  const path = join3(dir, "adopted.json");
+  const tmp = `${path}.${randomUUID2()}.tmp`;
+  try {
+    writeFileSync3(tmp, JSON.stringify(adoption), { mode: 384 });
+    renameSync2(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+function adoptionCovers(projectRoot, profileId, connectorIds) {
+  const adoption = readAdoption(projectRoot);
+  return Boolean(adoption && adoption.profileId === profileId && connectorIds.every((id) => adoption.connectorIds.includes(id)));
+}
 
 // capture/project.ts
 import { execFileSync } from "node:child_process";
 import { existsSync as existsSync3, realpathSync as realpathSync2 } from "node:fs";
-import { dirname, join as join3, resolve as resolve2 } from "node:path";
+import { dirname, join as join4, resolve as resolve2 } from "node:path";
 function gitRevParse(cwd, arg) {
   try {
     const value = execFileSync("git", ["rev-parse", arg], {
@@ -505,6 +565,17 @@ function gitRevParse(cwd, arg) {
     return value || undefined;
   } catch {
     return;
+  }
+}
+function isTrackedByGit(projectRoot, relativePath) {
+  try {
+    execFileSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
+      cwd: projectRoot,
+      stdio: "ignore"
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 function resolveProjectRoot(cwd) {
@@ -517,9 +588,9 @@ function resolveProjectRoot(cwd) {
     return;
   }
   while (true) {
-    if (existsSync3(join3(dir, ".augenta", "config.json")))
+    if (existsSync3(join4(dir, ".augenta", "config.json")))
       return dir;
-    if (existsSync3(join3(dir, ".git")))
+    if (existsSync3(join4(dir, ".git")))
       return;
     const parent = dirname(dir);
     if (parent === dir)
@@ -566,11 +637,11 @@ function parseDestinations(raw) {
   return destinations;
 }
 function configPath(projectRoot) {
-  return join4(projectRoot, ".augenta", "config.json");
+  return join5(projectRoot, ".augenta", "config.json");
 }
 function loadProjectConfig(projectRoot) {
   try {
-    const value = JSON.parse(readFileSync2(configPath(projectRoot), "utf8"));
+    const value = JSON.parse(readFileSync4(configPath(projectRoot), "utf8"));
     if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
       return;
     const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
@@ -647,10 +718,31 @@ function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
   return value === "0" || value === "false";
 }
+function captureGate(cfg) {
+  if (captureKilled())
+    return "killed";
+  if (cfg.authMode !== "oauth")
+    return cfg.apiKey ? "live" : "signed_out";
+  if (!cfg.profileId || !cfg.connectorIds?.length)
+    return "not_adopted";
+  if (!hasStoredProfile(cfg.profileId))
+    return "signed_out";
+  if (!adoptionCovers(cfg.projectRoot, cfg.profileId, cfg.connectorIds))
+    return "not_adopted";
+  return "live";
+}
 function captureEnabled(cfg) {
-  if (!cfg || captureKilled())
-    return false;
-  return cfg.authMode === "oauth" ? Boolean(cfg.profileId) && (cfg.connectorIds?.length ?? 0) > 0 : Boolean(cfg.apiKey);
+  return Boolean(cfg) && captureGate(cfg) === "live";
+}
+function effectiveCaptureSince(cfg) {
+  if (cfg.authMode !== "oauth")
+    return cfg.captureSince;
+  const adoptedAt = readAdoption(cfg.projectRoot)?.adoptedAt;
+  if (!adoptedAt)
+    return cfg.captureSince;
+  if (!cfg.captureSince)
+    return adoptedAt;
+  return Date.parse(adoptedAt) > Date.parse(cfg.captureSince) ? adoptedAt : cfg.captureSince;
 }
 
 // capture/platform.ts
@@ -728,7 +820,7 @@ function describeError(error) {
 }
 
 // capture/recall-client.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID3 } from "node:crypto";
 var MAX_QUERY_CHARS = 4096;
 var MIN_ATTEMPT_MS = 200;
 var RETRY_BACKOFF_MS = [150, 300];
@@ -902,7 +994,7 @@ async function askOnce(ctx, destination) {
     return { outcome: outOfTime(), transient: false };
   const headers = {
     "content-type": "application/json",
-    "idempotency-key": randomUUID2()
+    "idempotency-key": randomUUID3()
   };
   const body = JSON.stringify(destination.workspaceId ? { query: ctx.query, workspace: destination.workspaceId } : { query: ctx.query });
   try {

@@ -160,10 +160,11 @@ dev with no variable set at runtime. Both are recorded in the config.
 
 | Path | Written by | Reset effect |
 | --- | --- | --- |
-| `~/.augenta/auth.json` | completed sign-in | removes every stored profile; all connected projects need a fresh sign-in |
+| `~/.augenta/auth.json` | completed sign-in | removes every stored profile; browser-connected projects stop capturing until you sign in again, and session start says so |
 | `~/.augenta/pending-login.json` | `--login` | abandons an in-flight grant |
-| `~/.augenta/state/connect-prompted.json` | SessionStart | the one-time connect offer fires again for that project |
-| `<project>/.augenta/config.json` | connect | disconnects the project from all destinations; capture returns to a silent no-op |
+| `~/.augenta/state/connect-prompted.json` | SessionStart | the one-time connect offer, and the join notice for a connected checkout that is not capturing, fire again |
+| `<project>/.augenta/config.json` | connect | disconnects the project from all destinations; capture returns to a silent no-op. If it is committed, the next pull brings it back |
+| `<project>/.augenta/state/adopted.json` | connect (`--workspace`, `--adopt`) | this checkout stops capturing until it joins again; the config and its destinations are untouched |
 
 A stale `pending-login.json` from another environment is self-healing: the next
 `--await-login` recognizes the foreign issuer, clears it, and asks for a fresh
@@ -173,8 +174,9 @@ Two different variables relocate the two global roots, and an isolated sandbox
 needs **both**:
 
 - `AUGENTA_AUTH_HOME` → `auth.json`, `auth.lock`, `pending-login.json`
-  (`capture/auth.ts:79`)
-- `AUGENTA_HOME` → `state/connect-prompted.json` (`hooks/session-start.ts:109`)
+  (`authRoot` in `capture/auth.ts`). The capture gate reads the sign-in here too,
+  so a test that writes a browser config must point this at a temporary directory.
+- `AUGENTA_HOME` → `state/connect-prompted.json` (`home` in `hooks/session-start.ts`)
 
 Setting only one leaves half your state in the real `~/.augenta`, which reads as
 a bug in whichever half you were not watching.

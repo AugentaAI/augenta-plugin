@@ -320,7 +320,7 @@ describe("the connect skill drives connect itself", () => {
   test("drives every JSON verb the CLI exposes", () => {
     // Word-boundary, not substring: a renamed `--workspaces` would satisfy
     // `toContain("--workspace")` VACUOUSLY while the CLI verb no longer exists.
-    for (const verb of ["--json", "--probe", "--login", "--await-login", "--create-workspace", "--workspace", "--profile", "--auto-recall"]) {
+    for (const verb of ["--json", "--probe", "--login", "--await-login", "--create-workspace", "--workspace", "--profile", "--auto-recall", "--adopt"]) {
       expect(skill).toMatch(new RegExp(`${verb}(?![\\w-])`));
     }
   });
@@ -684,6 +684,24 @@ describe("the recall skill drives recall itself", () => {
     expect(readme).toContain("AUGENTA_AUTO_RECALL=0");
     const connect = readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8").replace(/\s+/g, " ");
     expect(connect).toMatch(/each prompt they submit is also asked of those Workspaces/);
+  });
+
+  test("a committed config is joined per checkout, with the full disclosure and one answer", () => {
+    /* The owner's decision: a browser config may travel with the repo, and a
+       checkout captures only after its own user joins it through connect. The
+       joining question is consent, so it carries the same disclosure as the
+       Workspace question and must not grow a second yes/no. */
+    const connect = readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8").replace(/\s+/g, " ");
+    expect(connect).toContain("### If this checkout has not joined the recorded connection");
+    expect(connect).toMatch(/receives the \*\*full record\*\*.*the audience is the \*\*union\*\*/);
+    expect(connect).toMatch(/Choosing to use the recorded set is this checkout's consent, so do not ask a second yes\/no/);
+    expect(connect).toMatch(/git tracks the config, so the new selection changes the destinations for everyone who pulls it/);
+    const agents = readFileSync(join(PLUGIN_ROOT, "AGENTS.md"), "utf8").replace(/\s+/g, " ");
+    expect(agents).toMatch(/A committed config is the project's recorded decision; each checkout joins it/);
+    expect(agents).toMatch(/An API-key config holds its key and is never committable/);
+    const gate = readFileSync(join(PLUGIN_ROOT, "capture", "config.ts"), "utf8");
+    expect(gate).toMatch(/adoptionCovers\(cfg\.projectRoot, cfg\.profileId, cfg\.connectorIds\)/);
+    expect(gate).toMatch(/hasStoredProfile\(cfg\.profileId\)/);
   });
 
   test("automatic recall is the project's own answer, Off by default, and never gates /augenta:recall", () => {

@@ -44,7 +44,9 @@ import {
   type WorkspacePrompts,
 } from "./connect";
 import { Outbox } from "../capture/outbox";
-import { loadProjectConfig, projectConfig, resolveProjectRoot } from "../capture/config";
+import { readAdoption } from "../capture/adoption";
+import { SHARED_IGNORE } from "../capture/augenta-dir";
+import { captureEnabled, loadProjectConfig, projectConfig, resolveProjectRoot } from "../capture/config";
 import {
   profileIdFor,
   readPendingLogin,
@@ -347,7 +349,41 @@ describe("project config writers", () => {
       autoRecall: false,
     });
     expect(statSync(path).mode & 0o777).toBe(0o600);
+    // No credential in it, so it may be committed; this checkout has joined it.
+    expect(readFileSync(join(project, ".augenta", ".gitignore"), "utf8")).toBe(SHARED_IGNORE);
+    expect(readAdoption(project)).toMatchObject({
+      profileId: "profile_123",
+      connectorIds: ["connector_456", "connector_789"],
+    });
+  });
+
+  test("git sees only the browser config and its ignore file, never state or outbox", () => {
+    execFileSync("git", ["init", "-q"], { cwd: project });
+    writeOAuthConfig(project, connectionRecord("profile_123", ["connector_456"]));
+    new Outbox(project).append([{ src: "claude-code", sid: "s", proj: project, ts: new Date().toISOString(), seq: 0, kind: "msg", role: "user", text: "x" }]);
+    const visible = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: project })
+      .toString().trim().split("\n").map((line) => line.slice(3)).sort();
+    expect(visible).toEqual([".augenta/.gitignore", ".augenta/config.json"]);
+  });
+
+  test("an API-key config is never committable: local ignore form, and refused if already tracked", () => {
+    execFileSync("git", ["init", "-q"], { cwd: project });
+    writeOAuthConfig(project, connectionRecord("profile_123", ["connector_456"]));
+    writeApiKeyConfig(project, "sk-aug-test.secret");
     expect(readFileSync(join(project, ".augenta", ".gitignore"), "utf8")).toBe("*\n");
+    expect(execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: project }).toString()).toBe("");
+
+    writeOAuthConfig(project, connectionRecord("profile_123", ["connector_456"]));
+    execFileSync("git", ["add", ".augenta/config.json"], { cwd: project });
+    expect(() => writeApiKeyConfig(project, "sk-aug-test.secret")).toThrow("tracked by git");
+    expect(readFileSync(join(project, ".augenta", "config.json"), "utf8")).not.toContain("sk-aug-test");
+  });
+
+  test("a user-authored .augenta/.gitignore is left exactly as it is", () => {
+    mkdirSync(join(project, ".augenta"), { recursive: true });
+    writeFileSync(join(project, ".augenta", ".gitignore"), "outbox/\n");
+    writeOAuthConfig(project, connectionRecord("profile_123", ["connector_456"]));
+    expect(readFileSync(join(project, ".augenta", ".gitignore"), "utf8")).toBe("outbox/\n");
   });
 
   test("refuses to write an OAuth config without a destination", () => {
@@ -1710,6 +1746,105 @@ describe("JSON verbs", () => {
       expect(await runJsonVerb({ projectRoot: project }, { json: true, autoRecall: false, ...extra }))
         .toMatchObject({ status: "error", code: "conflicting_verbs" });
     }
+  });
+
+  /** A teammate's fresh checkout of a committed config: same file, but a sign-in
+   *  store of their own and no adoption of their own. */
+  const teammateCheckout = () => {
+    rmSync(join(project, ".augenta", "state"), { recursive: true, force: true });
+    rmSync(authHome, { recursive: true, force: true });
+    authHome = mkdtempSync(join(tmpdir(), "aug-json-auth-b-"));
+    process.env.AUGENTA_AUTH_HOME = authHome;
+  };
+
+  test("a teammate's checkout of a committed config joins with --adopt, choosing nothing again", async () => {
+    await signIn();
+    route();
+    await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] });
+    const configBytes = readFileSync(join(project, ".augenta", "config.json"), "utf8");
+    teammateCheckout();
+
+    expect(await runJsonVerb({ projectRoot: project }, { json: true, probe: true }))
+      .toMatchObject({ status: "need_login", alreadyConnected: true, adopted: false, configTracked: false });
+    expect(await runJsonVerb({ projectRoot: project }, { json: true, adopt: true })).toMatchObject({ status: "need_login" });
+    expect(captureEnabled(loadProjectConfig(project))).toBe(false);
+
+    await signIn(); // same organization, so the same profile id
+    requests = [];
+    const payload = await runJsonVerb({ projectRoot: project }, { json: true, adopt: true });
+    expect(payload).toMatchObject({
+      status: "adopted",
+      destinations: [{ connectorId: "connector_new", workspaceId: "ws-default" }],
+      organization: "Example Org",
+    });
+    // Joined without creating, moving or rewriting anything.
+    expect(requests.filter((request) => !request.startsWith("GET "))).toEqual([]);
+    expect(readFileSync(join(project, ".augenta", "config.json"), "utf8")).toBe(configBytes);
+    expect(captureEnabled(loadProjectConfig(project))).toBe(true);
+  });
+
+  test("joining refuses a sign-in to another organization", async () => {
+    await signIn();
+    route();
+    await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] });
+    teammateCheckout();
+    await saveDeviceProfile(
+      { issuer: ISSUER, clientId: "client_public", gateway: GATEWAY },
+      { accessToken: "access-other", refreshToken: "refresh-other", expiresAt: Date.now() + 3_600_000 },
+      { userId: "user_2", orgId: "org_2" },
+    );
+    expect(await runJsonVerb({ projectRoot: project }, { json: true, adopt: true }))
+      .toMatchObject({ status: "error", code: "org_mismatch", organization: "Example Org" });
+    expect(readAdoption(project)).toBeUndefined();
+  });
+
+  test("joining is all or nothing: one unusable destination leaves capture off", async () => {
+    for (const breakIt of [
+      () => links.delete("connector_ws-scratch"),
+      () => Object.assign(links.get("connector_ws-scratch")!, { status: "disabled" }),
+      () => Object.assign(links.get("connector_ws-scratch")!, { workspaceId: "ws-elsewhere" }),
+    ]) {
+      await signIn();
+      route();
+      await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default", "ws-scratch"] });
+      teammateCheckout();
+      await signIn();
+      breakIt();
+      const payload = await runJsonVerb({ projectRoot: project }, { json: true, adopt: true });
+      expect(payload).toMatchObject({
+        status: "error",
+        code: "destinations_unreachable",
+        reachable: [{ connectorId: "connector_new" }],
+        unreachable: [{ connectorId: "connector_ws-scratch", workspaceName: "Scratch" }],
+      });
+      expect(String(payload.message)).toContain("you may need to be added to that Workspace");
+      expect(readAdoption(project)).toBeUndefined();
+      expect(captureEnabled(loadProjectConfig(project))).toBe(false);
+    }
+  });
+
+  test("joining uses the recorded environment and refuses anything riding along", async () => {
+    await signIn();
+    route();
+    await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] });
+    teammateCheckout();
+    process.env.AUGENTA_CONTROL_URL = "https://other.example.com";
+    requests = [];
+    expect(await runJsonVerb({ projectRoot: project }, { json: true, adopt: true }))
+      .toMatchObject({ status: "error", code: "environment_mismatch" });
+    expect(requests).toEqual([]);
+    delete process.env.AUGENTA_CONTROL_URL;
+    for (const extra of [{ probe: true }, { workspaces: ["ws-default"] }, { autoRecall: true }, { controlUrl: CONTROL }, { login: true }]) {
+      expect(await runJsonVerb({ projectRoot: project }, { json: true, adopt: true, ...extra }))
+        .toMatchObject({ status: "error", code: "conflicting_verbs" });
+    }
+  });
+
+  test("an API-key project or no project has nothing to join", async () => {
+    route();
+    expect(await runJsonVerb({ projectRoot: project }, { json: true, adopt: true })).toMatchObject({ code: "not_connected" });
+    writeApiKeyConfig(project, "sk-aug-test.secret");
+    expect(await runJsonVerb({ projectRoot: project }, { json: true, adopt: true })).toMatchObject({ code: "oauth_connection_required" });
   });
 
   test("connecting SEVERAL Workspaces creates one Connector each", async () => {

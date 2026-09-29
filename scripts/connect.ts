@@ -26,7 +26,8 @@ import { isMain } from "../runtime/node";
 // Reported to the platform as Connector metadata. One shared constant rather
 // than a literal per call site — see runtime/version.ts for why.
 import { PLUGIN_VERSION } from "../runtime/version";
-import { ensureAugentaDir } from "../capture/augenta-dir";
+import { ensureAugentaDir, setAugentaIgnore } from "../capture/augenta-dir";
+import { adoptionCovers, writeAdoption } from "../capture/adoption";
 import {
   DEFAULT_CONTROL_URL,
   DEFAULT_GATEWAY,
@@ -49,7 +50,7 @@ import {
   type Connector,
   type Workspace,
 } from "../capture/platform";
-import { resolveProject, type ResolvedProject } from "../capture/project";
+import { isTrackedByGit, resolveProject, type ResolvedProject } from "../capture/project";
 /* Re-exported, not re-implemented. These moved to modules a second entrypoint
    can import (an entrypoint may not import another entrypoint), but they are
    still part of this file's published surface: scripts/dev-e2e.ts and
@@ -94,6 +95,8 @@ interface Args {
   /** The project's automatic-recall answer. With `--workspace` it is part of
    *  the one config write; alone it changes only that setting. */
   autoRecall?: boolean;
+  /** Join this checkout to the destinations its config already records. */
+  adopt?: boolean;
   login?: boolean;
   awaitLogin?: boolean;
   waitSeconds?: number;
@@ -180,6 +183,8 @@ export function parseArgs(argv: string[]): Args {
         throw new Error("--auto-recall must be on or off");
       }
       args.autoRecall = value === "on";
+    } else if (flag === "--adopt") {
+      args.adopt = true;
     } else if (flag === "--probe") {
       args.probe = true;
     } else if (flag === "--login") {
@@ -197,7 +202,15 @@ export function writeApiKeyConfig(
   endpoint?: string,
   details: Pick<ProjectConfig, "org" | "destinations" | "controlUrl" | "ingestUrl"> = {},
 ): string {
+  // The key goes into this file, so it must never be one git already tracks.
+  // Refused before anything is written, rather than written and then warned about.
+  if (isTrackedByGit(projectRoot, ".augenta/config.json")) {
+    throw new Error(
+      ".augenta/config.json is tracked by git, and an API-key config would put the key in it; untrack it first (git rm --cached .augenta/config.json)",
+    );
+  }
   const dir = ensureAugentaDir(projectRoot);
+  setAugentaIgnore(projectRoot, "local");
   const path = join(dir, "config.json");
   writeFileSync(
     path,
@@ -252,27 +265,45 @@ export function writeOAuthConfig(
   }
   const dir = ensureAugentaDir(projectRoot);
   const path = join(dir, "config.json");
-  writeFileSync(
-    path,
-    `${JSON.stringify(
-      {
-        authMode: "oauth",
-        captureSince: new Date().toISOString(),
-        profileId: connection.profileId,
-        controlUrl: connection.controlUrl,
-        endpoint: connection.endpoint,
-        discoveredGateway: connection.discoveredGateway,
-        org: { id: connection.org.id, name: connection.org.name },
-        destinations: connection.destinations.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
-        autoRecall: connection.autoRecall ?? false,
-        ingestUrl: connection.ingestUrl,
-      },
-      null,
-      2,
-    )}\n`,
-    { mode: 0o600 },
-  );
+  const captureSince = new Date().toISOString();
+  // Atomic: the config may be a committed file other checkouts pull, and a torn
+  // write would hand every one of them an unparseable config.
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync(
+      tmp,
+      `${JSON.stringify(
+        {
+          authMode: "oauth",
+          captureSince,
+          profileId: connection.profileId,
+          controlUrl: connection.controlUrl,
+          endpoint: connection.endpoint,
+          discoveredGateway: connection.discoveredGateway,
+          org: { id: connection.org.id, name: connection.org.name },
+          destinations: connection.destinations.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+          autoRecall: connection.autoRecall ?? false,
+          ingestUrl: connection.ingestUrl,
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+    renameSync(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
   chmodSync(path, 0o600);
+  // A browser connection holds no credential, so its config may be committed
+  // and shared; each checkout still joins through connect. The user who just
+  // answered the destination question here has joined, as of this write.
+  setAugentaIgnore(projectRoot, "shared");
+  writeAdoption(projectRoot, {
+    profileId: connection.profileId,
+    connectorIds: connection.destinations.map((destination) => destination.connectorId),
+    adoptedAt: captureSince,
+  });
   return path;
 }
 
@@ -1099,7 +1130,12 @@ export async function probeConnection(
   const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
   const priorIds = prior?.connectorIds ?? [];
-  const alreadyConnected = { alreadyConnected: Boolean(cfg), ...(current ? { current } : {}), ...change };
+  const alreadyConnected = {
+    alreadyConnected: Boolean(cfg),
+    ...(current ? { current } : {}),
+    ...change,
+    ...(cfg ? joinedState(cfg) : {}),
+  };
   const usable = await usableProfiles(oauth, prior?.profileId);
   if (usable.length === 0) return { status: "need_login", ...alreadyConnected };
   if (usable.length > 1) {
@@ -1404,6 +1440,20 @@ function environmentChange(cfg: ProjectConfig | undefined, args: Args): { enviro
     : {};
 }
 
+/**
+ * Whether THIS checkout has joined its config's connection, and whether the
+ * config is a file git tracks (so changing destinations changes them for everyone
+ * who pulls). An API-key config is its own connection and never needs joining.
+ */
+function joinedState(cfg: ProjectConfig): { adopted: boolean; configTracked: boolean } {
+  return {
+    adopted: cfg.authMode === "oauth"
+      ? adoptionCovers(cfg.projectRoot, cfg.profileId!, cfg.connectorIds ?? [])
+      : true,
+    configTracked: isTrackedByGit(cfg.projectRoot, ".augenta/config.json"),
+  };
+}
+
 /** How the project answered the automatic-recall question. `on_by_default` is a
  *  config written before connect asked: it still runs, but nobody chose it. */
 function autoRecallSetting(cfg: ProjectConfig): "on" | "off" | "on_by_default" {
@@ -1477,6 +1527,94 @@ async function repairHarness(projectRoot: string, args: Args): Promise<JsonPaylo
 }
 
 /**
+ * Join this checkout to the connection its config already records, without
+ * choosing destinations again: a teammate's clone of a committed config, an
+ * agent's worktree, a fresh cloud checkout. The caller has shown the recorded
+ * Workspaces and the user chose to use them; this checks them live under the
+ * user's own sign-in and records the adoption (capture/adoption.ts).
+ *
+ * Refused unless the sign-in is the one the config was connected under — same
+ * environment, same organization — and every recorded destination is an active
+ * link this user can read, still in its recorded Workspace. All or nothing: the
+ * config routes to every destination, so joining a subset would ship to one the
+ * user cannot see and did not affirm. Nothing about the config itself changes.
+ */
+async function adoptProject(resolved: ResolvedProject, args: Args): Promise<JsonPayload> {
+  const cfg = loadProjectConfig(resolved.projectRoot);
+  if (!cfg) {
+    return { status: "error", code: "not_connected", message: "this project has no readable connection to join; connect it instead" };
+  }
+  if (cfg.authMode !== "oauth") {
+    return { status: "error", code: "oauth_connection_required", message: "an API-key project has nothing to join: its key is its connection" };
+  }
+  const recorded = cfg.controlUrl ?? DEFAULT_CONTROL_URL;
+  if (controlUrl(cfg) !== recorded) {
+    return {
+      status: "error",
+      code: "environment_mismatch",
+      message: `this project's config records the ${environmentLabel(recorded)} environment, but this session is pointed at ${environmentLabel(controlUrl(cfg))}; unset AUGENTA_CONTROL_URL to join it`,
+    };
+  }
+  const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
+  const usable = await usableProfiles(oauth, cfg.profileId);
+  const organization = cfg.org?.name ?? cfg.org?.id;
+  if (usable.length === 0) {
+    return { status: "need_login", message: "sign in to Augenta, then join again", organization };
+  }
+  const picked = usable.find((item) => item.profileId === cfg.profileId);
+  if (!picked) {
+    return {
+      status: "error",
+      code: "org_mismatch",
+      organization,
+      signedInTo: [...new Set(usable.map((item) => item.me.org.name))],
+      message: `this project was connected in ${organization ?? "another organization"}, and this sign-in is not; sign in to that organization, or choose different Workspaces`,
+    };
+  }
+  const reachable: Destination[] = [];
+  const unreachable: Array<{ connectorId: string; workspaceId: string; workspaceName?: string; message?: string }> = [];
+  for (const destination of cfg.destinations!) {
+    try {
+      const link = await currentConnector(picked.profileId, gateway, destination.connectorId);
+      if (link && link.id === destination.connectorId && link.status === "active" && link.workspaceId === destination.workspaceId) {
+        reachable.push(destination);
+      } else {
+        unreachable.push({ ...destination });
+      }
+    } catch (error) {
+      unreachable.push({ ...destination, message: describeError(error) });
+    }
+  }
+  if (unreachable.length > 0) {
+    return {
+      status: "error",
+      code: "destinations_unreachable",
+      reachable,
+      unreachable,
+      organization,
+      message: `this sign-in cannot use ${unreachable.map((item) => item.workspaceName ?? item.workspaceId).join(", ")}; you may need to be added to ${unreachable.length === 1 ? "that Workspace" : "those Workspaces"}. Capture stays off in this checkout`,
+    };
+  }
+  writeAdoption(resolved.projectRoot, {
+    profileId: picked.profileId,
+    connectorIds: cfg.connectorIds!,
+    adoptedAt: new Date().toISOString(),
+  });
+  try {
+    new Outbox(resolved.projectRoot).registerDestinations(cfg.connectorIds!);
+  } catch {
+    /* the shipper reconciles the set on its own; never fail a join over this */
+  }
+  return {
+    status: "adopted",
+    destinations: reachable,
+    organization,
+    autoRecall: autoRecallSetting(cfg),
+    captureHealth: captureHealth(resolved.projectRoot),
+  };
+}
+
+/**
  * Change only the project's automatic-recall answer. It neither reconnects nor
  * touches the destinations, `captureSince` or any other field, so the Codex
  * capture boundary and every cursor stay where they are.
@@ -1515,12 +1653,12 @@ async function dispatchJsonVerb(
   if (args.repairHarness) {
     if (args.health || args.probe || args.login || args.awaitLogin || args.verifyOnly ||
         args.workspaces !== undefined || args.createWorkspace !== undefined || args.apiKey ||
-        args.endpoint || args.controlUrl || args.profile || args.autoRecall !== undefined) {
+        args.endpoint || args.controlUrl || args.profile || args.autoRecall !== undefined || args.adopt) {
       return { status: "error", code: "conflicting_verbs", message: "--repair-harness uses the saved project connection; combine it only with --json, --project and --harness" };
     }
     return repairHarness(resolved.projectRoot, args);
   }
-  if (args.health && (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe || args.autoRecall !== undefined)) {
+  if (args.health && (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe || args.autoRecall !== undefined || args.adopt)) {
     return { status: "error", code: "conflicting_verbs", message: "--health is a local read-only operation; run it by itself with --json" };
   }
   // The platform-key path writes a secret given on the command line, so it stays
@@ -1545,6 +1683,19 @@ async function dispatchJsonVerb(
       message:
         "--create-workspace and --workspace are separate steps; create first, then ask for the complete destination set again and pass it with --workspace",
     };
+  }
+  // Joining uses the recorded connection exactly as it is, so nothing that
+  // would choose, create or re-point anything may ride along with it.
+  if (args.adopt) {
+    if (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin ||
+        args.probe || args.verifyOnly || args.autoRecall !== undefined || args.endpoint || args.controlUrl || args.profile) {
+      return {
+        status: "error",
+        code: "conflicting_verbs",
+        message: "--adopt joins the connection this project's config already records; run it alone with --json",
+      };
+    }
+    return adoptProject(resolved, args);
   }
   // Alone, --auto-recall changes one setting of an existing connection. With
   // --workspace it rides along in that call's single config write instead.
@@ -1572,7 +1723,7 @@ async function dispatchJsonVerb(
     status: "error",
     code: "no_verb",
     message:
-      "--json requires one of --probe, --login, --await-login, --create-workspace <name>, --workspace <id> (repeatable), or --auto-recall on|off",
+      "--json requires one of --probe, --login, --await-login, --create-workspace <name>, --workspace <id> (repeatable), --adopt, or --auto-recall on|off",
   };
 }
 

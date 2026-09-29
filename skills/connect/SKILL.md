@@ -133,6 +133,45 @@ replaces the whole set:
   the organization's list, so it cannot be offered as an option in step 3 and will
   be dropped by whatever the user answers.
 
+### If this checkout has not joined the recorded connection
+
+When `alreadyConnected` is `true`, `current.authMode` is `oauth` and `adopted` is
+`false`, this checkout has the project's `.augenta/config.json` but has not joined
+it, so capture is off here. The file was usually committed by a teammate, or
+carried into a new worktree or cloud checkout. Joining uses the recorded
+Workspaces as they are; it does not choose again.
+
+Before asking, name `current.organization`, every entry in `current.destinations`,
+and `current.environment` when it is not `prod`. Say, as in step 3, that each of
+those Workspaces receives the **full record** (activity, raw transcript lines and
+project memory), so the audience is the **union** of everyone with access to any
+of them, and that raw transcript records are structurally sanitized but **not**
+secret-scrubbed. Say whether automatic recall is on for the project, from
+`current.autoRecall`.
+
+Then ask one question with three options: **Use these Workspaces**, **Choose
+different Workspaces**, and **Cancel**. Choosing to use the recorded set is this
+checkout's consent, so do not ask a second yes/no.
+
+- **Use these Workspaces**: if `--probe` said `need_login`, sign in first (step 2).
+  Then run this instead of step 3:
+
+  ```bash
+  node "$CONNECT" --harness <harness> --json --adopt
+  ```
+
+  On `adopted`, confirm as in step 4, naming every destination. On `org_mismatch`,
+  say the project was connected in `organization` and this sign-in is to another
+  one; offer to sign in to that organization, or to choose different Workspaces. On
+  `destinations_unreachable`, name each `unreachable` Workspace and say the user
+  may need to be added to it by someone who administers it; capture stays off in
+  this checkout until every recorded Workspace is reachable. On
+  `environment_mismatch`, report `message`.
+- **Choose different Workspaces**: continue with steps 2 and 3. When
+  `configTracked` is `true`, say first that git tracks the config, so the new
+  selection changes the destinations for everyone who pulls it.
+- **Cancel**: acknowledge and stop. Capture stays off in this checkout.
+
 ## 2. Sign in, only if `--probe` said `need_login`
 
 Ask whether to sign in to Augenta, in one sentence: capture is per project, it
@@ -159,7 +198,8 @@ node "$CONNECT" --harness <harness> --json --await-login
 - `login_pending` — the link is still valid. Tell the user you are still waiting
   and call it again. Use a longer Bash timeout with `--wait <seconds>` if you want
   fewer, longer waits.
-- `need_workspace` — signed in. Go to step 3.
+- `need_workspace` — signed in. Go to step 3, or, when the user chose to use the
+  recorded Workspaces above, run `--adopt`.
 - `status: "error"` — report `message`. `login_denied` means the user declined, so
   do not silently retry.
 
@@ -180,7 +220,9 @@ Everyone has their own `Default Workspace`. Ask it every time,
 including when that is the only Workspace and including when the project is
 already connected. Never offer to keep the current selection without showing it;
 never treat one answer as authorization for more than one destination; never
-proceed on silence.
+proceed on silence. The one exception is a checkout joining its recorded
+connection (step 1), where the recorded set is shown and the user chooses to use
+it or to choose again.
 
 Before the user answers, say — in one or two sentences, naming the organization
 from `signedInAs`:
@@ -267,6 +309,11 @@ environment if it is not `prod`. Restate that raw transcript records are
 structurally sanitized but **not** secret-scrubbed, and that this now applies to
 every destination you just named. Say whether automatic recall is on or off, from
 `autoRecall`.
+
+Also say that `.augenta/config.json` holds no sign-in token and may be committed,
+so every checkout of this project points at the same Workspaces; each checkout
+still joins with connect. If the project should keep it private, the user can add
+`.augenta/` to the repository's `.gitignore`.
 
 If `removed` is non-empty, name each removed Workspace: this project **no longer
 sends** to it. Its Connector is **left in place and idle** — nothing was disabled

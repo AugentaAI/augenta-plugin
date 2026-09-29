@@ -31,13 +31,18 @@ the project keeps sending to its old Workspaces.
 
 | Path | What it holds |
 | --- | --- |
-| `<project>/.augenta/config.json` | This project's connection settings |
+| `<project>/.augenta/config.json` | This project's connection settings. A browser connection's may be committed |
+| `<project>/.augenta/.gitignore` | Keeps the rest of `.augenta/` out of Git: `*` for API-key configs, which hold the key; `*`, `!/.gitignore` and `!/config.json` for browser connections. Connect leaves a file you wrote yourself alone |
+| `<project>/.augenta/state/adopted.json` | That this checkout joined the connection, which Workspaces it covers, and when. Never committed |
 | `<project>/.augenta/outbox/` | Records waiting to be sent, plus delivery state |
 | `<project>/.augenta/state/recall-backoff.json` | When automatic recall may ask again after Augenta asked it to slow down |
 | `~/.augenta/auth.json` | Your saved sign-in, shared across connected projects |
 
-The plugin needs a readable project config to capture or recall. An old or
-damaged config prompts you to reconnect. The plugin does not convert it or
+The plugin needs a readable project config to capture or recall. A browser
+connection also captures only once this machine is signed in for it and this
+checkout has joined it with connect; recall needs the sign-in but not the join.
+Session start says which is missing. An old or damaged config prompts you to
+reconnect. The plugin does not convert it or
 guess where its records should go.
 
 For browser sign-in, the project file looks like this:

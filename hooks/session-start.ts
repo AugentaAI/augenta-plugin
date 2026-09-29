@@ -46,9 +46,11 @@
 import { recordHealth } from "../capture/health";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { isCodexHarness } from "./harness";
-import { captureEnabled, controlUrl, loadProjectConfig, resolveProjectRoot } from "../capture/config";
+import { readAdoption } from "../capture/adoption";
+import { captureEnabled, captureGate, controlUrl, loadProjectConfig, resolveProjectRoot } from "../capture/config";
 import { environmentLabel } from "../capture/platform";
 import { Outbox } from "../capture/outbox";
 import { spawnShipper } from "../capture/shipper";
@@ -78,6 +80,44 @@ const codex = isCodexHarness(transcriptPath);
 // below that asks the user to act routes through this.
 const connectAction = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
 const projectPath = cwd || process.cwd();
+
+// --- Once-per-key prompts, remembered in the user's home ---------------------
+const home = process.env.AUGENTA_HOME ?? homedir();
+const stateDir = join(home, ".augenta", "state");
+const markerPath = join(stateDir, "connect-prompted.json");
+// The pre-0.3.0 map, written when this hook prompted for `/augenta:init`. Read,
+// never written: renaming the skill must not re-prompt projects the user has
+// already dismissed once.
+const legacyMarkerPath = join(stateDir, "init-prompted.json");
+
+function readMarkers(path: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * True exactly once per key, recording it as it answers. If the record cannot be
+ * persisted it answers false: better silent than a prompt loop on every session.
+ * In a cloud session the home is new each time, so "once" is once per session.
+ */
+function firstTime(key: string): boolean {
+  const markers = readMarkers(markerPath);
+  if (markers[key]) return false;
+  try {
+    mkdirSync(stateDir, { recursive: true });
+    markers[key] = new Date().toISOString();
+    const tmp = markerPath + ".tmp";
+    writeFileSync(tmp, JSON.stringify(markers));
+    renameSync(tmp, markerPath);
+  } catch {
+    return false;
+  }
+  return true;
+}
 
 // --- Connected? An ancestor has a .augenta/config.json the parser ACCEPTS. ----
 const configuredRoot = resolveProjectRoot(projectPath);
@@ -154,50 +194,52 @@ if (connectedRoot) {
       /* memory discovery is best-effort and this hook must remain silent */
     }
     if (new Outbox(connectedRoot).hasPendingBytes()) spawnShipper(connectedRoot);
+  } else {
+    // Connected, but capture is off HERE for a reason connect fixes: this machine
+    // has no sign-in for the config's profile, or this checkout has not joined a
+    // (typically committed) config, or its destinations changed since it did.
+    // Said once per exact connection, so a pulled change to the destinations is
+    // raised again. The kill switch stays silent, as above.
+    const gate = captureGate(cfg!);
+    if (gate === "signed_out" || gate === "not_adopted") {
+      const identity = createHash("sha256")
+        .update([cfg!.profileId ?? "", ...(cfg!.connectorIds ?? [])].join("\0"))
+        .digest("hex")
+        .slice(0, 16);
+      if (firstTime(`join:${connectedRoot}:${identity}`)) {
+        const names = (cfg!.destinations ?? []).map((destination) => destination.workspaceName || destination.workspaceId).join(", ");
+        const environment = environmentLabel(controlUrl(cfg));
+        const where = [cfg!.org?.name, environment === "prod" ? undefined : `the ${environment} environment`]
+          .filter(Boolean)
+          .join(", ");
+        const reason = gate === "signed_out"
+          ? "this machine is not signed in to Augenta for it"
+          : readAdoption(connectedRoot)
+            ? "its Workspaces changed since this checkout joined"
+            : "this checkout has not joined it";
+        const additionalContext = codex
+          ? `Augenta: this project is set up to send capture to ${names}${where ? ` (${where})` : ""}, but capture is off in this checkout because ${reason}. Run ${connectAction} to join it.`
+          : `[Augenta] This project's .augenta/config.json sends Augenta capture to ${names}${where ? ` (${where})` : ""}, ` +
+            `but capture is off in this checkout because ${reason}. Tell the user, and offer to run the augenta ` +
+            "connect skill (/augenta:connect): it signs in if needed and asks them to confirm those Workspaces " +
+            "before capture starts. Do not start a sign-in without their go-ahead. Tokens and API keys must " +
+            "never be pasted into the chat.";
+        process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }));
+      }
+    }
   }
   process.exit(0);
-}
-
-// --- Prompted before? Check the once-per-project marker map. ------------------
-const home = process.env.AUGENTA_HOME ?? homedir();
-const stateDir = join(home, ".augenta", "state");
-const markerPath = join(stateDir, "connect-prompted.json");
-// The pre-0.3.0 map, written when this hook prompted for `/augenta:init`. Read,
-// never written: renaming the skill must not re-prompt projects the user has
-// already dismissed once.
-const legacyMarkerPath = join(stateDir, "init-prompted.json");
-
-function readMarkers(path: string): Record<string, string> {
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
-  } catch {
-    return {};
-  }
 }
 
 // A stale config is a DIFFERENT prompt from "you never connected this project":
 // the user did connect, and their config stopped being readable. It gets its own
 // one-shot key, and deliberately ignores the pre-0.3.0 marker — every project
 // with a legacy config has one, and honoring it here would re-silence exactly
-// the users this prompt exists for.
+// the users this prompt exists for. Recording the key is what makes this the
+// project's only automatic fire ever.
 const markerKey = staleConfig ? `reconnect:${projectPath}` : projectPath;
-const markers = readMarkers(markerPath);
-if (markers[markerKey]) process.exit(0);
 if (!staleConfig && readMarkers(legacyMarkerPath)[projectPath]) process.exit(0);
-
-// Record that we've auto-prompted this project, so this is its only automatic
-// fire ever. If the marker can't be persisted, don't fire — better silent than
-// a prompt loop on every session.
-try {
-  mkdirSync(stateDir, { recursive: true });
-  markers[markerKey] = new Date().toISOString();
-  const tmp = markerPath + ".tmp";
-  writeFileSync(tmp, JSON.stringify(markers));
-  renameSync(tmp, markerPath);
-} catch {
-  process.exit(0);
-}
+if (!firstTime(markerKey)) process.exit(0);
 
 // Codex may show additionalContext verbatim, so its wording stays clean and
 // user-facing; Claude Code's is agent-directed and may carry scaffolding.

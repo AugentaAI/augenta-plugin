@@ -35,6 +35,21 @@ function gitRevParse(cwd: string, arg: string): string | undefined {
   }
 }
 
+/** Whether git tracks `relativePath` in the checkout at `projectRoot`. False
+ *  when git is absent, the directory is not a checkout, or the file is
+ *  untracked. Never throws. */
+export function isTrackedByGit(projectRoot: string, relativePath: string): boolean {
+  try {
+    execFileSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
+      cwd: projectRoot,
+      stdio: "ignore",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Shared consent lookup. A Git checkout/worktree is a boundary, even when
  * nested under a connected checkout. Invalid local configs stop lookup too:
  * parsing failure must never fall through to a different project's consent.

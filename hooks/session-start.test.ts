@@ -21,6 +21,7 @@ import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDocumentRecord, Outbox } from "../capture/outbox";
+import { writeAdoption } from "../capture/adoption";
 import type { CaptureEvent } from "../capture/event";
 
 const HOOK = join(import.meta.dir, "session-start.ts");
@@ -47,8 +48,32 @@ function writeMarkers(file: string, markers: Record<string, string>): void {
   writeFileSync(join(stateDir, file), JSON.stringify(markers));
 }
 
+/** This machine signed in to `profileId`, and this checkout joined those
+ *  destinations: what connect leaves behind, and what capture now requires. */
+function signIn(profileId: string): void {
+  const authDir = join(home, ".augenta");
+  mkdirSync(authDir, { recursive: true });
+  writeFileSync(join(authDir, "auth.json"), JSON.stringify({
+    version: 1,
+    profiles: { [profileId]: { accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, updatedAt: new Date().toISOString() } },
+  }));
+}
+
+function signInAndJoin(profileId: string, connectorIds: string[]): void {
+  signIn(profileId);
+  writeAdoption(project, { profileId, connectorIds, adoptedAt: new Date().toISOString() });
+}
+
 function fire(payload: object, overrides: Record<string, string> = {}): string {
-  const env: Record<string, string> = { ...(process.env as Record<string, string>), AUGENTA_CONTROL_URL: "", AUGENTA_HOME: home, ...overrides };
+  // AUGENTA_AUTH_HOME too: the capture gate reads the sign-in store, and a test
+  // must never read the developer's real ~/.augenta/auth.json.
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    AUGENTA_CONTROL_URL: "",
+    AUGENTA_HOME: home,
+    AUGENTA_AUTH_HOME: join(home, ".augenta"),
+    ...overrides,
+  };
   const proc = Bun.spawnSync(["bun", "run", HOOK], {
     stdin: Buffer.from(JSON.stringify(payload)),
     env,
@@ -71,6 +96,7 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
       authMode: "oauth", profileId: "profile_one", controlUrl: "https://control.example.com",
       destinations: [{ connectorId: "connector_one", workspaceId: "ws-one", workspaceName: "Platform" }],
     }));
+    signInAndJoin("profile_one", ["connector_one"]);
     const payload = JSON.parse(fire({ transcript_path: CODEX_TP, cwd: project }));
     expect(payload.hookSpecificOutput).toEqual({
       hookEventName: "SessionStart",
@@ -129,6 +155,64 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
     // user had already dismissed.
     writeMarkers("init-prompted.json", { [project]: "2026-01-01T00:00:00.000Z" });
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+  });
+});
+
+describe("connected, but capture is off in this checkout — the join notice", () => {
+  // A committed config arrives in every clone and worktree. Until connect runs
+  // here, capture is off, and the one thing SessionStart owes is saying so.
+  const committed = (connectorIds = ["connector_one"]) => {
+    mkdirSync(join(project, ".augenta"), { recursive: true });
+    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({
+      authMode: "oauth", profileId: "profile_one", org: { id: "org_1", name: "Example Org" },
+      destinations: connectorIds.map((connectorId, i) => ({ connectorId, workspaceId: `ws-${i}`, workspaceName: `Workspace ${i}` })),
+    }));
+  };
+
+  test("not signed in here: named destinations, capture off, offered and never started", () => {
+    committed();
+    const out = fire({ transcript_path: CLAUDE_TP, cwd: project });
+    const context = JSON.parse(out).hookSpecificOutput.additionalContext as string;
+    expect(context).toContain("Workspace 0 (Example Org)");
+    expect(context).toContain("capture is off in this checkout because this machine is not signed in to Augenta for it");
+    expect(context).toContain("/augenta:connect");
+    expect(context).toContain("Do not start a sign-in without their go-ahead");
+    // Nothing was captured or written into the project while it is off.
+    expect(existsSync(join(project, ".augenta", "outbox"))).toBe(false);
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+  });
+
+  test("signed in but not joined, then joined: the notice stops and capture is live", () => {
+    committed();
+    signIn("profile_one");
+    const out = fire({ transcript_path: CLAUDE_TP, cwd: project });
+    expect(JSON.parse(out).hookSpecificOutput.additionalContext).toContain("this checkout has not joined it");
+    signInAndJoin("profile_one", ["connector_one"]);
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+  });
+
+  test("a pulled change to the destinations is raised again", () => {
+    committed();
+    signInAndJoin("profile_one", ["connector_one"]);
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+    committed(["connector_one", "connector_two"]);
+    const out = fire({ transcript_path: CLAUDE_TP, cwd: project });
+    expect(JSON.parse(out).hookSpecificOutput.additionalContext).toContain("its Workspaces changed since this checkout joined");
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+  });
+
+  test("Codex gets user-facing wording and the $ invocation", () => {
+    committed();
+    const parsed = JSON.parse(fire({ transcript_path: CODEX_TP, cwd: project }));
+    expect(Object.keys(parsed.hookSpecificOutput).sort()).toEqual(["additionalContext", "hookEventName"]);
+    expect(parsed.hookSpecificOutput.additionalContext).toStartWith("Augenta: this project is set up to send capture to Workspace 0");
+    expect(parsed.hookSpecificOutput.additionalContext).toContain("$augenta:connect");
+    expect(parsed.hookSpecificOutput.additionalContext).not.toContain("[Augenta]");
+  });
+
+  test("the kill switch keeps it silent", () => {
+    committed();
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project }, { AUGENTA_CAPTURE_ENABLED: "0" })).toBe("");
   });
 });
 

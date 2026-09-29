@@ -22,6 +22,8 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { adoptionCovers, readAdoption } from "./adoption";
+import { hasStoredProfile } from "./auth";
 import { resolveProjectRoot } from "./project";
 export { resolveProjectRoot } from "./project";
 
@@ -202,9 +204,46 @@ export function captureKilled(): boolean {
   return value === "0" || value === "false";
 }
 
+/**
+ * Why capture is or is not running for a readable config.
+ *
+ * - `killed`: `AUGENTA_CAPTURE_ENABLED=0`.
+ * - `signed_out`: this machine has no saved sign-in for the config's profile —
+ *   a fresh clone, a cloud session's new home, or a deleted auth file. A revoked
+ *   or expired sign-in keeps its profile, so it is NOT this: capture keeps
+ *   queueing and the re-login notice is the remedy.
+ * - `not_adopted`: a browser connection this checkout has not joined, or whose
+ *   destinations changed since it did (capture/adoption.ts).
+ * - `live`: capture runs.
+ *
+ * A platform key is its own consent and routing, so an API-key config is live
+ * whenever it has its key.
+ */
+export type CaptureGate = "killed" | "signed_out" | "not_adopted" | "live";
+
+export function captureGate(cfg: ProjectConfig): CaptureGate {
+  if (captureKilled()) return "killed";
+  if (cfg.authMode !== "oauth") return cfg.apiKey ? "live" : "signed_out";
+  if (!cfg.profileId || !cfg.connectorIds?.length) return "not_adopted";
+  if (!hasStoredProfile(cfg.profileId)) return "signed_out";
+  if (!adoptionCovers(cfg.projectRoot, cfg.profileId, cfg.connectorIds)) return "not_adopted";
+  return "live";
+}
+
 export function captureEnabled(cfg: ProjectConfig | undefined): boolean {
-  if (!cfg || captureKilled()) return false;
-  return cfg.authMode === "oauth"
-    ? Boolean(cfg.profileId) && (cfg.connectorIds?.length ?? 0) > 0
-    : Boolean(cfg.apiKey);
+  return Boolean(cfg) && captureGate(cfg!) === "live";
+}
+
+/**
+ * The Codex eligibility boundary for this checkout: the later of when the
+ * project was connected and when this checkout adopted it. A teammate joining a
+ * committed config must not make their own earlier turns eligible just because
+ * the config was written before them.
+ */
+export function effectiveCaptureSince(cfg: ProjectConfig): string | undefined {
+  if (cfg.authMode !== "oauth") return cfg.captureSince;
+  const adoptedAt = readAdoption(cfg.projectRoot)?.adoptedAt;
+  if (!adoptedAt) return cfg.captureSince;
+  if (!cfg.captureSince) return adoptedAt;
+  return Date.parse(adoptedAt) > Date.parse(cfg.captureSince) ? adoptedAt : cfg.captureSince;
 }

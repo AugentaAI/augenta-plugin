@@ -30,6 +30,7 @@ import {
   isCodexAutoRecallRecord,
 } from "../capture/auto-recall-marker";
 import { markAuthNotice, saveDeviceProfile } from "../capture/auth";
+import { writeAdoption } from "../capture/adoption";
 import { askWorkspaces, type RecallPayload } from "../capture/recall-client";
 
 const ISSUER = "https://auth.example.com";
@@ -90,6 +91,8 @@ async function oauthProject(expiresAt = Date.now() + 3_600_000) {
     destinations: [{ connectorId: "connector_a", workspaceId: "ws-default", workspaceName: "Default Workspace" }],
     endpoint: GATEWAY,
   });
+  // Joined, as connect leaves a checkout: capture (and so this hook) needs it.
+  writeAdoption(project, { profileId, connectorIds: ["connector_a"], adoptedAt: new Date().toISOString() });
   return profileId;
 }
 

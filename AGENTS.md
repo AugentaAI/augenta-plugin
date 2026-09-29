@@ -237,8 +237,10 @@ OAuth tokens stay in the owner-only global `~/.augenta/auth.json`; a connected
 project stores a profile reference, URLs, organization and destinations. Only
 `destinations[].connectorId` routes; organization and Workspace coordinates
 record the user's choices for display and never become authorization inputs. Capture must stay a
-silent no-op without project config, and `AUGENTA_CAPTURE_ENABLED=0` remains the
-global kill switch.
+silent no-op without project config — and, for a browser connection, without this
+machine's sign-in for its profile and this checkout's adoption of its destinations
+(`captureGate` in `capture/config.ts`) — and `AUGENTA_CAPTURE_ENABLED=0` remains
+the global kill switch.
 
 **Recall is a READ, and its invariants are its own.** Recall — explicit through
 `scripts/recall.ts`, automatic through the prompt hook, both over the one request
@@ -359,6 +361,24 @@ accepting `none` is not. One answer never authorizes more than one destination,
 and silence never authorizes any. A user can cancel the flow without connecting;
 `chooseMany` in `scripts/connect.ts` is deliberately a separate function from
 `choose` with no auto-select knob to flip.
+
+**A committed config is the project's recorded decision; each checkout joins
+it.** A browser connection's `config.json` holds no credential, so connect writes
+`.augenta/.gitignore` in the shared form (`SHARED_IGNORE`), which lets that one
+file be committed and every clone, worktree or cloud checkout point at the same
+Workspaces. Its presence is therefore not a checkout's consent. A checkout
+captures only after connect writes `.augenta/state/adopted.json` there, which it
+does when the user answers the destination question in that checkout or chooses
+to use the recorded set with `--adopt`. That choice is shown with the same
+full-record and union-audience disclosure, and it is one answer, never a second
+yes/no. Joining is all or nothing: every recorded destination must be an active
+link the user can read, in its recorded Workspace, under the sign-in the config
+was connected with; otherwise nothing is written and capture stays off. The
+marker names the destinations it covers, so a pulled change that adds one stops
+capture until someone in that checkout confirms the new set. Codex eligibility
+starts at the later of `captureSince` and the adoption. An API-key config holds
+its key and is never committable: its writer keeps the local form and refuses a
+config git already tracks, and the capture hook resets a shared form back.
 
 **A valid selection is the consent; a second yes/no is not asked.** This holds
 for the destination set as well as for creation — a user who just answered the

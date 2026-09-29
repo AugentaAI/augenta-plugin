@@ -586,6 +586,16 @@ export function storedProfileUpdatedAt(profileId: string): number | undefined {
   return Number.isFinite(ms) ? ms : undefined;
 }
 
+/**
+ * Whether this machine has ever saved a sign-in for `profileId`, read the same
+ * side-effect-free way as {@link freshStoredAccessToken}. Presence only: a
+ * revoked or expired sign-in keeps its profile, so capture keeps queueing and
+ * the re-login notice stays the remedy. Safe on every hook fire.
+ */
+export function hasStoredProfile(profileId: string): boolean {
+  return storedProfile(profileId) !== undefined;
+}
+
 /** One profile off auth.json, lock-free and with no side effects (see above). */
 function storedProfile(profileId: string): Partial<AuthProfile> | undefined {
   try {

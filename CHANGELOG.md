@@ -15,7 +15,9 @@ release a user can read.
 **Reconnect once per browser-connected project**: connections now record their
 destinations in a new format (see Changed). Platform-key configs keep working.
 If an earlier connection from a Git worktree was redirected to the main
-checkout, also connect once from the worktree itself (see Fixed). Codex asks
+checkout, also connect once from the worktree itself (see Fixed). A browser
+connection's config can now be committed, so a repository points everyone at the
+same Workspaces; each checkout joins through connect (see Added). Codex asks
 once to approve the updated prompt hook. Connect also asks whether to turn on
 automatic recall for the project, which is off unless you choose it and looks
 up memory only, with no answer model. `/augenta:recall` asks for an answer by
@@ -47,6 +49,25 @@ default, whether automatic recall is on or off.
     `/augenta:recall` keeps working either way.
   - Codex asks once to approve the updated prompt hook, because its timeout
     changed.
+- **Share a project's Augenta setup through Git.** A browser-connected
+  `.augenta/config.json` holds no sign-in token, so connect now lets Git see that
+  one file, and nothing else in `.augenta/`. Commit it, and every checkout of the
+  repository points at the same Workspaces.
+  - A checkout with a committed config captures only after its user runs connect
+    there. Connect signs them in if needed, shows the project's Workspaces and
+    the full-record disclosure, and asks whether to use them. They are not asked
+    to choose Workspaces again unless they want to.
+  - Joining needs every recorded Workspace to be reachable with their own
+    sign-in, in the same organization; they may need to be added first. Codex
+    turns count from when that checkout joined.
+  - A pulled change that adds a Workspace stops capture in each checkout until
+    someone there confirms it. Each new worktree and cloud checkout joins the
+    same way.
+  - API-key configs hold the key, so connect keeps them out of Git and refuses
+    to write a key into a config Git already tracks.
+  - Everyone sharing a config needs plugin 0.11.0 or newer. If you already
+    reconnected with a pre-release build from `main`, run connect once more; it
+    only asks you to confirm your Workspaces.
 
 ### Fixed
 
@@ -82,6 +103,11 @@ default, whether automatic recall is on or off.
 
 ### Changed
 
+- A browser-connected project captures only while this machine has a saved
+  Augenta sign-in for it. If that sign-in is gone, for example in a fresh cloud
+  session or after deleting `~/.augenta/auth.json`, capture stops instead of
+  queueing, and session start says to sign in again. An expired or revoked
+  sign-in still queues, as before.
 - **Reconnect required for browser-connected projects.** Routing is now recorded
   in `destinations`, replacing `connectorIds`; run connect once per project.
   The file also records the environment, organization and Workspace names.

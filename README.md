@@ -190,6 +190,20 @@ and chosen destinations. Sign-in tokens stay in your private global profile.
 Older `connectorIds` configs need one reconnect per project. See
 [connection settings](docs/configuration.md) for file details and changing Workspaces.
 
+### Share a project's setup
+
+A browser-connected `config.json` holds no sign-in token, so you can commit it.
+Everyone who checks out the repository then points at the same Workspaces. The
+rest of `.augenta/` stays out of Git on its own. To keep the config private
+instead, add `.augenta/` to your repository's `.gitignore`.
+
+A checkout with a committed config does not capture until its user runs connect
+there once. Connect signs them in if needed, shows the project's Workspaces, and
+asks whether to use them. They may need to be added to those Workspaces first.
+The same applies to each new worktree and cloud checkout. Everyone sharing a
+config needs plugin 0.11.0 or newer. API-key configs hold the key, so connect
+never makes them committable.
+
 ## Connecting CI or a service
 
 Jobs that cannot sign in through a browser can use an API key. Follow the

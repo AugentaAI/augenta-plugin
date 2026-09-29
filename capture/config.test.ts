@@ -22,11 +22,14 @@ import {
   gatewayBase,
   experiencesUrl,
   captureEnabled,
+  captureGate,
   captureKilled,
+  effectiveCaptureSince,
   type ProjectConfig,
 } from "./config";
+import { writeAdoption } from "./adoption";
 
-const ENV_KEYS = ["AUGENTA_CONTROL_URL", "AUGENTA_API_URL", "AUGENTA_INGEST_URL", "AUGENTA_CAPTURE_ENABLED"] as const;
+const ENV_KEYS = ["AUGENTA_CONTROL_URL", "AUGENTA_API_URL", "AUGENTA_INGEST_URL", "AUGENTA_CAPTURE_ENABLED", "AUGENTA_AUTH_HOME"] as const;
 let saved: Record<string, string | undefined>;
 let project: string;
 
@@ -266,18 +269,86 @@ describe("URL resolution", () => {
   });
 });
 
-describe("captureEnabled — config presence IS consent", () => {
-  test("on with a config, off without", () => {
-    expect(captureEnabled({ authMode: "api-key", apiKey: "k", projectRoot: "/p" })).toBe(true);
-    expect(captureEnabled({ authMode: "oauth", profileId: "profile_1", connectorIds: ["link_1"], projectRoot: "/p" })).toBe(true);
+describe("captureEnabled — a readable config, a sign-in here, and a joined checkout", () => {
+  // A browser config may now be committed, so the file alone is not this
+  // checkout's consent: capture also needs this machine's sign-in for the
+  // config's profile and this checkout's adoption of its destinations.
+  let authHome: string;
+  const PROFILE = "profile_1";
+  const oauth = (connectorIds: string[] = ["link_1"]) =>
+    ({ authMode: "oauth" as const, profileId: PROFILE, connectorIds, projectRoot: project });
+  const signIn = (updatedAt = new Date().toISOString(), expiresAt = Date.now() + 3_600_000) => {
+    mkdirSync(authHome, { recursive: true });
+    writeFileSync(join(authHome, "auth.json"), JSON.stringify({
+      version: 1,
+      profiles: { [PROFILE]: { accessToken: "a", refreshToken: "r", expiresAt, updatedAt } },
+    }));
+  };
+  const join_ = (connectorIds: string[], adoptedAt = new Date().toISOString()) =>
+    writeAdoption(project, { profileId: PROFILE, connectorIds, adoptedAt });
+  beforeEach(() => {
+    authHome = realpathSync(mkdtempSync(join(tmpdir(), "aug-cfg-auth-")));
+    process.env.AUGENTA_AUTH_HOME = authHome;
+  });
+  afterEach(() => {
+    rmSync(authHome, { recursive: true, force: true });
+  });
+
+  test("an API-key config is its own consent; no config is none", () => {
+    expect(captureEnabled({ authMode: "api-key", apiKey: "k", projectRoot: project })).toBe(true);
     expect(captureEnabled(undefined)).toBe(false);
+  });
+
+  test("a browser config with no sign-in here is signed_out, and does not capture", () => {
+    join_(["link_1"]);
+    expect(captureGate(oauth())).toBe("signed_out");
+    expect(captureEnabled(oauth())).toBe(false);
+  });
+
+  test("signed in but not joined is not_adopted; joined is live", () => {
+    signIn();
+    expect(captureGate(oauth())).toBe("not_adopted");
+    join_(["link_1"]);
+    expect(captureGate(oauth())).toBe("live");
+    expect(captureEnabled(oauth())).toBe(true);
+  });
+
+  test("a pulled change that ADDS a destination stops capture; dropping one does not", () => {
+    signIn();
+    join_(["link_1", "link_2"]);
+    expect(captureGate(oauth(["link_1"]))).toBe("live");
+    expect(captureGate(oauth(["link_1", "link_2", "link_3"]))).toBe("not_adopted");
+  });
+
+  test("joining under another sign-in does not cover this config", () => {
+    signIn();
+    writeAdoption(project, { profileId: "profile_other", connectorIds: ["link_1"], adoptedAt: new Date().toISOString() });
+    expect(captureGate(oauth())).toBe("not_adopted");
+  });
+
+  test("an expired sign-in keeps its profile, so capture keeps queueing", () => {
+    signIn(new Date(0).toISOString(), Date.now() - 60_000);
+    join_(["link_1"]);
+    expect(captureGate(oauth())).toBe("live");
+  });
+
+  test("the Codex boundary is the later of connecting and joining", () => {
+    const connected = "2026-09-01T00:00:00.000Z";
+    const cfg = { ...oauth(), captureSince: connected };
+    expect(effectiveCaptureSince(cfg)).toBe(connected);
+    join_(["link_1"], "2026-09-20T00:00:00.000Z");
+    expect(effectiveCaptureSince(cfg)).toBe("2026-09-20T00:00:00.000Z");
+    join_(["link_1"], "2026-08-01T00:00:00.000Z");
+    expect(effectiveCaptureSince(cfg)).toBe(connected);
+    expect(effectiveCaptureSince({ authMode: "api-key", apiKey: "k", captureSince: connected, projectRoot: project })).toBe(connected);
   });
 
   test("oauth consent needs at least one destination", () => {
     // No destination means nowhere to ship — capture stays a silent no-op rather
     // than spooling records with no route.
-    expect(captureEnabled({ authMode: "oauth", profileId: "profile_1", connectorIds: [], projectRoot: "/p" })).toBe(false);
-    expect(captureEnabled({ authMode: "oauth", profileId: "profile_1", projectRoot: "/p" })).toBe(false);
+    signIn();
+    expect(captureEnabled({ authMode: "oauth", profileId: PROFILE, connectorIds: [], projectRoot: project })).toBe(false);
+    expect(captureEnabled({ authMode: "oauth", profileId: PROFILE, projectRoot: project })).toBe(false);
   });
 
   test("AUGENTA_INGEST_URL does NOT grant consent (redirect only)", () => {
@@ -289,11 +360,12 @@ describe("captureEnabled — config presence IS consent", () => {
     for (const v of ["0", "false"]) {
       process.env.AUGENTA_CAPTURE_ENABLED = v;
       expect(captureKilled()).toBe(true);
-      expect(captureEnabled({ authMode: "api-key", apiKey: "k", projectRoot: "/p" })).toBe(false);
+      expect(captureEnabled({ authMode: "api-key", apiKey: "k", projectRoot: project })).toBe(false);
+      expect(captureGate({ authMode: "api-key", apiKey: "k", projectRoot: project })).toBe("killed");
     }
     // any other value is not the kill switch
     process.env.AUGENTA_CAPTURE_ENABLED = "1";
     expect(captureKilled()).toBe(false);
-    expect(captureEnabled({ authMode: "api-key", apiKey: "k", projectRoot: "/p" })).toBe(true);
+    expect(captureEnabled({ authMode: "api-key", apiKey: "k", projectRoot: project })).toBe(true);
   });
 });
