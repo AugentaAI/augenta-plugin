@@ -246,9 +246,10 @@ If `bun run build` refuses to run, it is one of the two build inputs behind CI's
 byte-comparison of `dist/`, and the message names which:
 
 - **Wrong Bun.** `dist/` is built on the version in `.bun-version`, because Bun's
-  bundler codegen differs between releases. Install that exact version —
-  `curl -fsSL https://bun.sh/install | bash -s "bun-v$(cat .bun-version)"`;
-  plain `bun upgrade` goes to latest and will not pin.
+  bundler codegen differs between releases. That version is also the `bun`
+  devDependency: run `bun install --frozen-lockfile`, then build with
+  `bun run build`, which runs `node_modules/.bin/bun`. Calling
+  `bun scripts/build.ts` directly bypasses it and uses your global Bun.
 - **Dependencies resolved from outside this checkout.** Run
   `bun install --frozen-lockfile` **in this directory**. This is the common one
   in a git worktree, which starts without `node_modules` and will otherwise
@@ -262,7 +263,8 @@ failure locally.
 — bisecting a bundler regression, or seeing what a newer Bun emits. It does not
 skip the dependency check, and its output must never be committed: CI rebuilds on
 the pinned Bun and will reject it. To actually move the pin, edit `.bun-version`
-and commit the rebuilt `dist/` in the same change instead.
+and the `bun` devDependency together, and commit the rebuilt `dist/` in the same
+change instead.
 
 `plugin details` must report the manifest version, both skills (`connect` and
 `recall`), every event in `hooks/hooks.json`, and no load errors. It cannot catch an over-declared

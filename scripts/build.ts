@@ -37,7 +37,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
  * a Mac needs the pinned Bun and nothing else — no container, no cross-build.
  *
  * setup-bun reads .bun-version in CI. This reads the same file so the number is
- * actually shared rather than merely declared to be.
+ * actually shared rather than merely declared to be. The same version is the
+ * exact `bun` devDependency (a contract test holds them equal), so after
+ * `bun install` the package script's `bun` is the pinned one and this check
+ * fires only for a direct `bun scripts/build.ts` or an uninstalled checkout.
  */
 function readPinnedBun(): string {
   try {
@@ -68,14 +71,17 @@ if (Bun.version !== PINNED_BUN && process.env.AUGENTA_ALLOW_BUN_MISMATCH !== "1"
       `  .bun-version: ${PINNED_BUN}`,
       `  running:      ${Bun.version}`,
       ``,
-      `Install the pinned version, then re-run this build:`,
+      `The pinned Bun is a devDependency. Install it into this checkout and build`,
+      `through the package script, which runs node_modules/.bin/bun:`,
       ``,
-      `  curl -fsSL https://bun.sh/install | bash -s "bun-v${PINNED_BUN}"`,
+      `  bun install --frozen-lockfile`,
+      `  bun run build`,
       ``,
-      `(\`bun upgrade\` moves to latest and will not pin.) To BUMP the pin`,
-      `deliberately, edit .bun-version to the version you are running and commit`,
-      `the rebuilt dist/ in the same change. AUGENTA_ALLOW_BUN_MISMATCH=1 skips`,
-      `this check for local experiments — never commit its output.`,
+      `(\`bun scripts/build.ts\` run directly uses whichever Bun is on PATH.) To`,
+      `BUMP the pin deliberately, set .bun-version AND the bun devDependency to the`,
+      `new version and commit the rebuilt dist/ in the same change.`,
+      `AUGENTA_ALLOW_BUN_MISMATCH=1 skips this check for local experiments — never`,
+      `commit its output.`,
     ].join("\n"),
   );
   process.exit(1);
