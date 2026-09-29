@@ -243,7 +243,8 @@ function canonical(path) {
     return absolute;
   }
 }
-var CA_BUNDLES = ["/usr/local/share/ca-certificates/mitm-proxy-ca.crt", "/etc/ssl/certs/ca-certificates.crt"];
+var SANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/mitm-proxy-ca.crt";
+var SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
 function nodeHonorsEnvProxy(version) {
   const [major = 0, minor = 0] = version.split(".").map(Number);
   return major >= 24 || major === 22 && minor >= 21;
@@ -257,15 +258,17 @@ function readable(path) {
   }
 }
 function envProxyReexecEnv(env, nodeVersion, runningUnderBun, isReadable = readable) {
-  const proxied = Boolean(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy);
-  if (!proxied || env.NODE_USE_ENV_PROXY || env.AUGENTA_PROXY_REEXEC || runningUnderBun || !nodeHonorsEnvProxy(nodeVersion))
+  if (env.AUGENTA_PROXY_REEXEC || runningUnderBun)
     return;
-  const ca = env.NODE_EXTRA_CA_CERTS ? undefined : CA_BUNDLES.find(isReadable);
+  const proxied = Boolean(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy);
+  const useProxy = proxied && !env.NODE_USE_ENV_PROXY && nodeHonorsEnvProxy(nodeVersion);
+  const ca = env.NODE_EXTRA_CA_CERTS ? undefined : isReadable(SANDBOX_PROXY_CA) ? SANDBOX_PROXY_CA : (useProxy || env.NODE_USE_ENV_PROXY) && isReadable(SYSTEM_CA_BUNDLE) ? SYSTEM_CA_BUNDLE : undefined;
+  if (!useProxy && !ca)
+    return;
   return {
     ...env,
-    NODE_USE_ENV_PROXY: "1",
     AUGENTA_PROXY_REEXEC: "1",
-    NODE_NO_WARNINGS: env.NODE_NO_WARNINGS ?? "1",
+    ...useProxy ? { NODE_USE_ENV_PROXY: "1", NODE_NO_WARNINGS: env.NODE_NO_WARNINGS ?? "1" } : {},
     ...ca ? { NODE_EXTRA_CA_CERTS: ca } : {}
   };
 }
@@ -1284,10 +1287,6 @@ function sessionEnvironment(env = process.env) {
     signals.push("CLAUDE_CODE_REMOTE");
     kind ??= "claude-cloud";
   }
-  if (env.CLAUDE_CODE_REMOTE_SESSION_ID?.trim()) {
-    signals.push("CLAUDE_CODE_REMOTE_SESSION_ID");
-    kind ??= "claude-cloud";
-  }
   if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {
     signals.push("CODEX_HOME=/opt/codex (heuristic)");
     kind ??= "codex-cloud";
@@ -1993,7 +1992,8 @@ if (connectedRoot) {
         const names = (cfg.destinations ?? []).map((destination) => destination.workspaceName || destination.workspaceId).join(", ");
         const environment = environmentLabel(controlUrl(cfg));
         const where = [cfg.org?.name, environment === "prod" ? undefined : `the ${environment} environment`].filter(Boolean).join(", ");
-        const reason = gate === "signed_out" ? "this machine is not signed in to Augenta for it" : readAdoption(connectedRoot) ? "its Workspaces changed since this checkout joined" : "this checkout has not joined it";
+        const joined = readAdoption(connectedRoot);
+        const reason = gate === "signed_out" ? "this machine is not signed in to Augenta for it" : !joined ? "this checkout has not joined it" : joined.profileId !== cfg.profileId ? "this checkout joined it under a different sign-in" : "its Workspaces changed since this checkout joined";
         const additionalContext = codex ? `Augenta: this project is set up to send capture to ${names}${where ? ` (${where})` : ""}, but capture is off in this checkout because ${reason}. Run ${connectAction} to join it.` : `[Augenta] This project's .augenta/config.json sends Augenta capture to ${names}${where ? ` (${where})` : ""}, ` + `but capture is off in this checkout because ${reason}. Tell the user, and offer to run the augenta ` + "connect skill (/augenta:connect): it signs in if needed and asks them to confirm those Workspaces " + "before capture starts. Do not start a sign-in without their go-ahead. Tokens and API keys must " + "never be pasted into the chat.";
         process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }));
       }

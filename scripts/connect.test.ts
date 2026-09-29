@@ -1826,6 +1826,50 @@ describe("JSON verbs", () => {
     }
   });
 
+  test("a destination added by a pulled change never inherits this checkout's backlog", async () => {
+    await signIn();
+    route();
+    await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] });
+    // Records spooled while only the first destination was adopted. Connect
+    // registered that destination when it linked it, so the outbox has its map.
+    const box = new Outbox(project);
+    box.append([{ src: "claude-code", sid: "s", proj: project, ts: new Date().toISOString(), seq: 0, kind: "msg", role: "user", text: "before B" }]);
+    // A teammate adds a second Workspace and the change is pulled.
+    seedLink("connector_ws-scratch", "ws-scratch");
+    const path = join(project, ".augenta", "config.json");
+    const pulled = JSON.parse(readFileSync(path, "utf8"));
+    pulled.destinations.push({ connectorId: "connector_ws-scratch", workspaceId: "ws-scratch", workspaceName: "Scratch" });
+    writeFileSync(path, JSON.stringify(pulled));
+    expect(captureEnabled(loadProjectConfig(project))).toBe(false);
+
+    expect(await runJsonVerb({ projectRoot: project }, { json: true, adopt: true })).toMatchObject({ status: "adopted" });
+    const cursor = JSON.parse(readFileSync(box.cursorPath, "utf8")) as { links: Record<string, number> };
+    expect(cursor.links["connector_new"]).toBe(0);
+    expect(cursor.links["connector_ws-scratch"]).toBeGreaterThan(0);
+  });
+
+  test("a lapsed sign-in to the project's organization is need_login, not org_mismatch", async () => {
+    await signIn(); // org_1, the project's organization
+    route();
+    await connectToWorkspaces({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] });
+    teammateCheckout();
+    await signIn(); // org_1 again, but its token will be refused
+    await saveDeviceProfile(
+      { issuer: ISSUER, clientId: "client_public", gateway: GATEWAY },
+      { accessToken: "access-other", refreshToken: "refresh-other", expiresAt: Date.now() + 3_600_000 },
+      { userId: "user_2", orgId: "org_2" },
+    );
+    route({
+      [`GET ${GATEWAY}/v1/me`]: (_query, init) =>
+        new Headers(init?.headers).get("authorization") === "Bearer access-other"
+          ? Response.json({ user: { id: "user_2", name: "B", email: "b@example.com" }, org: { id: "org_2", name: "Other Org" } })
+          : new Response("revoked", { status: 401 }),
+      [`POST ${ISSUER}/oauth2/token`]: () => Response.json({ error: "invalid_grant" }, { status: 400 }),
+    });
+    expect(await runJsonVerb({ projectRoot: project }, { json: true, adopt: true }))
+      .toMatchObject({ status: "need_login", message: expect.stringContaining("needs renewing") });
+  });
+
   test("joining uses the recorded environment and refuses anything riding along", async () => {
     await signIn();
     route();

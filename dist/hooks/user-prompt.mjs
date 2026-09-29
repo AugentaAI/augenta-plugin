@@ -243,7 +243,8 @@ function canonical(path) {
     return absolute;
   }
 }
-var CA_BUNDLES = ["/usr/local/share/ca-certificates/mitm-proxy-ca.crt", "/etc/ssl/certs/ca-certificates.crt"];
+var SANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/mitm-proxy-ca.crt";
+var SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
 function nodeHonorsEnvProxy(version) {
   const [major = 0, minor = 0] = version.split(".").map(Number);
   return major >= 24 || major === 22 && minor >= 21;
@@ -257,15 +258,17 @@ function readable(path) {
   }
 }
 function envProxyReexecEnv(env, nodeVersion, runningUnderBun, isReadable = readable) {
-  const proxied = Boolean(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy);
-  if (!proxied || env.NODE_USE_ENV_PROXY || env.AUGENTA_PROXY_REEXEC || runningUnderBun || !nodeHonorsEnvProxy(nodeVersion))
+  if (env.AUGENTA_PROXY_REEXEC || runningUnderBun)
     return;
-  const ca = env.NODE_EXTRA_CA_CERTS ? undefined : CA_BUNDLES.find(isReadable);
+  const proxied = Boolean(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy);
+  const useProxy = proxied && !env.NODE_USE_ENV_PROXY && nodeHonorsEnvProxy(nodeVersion);
+  const ca = env.NODE_EXTRA_CA_CERTS ? undefined : isReadable(SANDBOX_PROXY_CA) ? SANDBOX_PROXY_CA : (useProxy || env.NODE_USE_ENV_PROXY) && isReadable(SYSTEM_CA_BUNDLE) ? SYSTEM_CA_BUNDLE : undefined;
+  if (!useProxy && !ca)
+    return;
   return {
     ...env,
-    NODE_USE_ENV_PROXY: "1",
     AUGENTA_PROXY_REEXEC: "1",
-    NODE_NO_WARNINGS: env.NODE_NO_WARNINGS ?? "1",
+    ...useProxy ? { NODE_USE_ENV_PROXY: "1", NODE_NO_WARNINGS: env.NODE_NO_WARNINGS ?? "1" } : {},
     ...ca ? { NODE_EXTRA_CA_CERTS: ca } : {}
   };
 }
@@ -1766,6 +1769,9 @@ async function askWorkspaces(searchRoot, request) {
     const bearer = typeof request.auth === "object" ? request.auth.bearer : undefined;
     if (bearer === undefined && !getAuthProfile(profileId)) {
       return bail("need_login", "need_login", "this project's Augenta sign-in is missing; sign in again with the connect skill");
+    }
+    if (!adoptionCovers(projectRoot, profileId, cfg.connectorIds ?? [])) {
+      return bail("not_joined", "not_joined", "this checkout has not joined its project's Augenta connection; run the connect skill here to confirm its Workspaces first");
     }
     fetcher = bearer !== undefined ? (target, init) => fetch(target, {
       ...init,

@@ -11,6 +11,7 @@
  *
  * Run: bun test scripts/recall.test.ts
  */
+import { writeAdoption } from "../capture/adoption";
 import { test, expect, describe, beforeEach, afterEach, spyOn } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -646,6 +647,25 @@ describe("a project that cannot be asked", () => {
     expect(requests).toEqual([]);
   });
 
+  test("a checkout that has not joined its committed config asks nothing", async () => {
+    // Signed in to the same organization, but this checkout never affirmed the
+    // config's Workspaces: its question must not reach them.
+    route();
+    const { profileId } = await signIn();
+    writeConfig({ authMode: "oauth", profileId, destinations: storedDestinations(["connector_a"]), endpoint: GATEWAY });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload).toMatchObject({ status: "not_joined", code: "not_joined" });
+    expect(requests).toEqual([]);
+    // Still independent of the capture kill switch once joined.
+    writeAdoption(project, { profileId, connectorIds: ["connector_a"], adoptedAt: new Date().toISOString() });
+    process.env.AUGENTA_CAPTURE_ENABLED = "0";
+    try {
+      expect((await runRecall({ projectRoot: project }, args())).code).not.toBe("not_joined");
+    } finally {
+      delete process.env.AUGENTA_CAPTURE_ENABLED;
+    }
+  });
+
   test("a missing sign-in is need_login, and starts no authorization", async () => {
     route();
     writeConfig({
@@ -664,6 +684,7 @@ describe("the fan-out", () => {
   async function connectedProject(connectorIds = ["connector_a", "connector_b"]) {
     const { profileId } = await signIn();
     writeConfig({ authMode: "oauth", profileId, destinations: storedDestinations(connectorIds), endpoint: GATEWAY });
+    writeAdoption(project, { profileId, connectorIds, adoptedAt: new Date().toISOString() });
     return profileId;
   }
 
@@ -1060,6 +1081,7 @@ describe("recorded destinations and live recall", () => {
   async function configure(connectorIds = ["connector_a", "connector_b"], extra = {}) {
     const { profileId } = await signIn();
     writeConfig({ authMode: "oauth", profileId, destinations: storedDestinations(connectorIds), endpoint: GATEWAY, ...extra });
+    writeAdoption(project, { profileId, connectorIds, adoptedAt: new Date().toISOString() });
   }
 
   for (const answer of [false, true]) {

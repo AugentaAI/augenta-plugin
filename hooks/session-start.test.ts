@@ -214,6 +214,14 @@ describe("connected, but capture is off in this checkout — the join notice", (
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
   });
 
+  test("a join under another sign-in is named as that, not as changed Workspaces", () => {
+    committed();
+    signIn("profile_one");
+    writeAdoption(project, { profileId: "profile_other", connectorIds: ["connector_one"], adoptedAt: new Date().toISOString() });
+    const out = fire({ transcript_path: CLAUDE_TP, cwd: project });
+    expect(JSON.parse(out).hookSpecificOutput.additionalContext).toContain("this checkout joined it under a different sign-in");
+  });
+
   test("Codex gets user-facing wording and the $ invocation", () => {
     committed();
     const parsed = JSON.parse(fire({ transcript_path: CODEX_TP, cwd: project }));

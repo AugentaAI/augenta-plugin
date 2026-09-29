@@ -48,11 +48,11 @@ function canonical(path: string): string {
   }
 }
 
-/**
- * A sandbox's own proxy CA, where Cowork's VM leaves it, then the system bundle.
- * The first readable one wins. Kept in step with scripts/run-node-hook.sh.
- */
-const CA_BUNDLES = ["/usr/local/share/ca-certificates/mitm-proxy-ca.crt", "/etc/ssl/certs/ca-certificates.crt"];
+/** A sandbox's own proxy CA, where Cowork's VM leaves it. Kept in step with
+ *  scripts/run-node-hook.sh. */
+const SANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/mitm-proxy-ca.crt";
+/** The system bundle, trusted only alongside a proxy Node was told to use. */
+const SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
 
 /**
  * Node honors `NODE_USE_ENV_PROXY` from 24.0 and, backported, 22.21 (the
@@ -74,12 +74,19 @@ function readable(path: string): boolean {
 }
 
 /**
- * The environment to re-run a CLI in so that Node's fetch uses the proxy the
- * environment names, or undefined when there is nothing to gain. Without
- * `NODE_USE_ENV_PROXY`, Node ignores HTTPS_PROXY and connects directly, which in
- * a sandbox that allows egress only through its proxy fails outright. Measured
- * on 22.21 and 25.2. `NODE_NO_WARNINGS` hides 22.x's "EnvHttpProxyAgent is
- * experimental" notice, and a proxy's CA is added only when none is configured.
+ * The environment to re-run a CLI in so that Node's fetch works in a sandbox's
+ * network, or undefined when there is nothing to gain. Two things are only read
+ * at process start, which is why a re-run is needed at all:
+ *
+ * - `NODE_USE_ENV_PROXY`: without it, Node ignores HTTPS_PROXY and connects
+ *   directly, which a sandbox that allows egress only through its proxy refuses.
+ *   Measured on 22.21 and 25.2. `NODE_NO_WARNINGS` hides 22.x's
+ *   "EnvHttpProxyAgent is experimental" notice.
+ * - `NODE_EXTRA_CA_CERTS`: the sandbox's own proxy CA whenever it is readable,
+ *   even with no proxy variable, because a TLS-intercepting proxy can be
+ *   transparent; the system bundle only alongside a proxy Node was told to use.
+ *   Never over a CA the environment already chose.
+ *
  * Pure, so the decision is tested without spawning anything.
  */
 export function envProxyReexecEnv(
@@ -88,16 +95,22 @@ export function envProxyReexecEnv(
   runningUnderBun: boolean,
   isReadable: (path: string) => boolean = readable,
 ): NodeJS.ProcessEnv | undefined {
+  if (env.AUGENTA_PROXY_REEXEC || runningUnderBun) return undefined;
   const proxied = Boolean(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy);
-  if (!proxied || env.NODE_USE_ENV_PROXY || env.AUGENTA_PROXY_REEXEC || runningUnderBun ||
-      !nodeHonorsEnvProxy(nodeVersion)) return undefined;
-  const ca = env.NODE_EXTRA_CA_CERTS ? undefined : CA_BUNDLES.find(isReadable);
+  const useProxy = proxied && !env.NODE_USE_ENV_PROXY && nodeHonorsEnvProxy(nodeVersion);
+  const ca = env.NODE_EXTRA_CA_CERTS
+    ? undefined
+    : isReadable(SANDBOX_PROXY_CA)
+      ? SANDBOX_PROXY_CA
+      : (useProxy || env.NODE_USE_ENV_PROXY) && isReadable(SYSTEM_CA_BUNDLE)
+        ? SYSTEM_CA_BUNDLE
+        : undefined;
+  if (!useProxy && !ca) return undefined;
   return {
     ...env,
-    NODE_USE_ENV_PROXY: "1",
     // The loop guard: the re-run itself must never re-run.
     AUGENTA_PROXY_REEXEC: "1",
-    NODE_NO_WARNINGS: env.NODE_NO_WARNINGS ?? "1",
+    ...(useProxy ? { NODE_USE_ENV_PROXY: "1", NODE_NO_WARNINGS: env.NODE_NO_WARNINGS ?? "1" } : {}),
     ...(ca ? { NODE_EXTRA_CA_CERTS: ca } : {}),
   };
 }

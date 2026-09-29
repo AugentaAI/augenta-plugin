@@ -194,12 +194,14 @@ automatic recall.
 
 `AUGENTA_EPHEMERAL=1` declares that this session's machine is discarded when the
 session ends, and `=0` that it is not; either overrides detection
-(`capture/environment.ts`), which otherwise reads `CLAUDE_CODE_REMOTE=true`,
-`CLAUDE_CODE_REMOTE_SESSION_ID`, and, as a heuristic, `CODEX_HOME=/opt/codex`.
+(`capture/environment.ts`), which otherwise reads `CLAUDE_CODE_REMOTE=true` and,
+as a heuristic, `CODEX_HOME=/opt/codex`.
 When `HTTPS_PROXY`/`HTTP_PROXY` (either case) is set, `scripts/run-node-hook.sh`
-exports `NODE_USE_ENV_PROXY=1`, `NODE_NO_WARNINGS=1` and, from the first readable
-of `/usr/local/share/ca-certificates/mitm-proxy-ca.crt` and
-`/etc/ssl/certs/ca-certificates.crt`, `NODE_EXTRA_CA_CERTS`, each only if unset.
+exports `NODE_USE_ENV_PROXY=1` and `NODE_NO_WARNINGS=1`, each only if unset. It
+sets `NODE_EXTRA_CA_CERTS`, if unset, to `/usr/local/share/ca-certificates/mitm-proxy-ca.crt`
+whenever that file is readable, proxy variable or not (a transparent interceptor
+names none), and otherwise to `/etc/ssl/certs/ca-certificates.crt` only alongside
+a proxy Node was told to use.
 The connect and recall CLIs re-run themselves once with the same variables
 (`reexecForEnvProxy` in `runtime/node.ts`), because the skills start them with a
 bare `node`. Only Node 22.21+ and 24+ honor `NODE_USE_ENV_PROXY`. Without it,

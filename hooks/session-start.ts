@@ -213,11 +213,14 @@ if (connectedRoot) {
         const where = [cfg!.org?.name, environment === "prod" ? undefined : `the ${environment} environment`]
           .filter(Boolean)
           .join(", ");
+        const joined = readAdoption(connectedRoot);
         const reason = gate === "signed_out"
           ? "this machine is not signed in to Augenta for it"
-          : readAdoption(connectedRoot)
-            ? "its Workspaces changed since this checkout joined"
-            : "this checkout has not joined it";
+          : !joined
+            ? "this checkout has not joined it"
+            : joined.profileId !== cfg!.profileId
+              ? "this checkout joined it under a different sign-in"
+              : "its Workspaces changed since this checkout joined";
         const additionalContext = codex
           ? `Augenta: this project is set up to send capture to ${names}${where ? ` (${where})` : ""}, but capture is off in this checkout because ${reason}. Run ${connectAction} to join it.`
           : `[Augenta] This project's .augenta/config.json sends Augenta capture to ${names}${where ? ` (${where})` : ""}, ` +

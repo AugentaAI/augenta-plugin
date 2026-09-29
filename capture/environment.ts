@@ -29,9 +29,10 @@ export interface SessionEnvironment {
  * lasting one; either overrides the detection below.
  *
  * - `CLAUDE_CODE_REMOTE=true` is documented to be set in every Claude Code cloud
- *   session and never locally. `CLAUDE_CODE_REMOTE_SESSION_ID` carries the same
- *   `cse_` session ids Cowork's cloud sessions use, so it is taken as the same
- *   signal. Not yet measured inside a Cowork cloud session.
+ *   session and never locally. Cowork's cloud sessions run on the same session
+ *   infrastructure, but that is not yet measured. `CLAUDE_CODE_REMOTE_SESSION_ID`
+ *   is deliberately NOT a signal: nothing documents it as cloud-only, and a
+ *   false positive would refuse a local session.
  * - `CODEX_HOME=/opt/codex` is where Codex cloud keeps its home. Heuristic.
  */
 export function sessionEnvironment(env: NodeJS.ProcessEnv = process.env): SessionEnvironment {
@@ -41,10 +42,6 @@ export function sessionEnvironment(env: NodeJS.ProcessEnv = process.env): Sessio
   let kind: SessionKind | undefined;
   if (env.CLAUDE_CODE_REMOTE === "true") {
     signals.push("CLAUDE_CODE_REMOTE");
-    kind ??= "claude-cloud";
-  }
-  if (env.CLAUDE_CODE_REMOTE_SESSION_ID?.trim()) {
-    signals.push("CLAUDE_CODE_REMOTE_SESSION_ID");
     kind ??= "claude-cloud";
   }
   if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {

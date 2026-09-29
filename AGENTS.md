@@ -266,8 +266,12 @@ deliberate:
   switch stops a project SENDING; someone who turned it off may still legitimately
   ask what was already remembered, and gating a read on it would make one off
   switch silently mean two things. What governs recall is the same thing that
-  governs everything else: a readable `.augenta/config.json`. Deleting it remains
-  the one off switch for both, and README says so in those words. Automatic
+  governs everything else: a readable `.augenta/config.json`, and, for a browser
+  connection, this checkout's join of it. A committed config reaches checkouts
+  whose users never affirmed its Workspaces, so recall from one that has not
+  joined returns `not_joined` and sends nothing. That check lives in the request
+  layer and is the adoption marker, never the capture switch. Deleting the config
+  remains the one off switch for both, and README says so in those words. Automatic
   recall IS gated on the switch — see below — and that gate lives in the hook,
   never in the shared request layer.
 - **It needs no consent gate because it creates no new disclosure.** Recall asks

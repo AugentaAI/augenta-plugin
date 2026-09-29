@@ -122,12 +122,21 @@ describe("the CLI re-run for a proxied sandbox", () => {
     expect(envProxyReexecEnv(proxied, "22.21.1", true, none)).toBeUndefined();
   });
 
-  test("a proxy's CA is added only from a readable bundle, and never over one already chosen", () => {
+  test("a CA is added only from a readable file, and never over one already chosen", () => {
     const proxied = { https_proxy: "http://127.0.0.1:3128" };
-    expect(envProxyReexecEnv(proxied, "24.0.0", false, (path) => path.includes("mitm-proxy-ca"))?.NODE_EXTRA_CA_CERTS)
+    const mitm = (path: string) => path.includes("mitm-proxy-ca");
+    expect(envProxyReexecEnv(proxied, "24.0.0", false, mitm)?.NODE_EXTRA_CA_CERTS)
       .toBe("/usr/local/share/ca-certificates/mitm-proxy-ca.crt");
     expect(envProxyReexecEnv(proxied, "24.0.0", false, () => false)?.NODE_EXTRA_CA_CERTS).toBeUndefined();
     expect(envProxyReexecEnv({ ...proxied, NODE_EXTRA_CA_CERTS: "/mine.pem" }, "24.0.0", false, () => true)?.NODE_EXTRA_CA_CERTS)
       .toBe("/mine.pem");
+  });
+
+  test("a transparent proxy's CA is trusted with no proxy variable; the system bundle is not", () => {
+    // The sandbox's own CA is its own signal: a transparent interceptor names no proxy.
+    expect(envProxyReexecEnv({}, "20.19.5", false, (path) => path.includes("mitm-proxy-ca")))
+      .toEqual({ AUGENTA_PROXY_REEXEC: "1", NODE_EXTRA_CA_CERTS: "/usr/local/share/ca-certificates/mitm-proxy-ca.crt" });
+    // Without a proxy in use, the system bundle alone is no reason to re-run.
+    expect(envProxyReexecEnv({}, "24.0.0", false, (path) => path.includes("ca-certificates.crt"))).toBeUndefined();
   });
 });

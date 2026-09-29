@@ -6,7 +6,8 @@
  * `Request was cancelled.`, and only then an `UND_ERR_ABORTED` whose message
  * carries the proxy's status ("Proxy response (403) !== 200 when HTTP
  * Tunneling"). The old one-level unwrap reported the middle line, which names
- * neither the block nor a host (ENG-447, ENG-458). So the whole cause chain is
+ * neither the block nor a host, the whole diagnosis a user in a sandboxed
+ * session got. So the whole cause chain is
  * walked here, and a failure that could be a block is confirmed by asking each
  * Augenta host for the one answer only Augenta gives.
  *

@@ -18,11 +18,11 @@ describe("sessionEnvironment", () => {
     expect(sessionEnvironment({ CODEX_HOME: "/Users/x/.codex" }).ephemeral).toBe(false);
   });
 
-  test("Claude Code cloud sessions, by either documented variable", () => {
+  test("Claude Code cloud sessions, by the documented variable only", () => {
     expect(sessionEnvironment({ CLAUDE_CODE_REMOTE: "true" }))
       .toEqual({ ephemeral: true, kind: "claude-cloud", signals: ["CLAUDE_CODE_REMOTE"] });
-    expect(sessionEnvironment({ CLAUDE_CODE_REMOTE_SESSION_ID: "cse_01JvAst" }))
-      .toMatchObject({ ephemeral: true, kind: "claude-cloud" });
+    // Not documented as cloud-only, so it must never refuse a local session.
+    expect(sessionEnvironment({ CLAUDE_CODE_REMOTE_SESSION_ID: "cse_01JvAst" }).ephemeral).toBe(false);
   });
 
   test("Codex cloud by its home, labelled a heuristic", () => {

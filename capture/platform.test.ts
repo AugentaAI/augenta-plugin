@@ -101,7 +101,7 @@ describe("describeError", () => {
   });
 
   test("a proxy's refused tunnel is named, not reported as 'Request was cancelled.'", () => {
-    // ENG-447 reproduced exactly this chain and reported only its middle line.
+    // A sandboxed session reproduced exactly this chain and got only its middle line.
     const refused = new TypeError("fetch failed", {
       cause: Object.assign(new Error("Request was cancelled.", {
         cause: Object.assign(new Error("Proxy response (403) !== 200 when HTTP Tunneling"), { name: "AbortError", code: "UND_ERR_ABORTED" }),

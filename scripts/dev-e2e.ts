@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { writeAdoption } from "../capture/adoption";
 import { ensureAugentaDir } from "../capture/augenta-dir";
 import {
   augentaOAuthConfig,
@@ -220,6 +221,13 @@ try {
     { mode: 0o600 },
   );
   chmodSync(configPath, 0o600);
+  // Joined, as connect leaves a checkout: without it the shipper treats this
+  // temp project as a clone nobody has adopted and ships nothing.
+  writeAdoption(tempProject, {
+    profileId: cfg.profileId,
+    connectorIds: cfg.connectorIds,
+    adoptedAt: new Date().toISOString(),
+  });
 
   const sid = `sess-hosted-oauth-${Date.now()}`;
   const now = new Date().toISOString();

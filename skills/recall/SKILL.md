@@ -167,6 +167,10 @@ back to the main checkout or sibling worktrees. An unconnected worktree returns
   to reconnect rather than to connect for the first time.
 - **`need_login`** — the stored Augenta sign-in is missing or expired. Point at
   `/augenta:connect` (`$augenta:connect` on Codex) and stop.
+- **`not_joined`** — this checkout has the project's config, usually committed by
+  a teammate, but has not joined it, so its question was not sent. Point at
+  `/augenta:connect` (`$augenta:connect` on Codex), which shows the project's
+  Workspaces and asks whether to use them, and stop.
 - **`recall_unavailable`** — recall is not available in this Augenta
   environment. Say so plainly and stop; there is nothing to retry and nothing
   the user can configure.

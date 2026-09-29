@@ -27,7 +27,7 @@ import { isMain, reexecForEnvProxy } from "../runtime/node";
 // than a literal per call site — see runtime/version.ts for why.
 import { PLUGIN_VERSION } from "../runtime/version";
 import { ensureAugentaDir, setAugentaIgnore } from "../capture/augenta-dir";
-import { adoptionCovers, writeAdoption } from "../capture/adoption";
+import { adoptionCovers, readAdoption, writeAdoption } from "../capture/adoption";
 import { ephemeralProject, sessionEnvironment } from "../capture/environment";
 import { classifyNetworkError, diagnoseHosts } from "../capture/network";
 import {
@@ -1491,7 +1491,7 @@ export async function runJsonVerb(
   } catch (error) {
     // A failure that could be the network refusing Augenta is checked host by
     // host before it is reported, so the answer names what to allow instead of
-    // "Request was cancelled." (ENG-458). Only a confirmed block is reported as
+    // "Request was cancelled.". Only a confirmed block is reported as
     // one; if every host answers as Augenta does, the original failure stands.
     if (classifyNetworkError(error)) {
       const hosts = await diagnoseHosts(controlUrl(cfg, args.controlUrl));
@@ -1586,6 +1586,11 @@ async function adoptProject(resolved: ResolvedProject, args: Args): Promise<Json
     return { status: "need_login", message: "sign in to Augenta, then join again", organization };
   }
   const picked = usable.find((item) => item.profileId === cfg.profileId);
+  // The right organization's sign-in is saved but no longer works (expired or
+  // revoked): that needs a new sign-in, not a different organization.
+  if (!picked && reusableProfiles(oauth).some((item) => item.profileId === cfg.profileId)) {
+    return { status: "need_login", message: `the sign-in to ${organization ?? "this project's organization"} needs renewing; sign in again, then join`, organization };
+  }
   if (!picked) {
     return {
       status: "error",
@@ -1619,13 +1624,18 @@ async function adoptProject(resolved: ResolvedProject, args: Args): Promise<Json
       message: `this sign-in cannot use ${unreachable.map((item) => item.workspaceName ?? item.workspaceId).join(", ")}; you may need to be added to ${unreachable.length === 1 ? "that Workspace" : "those Workspaces"}. Capture stays off in this checkout`,
     };
   }
+  // Destinations this checkout had not adopted before are new to it: they start
+  // at the end of its spool, never inheriting records captured before they were
+  // affirmed here (the same rule establishConnectors applies to links it creates).
+  const previouslyAdopted = readAdoption(resolved.projectRoot)?.connectorIds ?? [];
+  const freshKeys = cfg.connectorIds!.filter((id) => !previouslyAdopted.includes(id));
   writeAdoption(resolved.projectRoot, {
     profileId: picked.profileId,
     connectorIds: cfg.connectorIds!,
     adoptedAt: new Date().toISOString(),
   });
   try {
-    new Outbox(resolved.projectRoot).registerDestinations(cfg.connectorIds!);
+    new Outbox(resolved.projectRoot).registerDestinations(cfg.connectorIds!, { freshKeys });
   } catch {
     /* the shipper reconciles the set on its own; never fail a join over this */
   }

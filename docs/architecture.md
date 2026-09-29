@@ -51,7 +51,10 @@ rewriting config. Tokens stay in a
 private file in your home folder. See [connection settings](configuration.md).
 
 Capture checks for `.augenta/config.json` in the working folder and its
-parents. With no readable config, it saves and sends nothing. Session start
+parents. With no readable config, it saves and sends nothing. A browser
+connection also needs this machine's saved sign-in for it and this checkout's
+join (`.augenta/state/adopted.json`, written by connect), because its config may
+be committed and arrive in checkouts whose users never chose its Workspaces. Session start
 can offer to connect an unconnected project once.
 
 Connect, recall, capture and health use the same local config lookup. It stops

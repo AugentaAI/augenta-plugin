@@ -53,8 +53,8 @@ default, whether automatic recall is on or off.
   `.augenta/config.json` holds no sign-in token, so connect now lets Git see that
   one file, and nothing else in `.augenta/`. Commit it, and every checkout of the
   repository points at the same Workspaces.
-  - A checkout with a committed config captures only after its user runs connect
-    there. Connect signs them in if needed, shows the project's Workspaces and
+  - A checkout with a committed config captures, and sends recall questions,
+    only after its user runs connect there. Connect signs them in if needed, shows the project's Workspaces and
     the full-record disclosure, and asks whether to use them. They are not asked
     to choose Workspaces again unless they want to.
   - Joining needs every recorded Workspace to be reachable with their own
@@ -108,9 +108,10 @@ default, whether automatic recall is on or off.
   instead of Node's generic wording.
 - **Proxies the environment names are used.** Where `HTTPS_PROXY` or
   `HTTP_PROXY` is set, as in cloud sessions and Cowork's VM, connect, recall and
-  the hooks now send through that proxy rather than around it, and trust the
-  sandbox's proxy certificate unless `NODE_EXTRA_CA_CERTS` is already set. This
-  needs Node.js 22.21 or newer; older versions ignore the proxy as before.
+  the hooks now send through that proxy rather than around it. They also trust a
+  sandbox's own proxy certificate when it leaves one, even behind a transparent
+  proxy, unless `NODE_EXTRA_CA_CERTS` is already set. Using the proxy needs
+  Node.js 22.21 or newer; older versions ignore it as before.
 - Cloud layouts: a Claude Code transcript under `/root/.claude/projects/` is no
   longer mistaken for Codex when `CODEX_HOME` is the home directory itself. Codex
   project memory is found under a non-default Codex home such as `/opt/codex`

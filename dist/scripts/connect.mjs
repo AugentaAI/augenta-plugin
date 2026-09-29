@@ -243,7 +243,8 @@ function canonical(path) {
     return absolute;
   }
 }
-var CA_BUNDLES = ["/usr/local/share/ca-certificates/mitm-proxy-ca.crt", "/etc/ssl/certs/ca-certificates.crt"];
+var SANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/mitm-proxy-ca.crt";
+var SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
 function nodeHonorsEnvProxy(version) {
   const [major = 0, minor = 0] = version.split(".").map(Number);
   return major >= 24 || major === 22 && minor >= 21;
@@ -257,15 +258,17 @@ function readable(path) {
   }
 }
 function envProxyReexecEnv(env, nodeVersion, runningUnderBun, isReadable = readable) {
-  const proxied = Boolean(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy);
-  if (!proxied || env.NODE_USE_ENV_PROXY || env.AUGENTA_PROXY_REEXEC || runningUnderBun || !nodeHonorsEnvProxy(nodeVersion))
+  if (env.AUGENTA_PROXY_REEXEC || runningUnderBun)
     return;
-  const ca = env.NODE_EXTRA_CA_CERTS ? undefined : CA_BUNDLES.find(isReadable);
+  const proxied = Boolean(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy);
+  const useProxy = proxied && !env.NODE_USE_ENV_PROXY && nodeHonorsEnvProxy(nodeVersion);
+  const ca = env.NODE_EXTRA_CA_CERTS ? undefined : isReadable(SANDBOX_PROXY_CA) ? SANDBOX_PROXY_CA : (useProxy || env.NODE_USE_ENV_PROXY) && isReadable(SYSTEM_CA_BUNDLE) ? SYSTEM_CA_BUNDLE : undefined;
+  if (!useProxy && !ca)
+    return;
   return {
     ...env,
-    NODE_USE_ENV_PROXY: "1",
     AUGENTA_PROXY_REEXEC: "1",
-    NODE_NO_WARNINGS: env.NODE_NO_WARNINGS ?? "1",
+    ...useProxy ? { NODE_USE_ENV_PROXY: "1", NODE_NO_WARNINGS: env.NODE_NO_WARNINGS ?? "1" } : {},
     ...ca ? { NODE_EXTRA_CA_CERTS: ca } : {}
   };
 }
@@ -1268,10 +1271,6 @@ function sessionEnvironment(env = process.env) {
     signals.push("CLAUDE_CODE_REMOTE");
     kind ??= "claude-cloud";
   }
-  if (env.CLAUDE_CODE_REMOTE_SESSION_ID?.trim()) {
-    signals.push("CLAUDE_CODE_REMOTE_SESSION_ID");
-    kind ??= "claude-cloud";
-  }
   if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {
     signals.push("CODEX_HOME=/opt/codex (heuristic)");
     kind ??= "codex-cloud";
@@ -2215,6 +2214,9 @@ async function adoptProject(resolved, args) {
     return { status: "need_login", message: "sign in to Augenta, then join again", organization };
   }
   const picked = usable.find((item) => item.profileId === cfg.profileId);
+  if (!picked && reusableProfiles(oauth).some((item) => item.profileId === cfg.profileId)) {
+    return { status: "need_login", message: `the sign-in to ${organization ?? "this project's organization"} needs renewing; sign in again, then join`, organization };
+  }
   if (!picked) {
     return {
       status: "error",
@@ -2248,13 +2250,15 @@ async function adoptProject(resolved, args) {
       message: `this sign-in cannot use ${unreachable.map((item) => item.workspaceName ?? item.workspaceId).join(", ")}; you may need to be added to ${unreachable.length === 1 ? "that Workspace" : "those Workspaces"}. Capture stays off in this checkout`
     };
   }
+  const previouslyAdopted = readAdoption(resolved.projectRoot)?.connectorIds ?? [];
+  const freshKeys = cfg.connectorIds.filter((id) => !previouslyAdopted.includes(id));
   writeAdoption(resolved.projectRoot, {
     profileId: picked.profileId,
     connectorIds: cfg.connectorIds,
     adoptedAt: new Date().toISOString()
   });
   try {
-    new Outbox(resolved.projectRoot).registerDestinations(cfg.connectorIds);
+    new Outbox(resolved.projectRoot).registerDestinations(cfg.connectorIds, { freshKeys });
   } catch {}
   return {
     status: "adopted",

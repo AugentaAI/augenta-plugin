@@ -310,7 +310,7 @@ Creation and connection are separate calls: never pass `--create-workspace` and
 ## 4. Confirm
 
 Connector creation proves configuration only. After the next completed turn,
-run the same installed `dist/scripts/connect.mjs` with `--project <projectRoot> --json --health` to check activity. If dispatch is absent, direct the user to
+run the same installed `dist/scripts/connect.mjs` with `--project <projectRoot> --json --health` to check activity. A `nextStep` of `sign_in` means this machine has no saved sign-in for the project, and `adopt` means this checkout has not joined its connection (see step 1); both are fixed by running connect again here. If dispatch is absent, direct the user to
 review the plugin hooks in their host and follow its activation/restart guidance.
 Never change host trust records or invoke capture/delivery manually as proof.
 Report API acceptance separately from verified ingestion.
@@ -360,7 +360,9 @@ just that setting. It does not reconnect or touch the destinations:
 node "$CONNECT" --harness <harness> --json --auto-recall <on|off>
 ```
 
-On `auto_recall_updated`, confirm the new `autoRecall` value. On `not_connected`,
+If `--probe` reported `configTracked: true`, say first that git tracks the config,
+so the change applies to everyone who pulls it once it is committed. On
+`auto_recall_updated`, confirm the new `autoRecall` value. On `not_connected`,
 the project has no readable connection: run the connect flow instead. Setting
 `AUGENTA_AUTO_RECALL=0` in the environment that starts the coding app turns it off
 for every project. `/augenta:recall` keeps working whatever this setting is.
