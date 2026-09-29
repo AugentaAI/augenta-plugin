@@ -604,6 +604,17 @@ export function hasStoredProfile(profileId: string): boolean {
   return storedProfile(profileId) !== undefined;
 }
 
+/**
+ * Who the stored sign-in for `profileId` belongs to, read the same
+ * side-effect-free way. A profile keys on the organization, not the person, so
+ * two people signing in to one organization on this machine share a profile id;
+ * this is what tells a checkout joined by one of them from the other.
+ */
+export function storedProfileUserId(profileId: string): string | undefined {
+  const userId = storedProfile(profileId)?.userId;
+  return typeof userId === "string" && userId ? userId : undefined;
+}
+
 /** One profile off auth.json, lock-free and with no side effects (see above). */
 function storedProfile(profileId: string): Partial<AuthProfile> | undefined {
   try {

@@ -45,7 +45,6 @@ import {
   resolveProjectRoot,
   type ProjectConfig,
 } from "./config";
-import { adoptionCovers } from "./adoption";
 import { REQUEST_TIMEOUT_MS, fetchWithProfile, getAuthProfile, ReLoginRequiredError } from "./auth";
 import {
   AugentaRequestError,
@@ -780,8 +779,10 @@ export async function askWorkspaces(searchRoot: string, request: RecallRequest):
     // of Workspaces. Asking from a checkout that has not joined would send the
     // question, and leave its fingerprint, where they never affirmed. The same
     // join capture needs, and deliberately NOT the capture kill switch: recall
-    // stays a read that AUGENTA_CAPTURE_ENABLED=0 leaves available.
-    if (!adoptionCovers(projectRoot, profileId, cfg.connectorIds ?? [])) {
+    // stays a read that AUGENTA_CAPTURE_ENABLED=0 leaves available. The parsed
+    // config carries destinations only while this checkout's own links name
+    // exactly the recorded Workspaces under the sign-in stored here (config.ts).
+    if (!cfg.destinations?.length) {
       return bail(
         "not_joined",
         "not_joined",

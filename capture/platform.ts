@@ -33,6 +33,15 @@ export interface Connector {
   orgId: string;
   _etag?: string;
   harness?: string;
+  name?: string;
+  projectName?: string;
+  client?: string;
+  description?: string;
+  /** The person the link belongs to. Records through it are accepted only from
+   *  them or an organization manager, so connect adopts only its user's own. */
+  ownerUserId?: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
 }
 
 export class AugentaRequestError extends Error {

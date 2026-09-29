@@ -700,9 +700,13 @@ describe("the recall skill drives recall itself", () => {
     const agents = readFileSync(join(PLUGIN_ROOT, "AGENTS.md"), "utf8").replace(/\s+/g, " ");
     expect(agents).toMatch(/A committed config is the project's recorded decision; each checkout joins it/);
     expect(agents).toMatch(/An API-key config holds its key and is never committable/);
+    // Routes exist only from this checkout's own links, made by the person
+    // signed in here, naming exactly the recorded Workspaces.
     const gate = readFileSync(join(PLUGIN_ROOT, "capture", "config.ts"), "utf8");
-    expect(gate).toMatch(/adoptionCovers\(cfg\.projectRoot, cfg\.profileId, cfg\.connectorIds\)/);
+    expect(gate).toMatch(/storedProfileUserId\(profileId\) !== links\.userId/);
+    expect(gate).toMatch(/links\.links\.length !== workspaces\.length/);
     expect(gate).toMatch(/hasStoredProfile\(cfg\.profileId\)/);
+    expect(gate).toMatch(/if \(value\.destinations !== undefined\) return undefined;/);
   });
 
   test("automatic recall is the project's own answer, Off by default, and never gates /augenta:recall", () => {

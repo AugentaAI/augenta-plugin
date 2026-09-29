@@ -42,9 +42,19 @@ import { randomUUID as randomUUID3 } from "node:crypto";
 import { readFileSync as readFileSync4 } from "node:fs";
 import { join as join5 } from "node:path";
 
-// capture/adoption.ts
-import { randomUUID } from "node:crypto";
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync, rmSync, writeFileSync as writeFileSync2 } from "node:fs";
+// capture/auth.ts
+import {
+  chmodSync as chmodSync2,
+  existsSync as existsSync2,
+  mkdirSync as mkdirSync2,
+  readFileSync as readFileSync2,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync as writeFileSync2
+} from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { join as join2 } from "node:path";
 
 // capture/augenta-dir.ts
@@ -79,60 +89,6 @@ function setAugentaIgnore(projectRoot, form) {
     writeFileSync(path, wanted);
   } catch {}
 }
-
-// capture/adoption.ts
-function adoptionPath(projectRoot) {
-  return join2(projectRoot, ".augenta", "state", "adopted.json");
-}
-function readAdoption(projectRoot) {
-  try {
-    const value = JSON.parse(readFileSync2(adoptionPath(projectRoot), "utf8"));
-    if (typeof value.profileId !== "string" || !value.profileId)
-      return;
-    if (!Array.isArray(value.connectorIds) || !value.connectorIds.every((id) => typeof id === "string" && id.length > 0))
-      return;
-    if (typeof value.adoptedAt !== "string" || !Number.isFinite(Date.parse(value.adoptedAt)))
-      return;
-    return {
-      profileId: value.profileId,
-      connectorIds: [...value.connectorIds],
-      adoptedAt: new Date(value.adoptedAt).toISOString()
-    };
-  } catch {
-    return;
-  }
-}
-function writeAdoption(projectRoot, adoption) {
-  const dir = join2(ensureAugentaDir(projectRoot), "state");
-  mkdirSync2(dir, { recursive: true });
-  const path = join2(dir, "adopted.json");
-  const tmp = `${path}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync2(tmp, JSON.stringify(adoption), { mode: 384 });
-    renameSync(tmp, path);
-  } finally {
-    rmSync(tmp, { force: true });
-  }
-}
-function adoptionCovers(projectRoot, profileId, connectorIds) {
-  const adoption = readAdoption(projectRoot);
-  return Boolean(adoption && adoption.profileId === profileId && connectorIds.every((id) => adoption.connectorIds.includes(id)));
-}
-
-// capture/auth.ts
-import {
-  chmodSync as chmodSync2,
-  existsSync as existsSync2,
-  mkdirSync as mkdirSync3,
-  readFileSync as readFileSync3,
-  renameSync as renameSync2,
-  statSync,
-  unlinkSync,
-  writeFileSync as writeFileSync3
-} from "node:fs";
-import { createHash, randomUUID as randomUUID2 } from "node:crypto";
-import { homedir } from "node:os";
-import { join as join3 } from "node:path";
 
 // capture/network.ts
 class DiscoveryError extends Error {
@@ -310,14 +266,14 @@ class ReLoginRequiredError extends Error {
     this.reason = reason;
   }
 }
-var authRoot = () => process.env.AUGENTA_AUTH_HOME || join3(homedir(), ".augenta");
-var authPath = () => join3(authRoot(), "auth.json");
-var lockPath = () => join3(authRoot(), "auth.lock");
+var authRoot = () => process.env.AUGENTA_AUTH_HOME || join2(homedir(), ".augenta");
+var authPath = () => join2(authRoot(), "auth.json");
+var lockPath = () => join2(authRoot(), "auth.lock");
 var LOCK_WAIT_MS = 1e4;
 var STALE_LOCK_MS = 30000;
 var REQUEST_TIMEOUT_MS = 15000;
 function ensureAuthRoot() {
-  mkdirSync3(authRoot(), { recursive: true, mode: 448 });
+  mkdirSync2(authRoot(), { recursive: true, mode: 448 });
   chmodSync2(authRoot(), 448);
 }
 function readAuthStore() {
@@ -325,7 +281,7 @@ function readAuthStore() {
     ensureAuthRoot();
     if (existsSync2(authPath()))
       chmodSync2(authPath(), 384);
-    const parsed = JSON.parse(readFileSync3(authPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
       return { version: 1, profiles: {} };
     }
@@ -337,15 +293,15 @@ function readAuthStore() {
 function writeAuthStore(store) {
   ensureAuthRoot();
   const path = authPath();
-  const tmp = `${path}.${process.pid}.${randomUUID2()}.tmp`;
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    writeFileSync3(tmp, `${JSON.stringify(store, null, 2)}
+    writeFileSync2(tmp, `${JSON.stringify(store, null, 2)}
 `, {
       mode: 384,
       flag: "wx"
     });
     chmodSync2(tmp, 384);
-    renameSync2(tmp, path);
+    renameSync(tmp, path);
     chmodSync2(path, 384);
   } finally {
     try {
@@ -360,7 +316,7 @@ async function withAuthLock(fn) {
   const deadline = Date.now() + LOCK_WAIT_MS;
   while (true) {
     try {
-      writeFileSync3(lock, String(process.pid), { flag: "wx", mode: 384 });
+      writeFileSync2(lock, String(process.pid), { flag: "wx", mode: 384 });
       break;
     } catch {
       try {
@@ -437,17 +393,17 @@ function browserCommand(url) {
     return ["cmd", "/c", "start", "", url];
   return ["xdg-open", url];
 }
-var pendingLoginPath = () => join3(authRoot(), "pending-login.json");
+var pendingLoginPath = () => join2(authRoot(), "pending-login.json");
 function savePendingLogin(pending) {
   ensureAuthRoot();
   const path = pendingLoginPath();
-  writeFileSync3(path, `${JSON.stringify(pending, null, 2)}
+  writeFileSync2(path, `${JSON.stringify(pending, null, 2)}
 `, { mode: 384 });
   chmodSync2(path, 384);
 }
 function readPendingLogin() {
   try {
-    const parsed = JSON.parse(readFileSync3(pendingLoginPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(pendingLoginPath(), "utf8"));
     if (typeof parsed.deviceCode !== "string" || typeof parsed.clientId !== "string" || typeof parsed.issuer !== "string" || typeof parsed.expiresAt !== "number" || parsed.expiresAt <= Date.now()) {
       return;
     }
@@ -628,9 +584,13 @@ function storedProfileUpdatedAt(profileId) {
 function hasStoredProfile(profileId) {
   return storedProfile(profileId) !== undefined;
 }
+function storedProfileUserId(profileId) {
+  const userId = storedProfile(profileId)?.userId;
+  return typeof userId === "string" && userId ? userId : undefined;
+}
 function storedProfile(profileId) {
   try {
-    const parsed = JSON.parse(readFileSync3(authPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object")
       return;
     return Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
@@ -656,12 +616,12 @@ async function fetchWithProfile(profileId, url, init = {}) {
 }
 var NOTICES = ["relogin", "badkey", "connect"];
 function noticePath(projectRoot, notice) {
-  return join3(projectRoot, ".augenta", `${notice}-required`);
+  return join2(projectRoot, ".augenta", `${notice}-required`);
 }
 function markAuthNotice(projectRoot, notice) {
   try {
     ensureAugentaDir(projectRoot);
-    writeFileSync3(noticePath(projectRoot, notice), `${notice}
+    writeFileSync2(noticePath(projectRoot, notice), `${notice}
 `, {
       mode: 384
     });
@@ -686,6 +646,70 @@ function takeAuthNotice(projectRoot) {
     } catch {}
   }
   return found;
+}
+
+// capture/links.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
+function linksPath(projectRoot) {
+  return join3(projectRoot, ".augenta", "state", "links.json");
+}
+function legacyAdoptionPath(projectRoot) {
+  return join3(projectRoot, ".augenta", "state", "adopted.json");
+}
+var nonEmpty = (value) => typeof value === "string" && value.length > 0;
+function readLinks(projectRoot) {
+  try {
+    const value = JSON.parse(readFileSync3(linksPath(projectRoot), "utf8"));
+    if (value.version !== 1)
+      return;
+    if (!nonEmpty(value.profileId) || !nonEmpty(value.userId) || !nonEmpty(value.projectKey))
+      return;
+    if (!nonEmpty(value.joinedAt) || !Number.isFinite(Date.parse(value.joinedAt)))
+      return;
+    if (!Array.isArray(value.links) || value.links.length === 0)
+      return;
+    const links = [];
+    for (const item of value.links) {
+      const link = item;
+      if (!link || !nonEmpty(link.workspaceId) || !nonEmpty(link.connectorId))
+        return;
+      if (links.some((seen) => seen.workspaceId === link.workspaceId || seen.connectorId === link.connectorId)) {
+        return;
+      }
+      links.push({ workspaceId: link.workspaceId, connectorId: link.connectorId });
+    }
+    return {
+      profileId: value.profileId,
+      userId: value.userId,
+      projectKey: value.projectKey,
+      joinedAt: new Date(value.joinedAt).toISOString(),
+      links
+    };
+  } catch {
+    return;
+  }
+}
+function writeLinks(projectRoot, links) {
+  const dir = join3(ensureAugentaDir(projectRoot), "state");
+  mkdirSync3(dir, { recursive: true });
+  const path = join3(dir, "links.json");
+  const tmp = `${path}.${randomUUID2()}.tmp`;
+  try {
+    writeFileSync3(tmp, JSON.stringify({
+      version: 1,
+      profileId: links.profileId,
+      userId: links.userId,
+      projectKey: links.projectKey,
+      joinedAt: links.joinedAt,
+      links: links.links.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId }))
+    }), { mode: 384 });
+    renameSync2(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+  rmSync(legacyAdoptionPath(projectRoot), { force: true });
 }
 
 // capture/project.ts
@@ -772,6 +796,42 @@ function parseDestinations(raw) {
   }
   return destinations;
 }
+function parseWorkspaces(raw) {
+  if (!Array.isArray(raw) || raw.length === 0)
+    return;
+  const workspaces = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object")
+      return;
+    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
+    if (!workspaceId)
+      return;
+    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
+      return;
+    if (workspaces.some((workspace) => workspace.workspaceId === workspaceId))
+      continue;
+    const workspaceName = item.workspaceName?.trim();
+    workspaces.push({ workspaceId, ...workspaceName ? { workspaceName } : {} });
+  }
+  return workspaces;
+}
+function joinedRoutes(projectRoot, profileId, projectKey, workspaces) {
+  const links = readLinks(projectRoot);
+  if (!links || links.projectKey !== projectKey)
+    return { join: "none" };
+  if (links.profileId !== profileId || storedProfileUserId(profileId) !== links.userId)
+    return { join: "signin" };
+  const destinations = [];
+  for (const workspace of workspaces) {
+    const link = links.links.find((entry) => entry.workspaceId === workspace.workspaceId);
+    if (!link)
+      return { join: "workspaces" };
+    destinations.push({ connectorId: link.connectorId, ...workspace });
+  }
+  if (links.links.length !== workspaces.length)
+    return { join: "workspaces" };
+  return { join: "joined", destinations, joinedAt: links.joinedAt };
+}
 function configPath(projectRoot) {
   return join5(projectRoot, ".augenta", "config.json");
 }
@@ -801,24 +861,36 @@ function loadProjectConfig(projectRoot) {
         return;
       settings.org = { id: value.org.id.trim(), ...value.org.name?.trim() ? { name: value.org.name.trim() } : {} };
     }
+    if (value.authMode === "oauth") {
+      if (value.destinations !== undefined)
+        return;
+      const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
+      const projectKey = typeof value.projectKey === "string" ? value.projectKey.trim() : "";
+      const workspaces = parseWorkspaces(value.workspaces);
+      if (!profileId || !projectKey || !workspaces)
+        return;
+      const routes = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      return {
+        ...settings,
+        authMode: "oauth",
+        profileId,
+        projectKey,
+        workspaces,
+        join: routes.join,
+        ...routes.destinations ? {
+          destinations: routes.destinations,
+          connectorIds: routes.destinations.map((destination) => destination.connectorId),
+          captureSince: routes.joinedAt
+        } : {},
+        projectRoot
+      };
+    }
     const destinations = value.destinations === undefined ? undefined : parseDestinations(value.destinations);
     if (value.destinations !== undefined && !destinations)
       return;
     if (destinations) {
       settings.destinations = destinations;
       settings.connectorIds = destinations.map((destination) => destination.connectorId);
-    }
-    if (value.authMode === "oauth") {
-      const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
-      if (!profileId || !destinations)
-        return;
-      return {
-        ...settings,
-        authMode: "oauth",
-        ...captureSince ? { captureSince } : {},
-        profileId,
-        projectRoot
-      };
     }
     if (value.authMode === "api-key") {
       const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
@@ -859,11 +931,9 @@ function captureGate(cfg) {
     return "killed";
   if (cfg.authMode !== "oauth")
     return cfg.apiKey ? "live" : "signed_out";
-  if (!cfg.profileId || !cfg.connectorIds?.length)
-    return "not_adopted";
-  if (!hasStoredProfile(cfg.profileId))
+  if (!cfg.profileId || !hasStoredProfile(cfg.profileId))
     return "signed_out";
-  if (!adoptionCovers(cfg.projectRoot, cfg.profileId, cfg.connectorIds))
+  if (!cfg.connectorIds?.length)
     return "not_adopted";
   return "live";
 }
@@ -871,14 +941,7 @@ function captureEnabled(cfg) {
   return Boolean(cfg) && captureGate(cfg) === "live";
 }
 function effectiveCaptureSince(cfg) {
-  if (cfg.authMode !== "oauth")
-    return cfg.captureSince;
-  const adoptedAt = readAdoption(cfg.projectRoot)?.adoptedAt;
-  if (!adoptedAt)
-    return cfg.captureSince;
-  if (!cfg.captureSince)
-    return adoptedAt;
-  return Date.parse(adoptedAt) > Date.parse(cfg.captureSince) ? adoptedAt : cfg.captureSince;
+  return cfg.captureSince;
 }
 
 // capture/outbox.ts
@@ -1229,7 +1292,7 @@ function captureHealth(projectRoot) {
     configuration: cfg ? "valid" : existsSync5(join7(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
     activityScope: "project",
     hostDispatch: "unverified",
-    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds.length : cfg ? 1 : 0,
+    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg ? 1 : 0,
     pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
     ...activity,
     hostApproval: "unknown",
@@ -1252,6 +1315,7 @@ function detectedHarness(explicit, env = process.env) {
 // scripts/connect.ts
 import { chmodSync as chmodSync3, existsSync as existsSync7, readFileSync as readFileSync7, renameSync as renameSync5, rmSync as rmSync2, writeFileSync as writeFileSync6 } from "node:fs";
 import { basename, join as join9 } from "node:path";
+import { randomUUID as randomUUID4 } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
@@ -1470,18 +1534,18 @@ function writeOAuthConfig(projectRoot, connection) {
   }
   const dir = ensureAugentaDir(projectRoot);
   const path = join9(dir, "config.json");
-  const captureSince = new Date().toISOString();
+  const joinedAt = new Date().toISOString();
   const tmp = `${path}.${process.pid}.tmp`;
   try {
     writeFileSync6(tmp, `${JSON.stringify({
       authMode: "oauth",
-      captureSince,
+      projectKey: connection.projectKey,
       profileId: connection.profileId,
       controlUrl: connection.controlUrl,
       endpoint: connection.endpoint,
       discoveredGateway: connection.discoveredGateway,
       org: { id: connection.org.id, name: connection.org.name },
-      destinations: connection.destinations.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+      workspaces: connection.destinations.map(({ workspaceId, workspaceName }) => ({ workspaceId, workspaceName })),
       autoRecall: connection.autoRecall ?? false,
       ingestUrl: connection.ingestUrl
     }, null, 2)}
@@ -1492,10 +1556,12 @@ function writeOAuthConfig(projectRoot, connection) {
   }
   chmodSync3(path, 384);
   setAugentaIgnore(projectRoot, "shared");
-  writeAdoption(projectRoot, {
+  writeLinks(projectRoot, {
     profileId: connection.profileId,
-    connectorIds: connection.destinations.map((destination) => destination.connectorId),
-    adoptedAt: captureSince
+    userId: connection.userId,
+    projectKey: connection.projectKey,
+    joinedAt,
+    links: connection.destinations.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId }))
   });
   return path;
 }
@@ -1689,18 +1755,62 @@ async function selectedWorkspaces(profileId, gateway, organizationName, preselec
     choices = await listWorkspaces(profileId, gateway);
   }
 }
-async function priorLinks(profileId, gateway, ids) {
+function legacyConnectorIds(projectRoot) {
+  try {
+    const raw = JSON.parse(readFileSync7(configPath(projectRoot), "utf8"));
+    if (raw.authMode !== "oauth" || !Array.isArray(raw.destinations))
+      return [];
+    const ids = raw.destinations.map((item) => item && typeof item === "object" ? item.connectorId : undefined).filter((id) => typeof id === "string" && id.trim().length > 0).map((id) => id.trim());
+    return [...new Set(ids)];
+  } catch {
+    return [];
+  }
+}
+function priorCandidateIds(projectRoot) {
+  const local = readLinks(projectRoot)?.links.map((link) => link.connectorId) ?? [];
+  return [...new Set([...local, ...legacyConnectorIds(projectRoot)])];
+}
+async function priorLinks(profileId, gateway, ids, userId) {
   const links = [];
+  const unresolved = [];
   for (const id of ids) {
     const link = await currentConnector(profileId, gateway, id).catch(() => {
       return;
     });
-    if (link)
+    if (!link)
+      unresolved.push(id);
+    else if (link.ownerUserId === userId)
       links.push(link);
   }
-  return links;
+  return { links, unresolved };
 }
-async function linkForWorkspace(projectRoot, args, profileId, gateway, workspace, adoptable) {
+async function ownProjectLinks(profileId, gateway, owner, workspaceId) {
+  const query = new URLSearchParams({ kind: "agent", status: "active", workspaceId });
+  const { connectors } = await bearerJson(profileId, `${gateway}/v1/connectors?${query}`);
+  return (connectors ?? []).filter((link) => link.kind === "agent" && link.status === "active" && link.workspaceId === workspaceId && link.ownerUserId === owner.userId && link.metadata?.projectKey === owner.projectKey).sort((a, b) => (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+async function adoptionCandidates(profileId, gateway, owner, workspaces, prior, lookup) {
+  const candidates = new Map;
+  for (const workspace of workspaces) {
+    const own = prior.filter((link) => link.workspaceId === workspace.id);
+    if (!lookup || own.some((link) => link.kind === "agent" && link.status === "active")) {
+      candidates.set(workspace.id, own);
+      continue;
+    }
+    try {
+      const found = await ownProjectLinks(profileId, gateway, owner, workspace.id);
+      candidates.set(workspace.id, [...own, ...found.filter((link) => !own.some((mine) => mine.id === link.id))]);
+    } catch (error) {
+      candidates.set(workspace.id, error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+  return candidates;
+}
+function sameMetadata(a, b) {
+  const canonical2 = (value) => JSON.stringify(Object.entries(value ?? {}).sort(([x], [y]) => x < y ? -1 : x > y ? 1 : 0));
+  return canonical2(a) === canonical2(b);
+}
+async function linkForWorkspace(projectRoot, args, profileId, gateway, workspace, adoptable, owner) {
   const name = basename(projectRoot);
   const fields = {
     workspaceId: workspace.id,
@@ -1711,17 +1821,21 @@ async function linkForWorkspace(projectRoot, args, profileId, gateway, workspace
     harness: detectedHarness(args.harness),
     client: "augenta-plugin",
     description: `Agent activity and project memory from ${name}`,
-    metadata: { pluginVersion: PLUGIN_VERSION }
+    metadata: { pluginVersion: PLUGIN_VERSION, projectKey: owner.projectKey }
   };
-  const existing = adoptable.find((link) => link.kind === "agent" && link.status === "active" && link.workspaceId === workspace.id);
+  const existing = adoptable.find((link) => link.kind === "agent" && link.status === "active" && link.workspaceId === workspace.id && link.ownerUserId === owner.userId);
   if (existing) {
+    const metadata = { ...existing.metadata ?? {}, ...fields.metadata };
+    if (existing.name === fields.name && existing.projectName === fields.projectName && existing.harness === fields.harness && existing.client === fields.client && existing.description === fields.description && sameMetadata(existing.metadata, metadata)) {
+      return { connector: existing, action: "adopted" };
+    }
     const { kind: _kind, workspaceId: _workspaceId, ...mutableFields } = fields;
     const connector2 = (await bearerJson(profileId, `${gateway}/v1/connectors/${encodeURIComponent(existing.id)}`, {
       method: "PATCH",
       headers: {
         ...existing._etag ? { "if-match": existing._etag } : {}
       },
-      body: JSON.stringify({ ...mutableFields, _etag: existing._etag })
+      body: JSON.stringify({ ...mutableFields, metadata, _etag: existing._etag })
     })).connector;
     return { connector: connector2, action: "adopted" };
   }
@@ -1748,15 +1862,65 @@ function priorConnection(projectRoot) {
   }
 }
 async function establishConnectors(projectRoot, args, profileId, gateway, connection, workspaces, priorConnectorIds, available = workspaces, preresolved) {
-  const adoptable = preresolved ?? await priorLinks(profileId, gateway, priorConnectorIds);
-  const unresolvedConnectorIds = priorConnectorIds.filter((id) => !adoptable.some((link) => link.id === id));
-  const priorWorkspaceIds = adoptable.map((link) => link.workspaceId);
+  const prior = preresolved ?? await priorLinks(profileId, gateway, priorConnectorIds, connection.owner.userId);
+  const adoptable = prior.links;
+  const unresolvedConnectorIds = prior.unresolved;
+  const priorWorkspaceIds = [
+    ...new Set([
+      ...(connection.recorded ?? []).map((workspace) => workspace.workspaceId),
+      ...adoptable.map((link) => link.workspaceId)
+    ])
+  ];
+  const candidates = await adoptionCandidates(profileId, gateway, connection.owner, workspaces, adoptable, connection.knownProject);
+  const results = await linkWorkspaces(projectRoot, args, profileId, gateway, connection.owner, workspaces, candidates);
+  for (const result of results) {
+    if (!result.connectorId && priorWorkspaceIds.includes(result.workspaceId))
+      result.wasConnected = true;
+  }
+  const verifiedIds = results.map((result) => result.connectorId).filter((id) => Boolean(id));
+  const selectedIds = workspaces.map((workspace) => workspace.id);
+  const nameFor = (id) => available.find((workspace) => workspace.id === id)?.name ?? connection.recorded?.find((workspace) => workspace.workspaceId === id)?.workspaceName;
+  const removed = priorWorkspaceIds.filter((id) => !selectedIds.includes(id)).map((workspaceId) => {
+    const name = nameFor(workspaceId);
+    const own = adoptable.find((link) => link.workspaceId === workspaceId);
+    return {
+      ...own ? { connectorId: own.id } : {},
+      workspaceId,
+      ...name ? { workspaceName: name } : {},
+      disposition: "left_in_place"
+    };
+  });
+  if (verifiedIds.length === 0)
+    return { results, removed, unresolvedConnectorIds };
+  const previous = loadProjectConfig(projectRoot);
+  const configPath2 = writeOAuthConfig(projectRoot, {
+    profileId,
+    userId: connection.owner.userId,
+    projectKey: connection.owner.projectKey,
+    controlUrl: connection.controlUrl,
+    org: connection.org,
+    discoveredGateway: connection.discoveredGateway,
+    endpoint: gateway,
+    destinations: results.filter((result) => Boolean(result.connectorId)).map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+    autoRecall: args.autoRecall ?? previous?.autoRecall ?? false,
+    ingestUrl: previous?.ingestUrl
+  });
+  try {
+    const freshKeys = results.filter((result) => result.connectorId && (result.action === "created" || !priorConnectorIds.includes(result.connectorId))).map((result) => result.connectorId);
+    new Outbox(projectRoot).registerDestinations(verifiedIds, { freshKeys });
+  } catch {}
+  return { results, removed, unresolvedConnectorIds, configPath: configPath2 };
+}
+async function linkWorkspaces(projectRoot, args, profileId, gateway, owner, workspaces, candidates) {
   const results = [];
   for (const workspace of workspaces) {
     try {
-      const { connector, action } = await linkForWorkspace(projectRoot, args, profileId, gateway, workspace, adoptable);
+      const adoptable = candidates.get(workspace.id) ?? [];
+      if (adoptable instanceof Error)
+        throw adoptable;
+      const { connector, action } = await linkForWorkspace(projectRoot, args, profileId, gateway, workspace, adoptable, owner);
       const verified = await bearerJson(profileId, `${gateway}/v1/connectors/${encodeURIComponent(connector.id)}`);
-      if (verified.connector.status !== "active" || verified.connector.workspaceId !== workspace.id) {
+      if (verified.connector.status !== "active" || verified.connector.workspaceId !== workspace.id || verified.connector.ownerUserId !== owner.userId) {
         throw new Error("Connector verification failed");
       }
       results.push({
@@ -1769,47 +1933,20 @@ async function establishConnectors(projectRoot, args, profileId, gateway, connec
       results.push({
         workspaceId: workspace.id,
         workspaceName: workspace.name,
-        message: error instanceof Error ? error.message : String(error),
-        ...priorWorkspaceIds.includes(workspace.id) ? { wasConnected: true } : {}
+        message: error instanceof Error ? error.message : String(error)
       });
     }
   }
-  const verifiedIds = results.map((result) => result.connectorId).filter((id) => Boolean(id));
-  const selectedIds = workspaces.map((workspace) => workspace.id);
-  const nameFor = (id) => available.find((workspace) => workspace.id === id)?.name;
-  const removed = adoptable.filter((link) => !selectedIds.includes(link.workspaceId)).map((link) => {
-    const name = nameFor(link.workspaceId);
-    return {
-      connectorId: link.id,
-      workspaceId: link.workspaceId,
-      ...name ? { workspaceName: name } : {},
-      disposition: "left_in_place"
-    };
-  });
-  if (verifiedIds.length === 0)
-    return { results, removed, unresolvedConnectorIds };
-  const previous = loadProjectConfig(projectRoot);
-  const configPath2 = writeOAuthConfig(projectRoot, {
-    profileId,
-    ...connection,
-    endpoint: gateway,
-    destinations: results.filter((result) => Boolean(result.connectorId)).map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
-    autoRecall: args.autoRecall ?? previous?.autoRecall ?? false,
-    ingestUrl: previous?.ingestUrl
-  });
-  try {
-    const freshKeys = results.filter((result) => result.action === "created" && result.connectorId).map((result) => result.connectorId);
-    new Outbox(projectRoot).registerDestinations(verifiedIds, { freshKeys });
-  } catch {}
-  return { results, removed, unresolvedConnectorIds, configPath: configPath2 };
+  return results;
 }
 async function connectProject(projectRoot, args) {
   const { oauth, gateway, control, discoveredGateway } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
   const selected = await selectOrCreateProfile(oauth, prior?.profileId);
   console.log(`Signed in as ${selected.me.user.name || selected.me.user.email} to ${selected.me.org.name} (${selected.me.org.id}).`);
-  const priorIds = prior?.connectorIds ?? [];
-  const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds);
+  const priorIds = priorCandidateIds(projectRoot);
+  const owner = { userId: selected.me.user.id, projectKey: prior?.projectKey ?? randomUUID4() };
+  const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds, owner.userId);
   const available = await listWorkspaces(selected.profileId, gateway);
   const environment = environmentLabel(control);
   console.log("Every Workspace you select receives the FULL record — this project's agent activity, its raw transcript lines (structurally sanitized, but NOT secret-scrubbed), and its project memory, complete, in each.");
@@ -1820,12 +1957,22 @@ async function connectProject(projectRoot, args) {
   if (prior?.controlUrl && prior.controlUrl !== control) {
     console.log(`This project is moving from ${environmentLabel(prior.controlUrl)} to ${environment}.`);
   }
-  const workspaces = await selectedWorkspaces(selected.profileId, gateway, selected.me.org.name, resolvedPrior.map((link) => link.workspaceId), available);
+  const workspaces = await selectedWorkspaces(selected.profileId, gateway, selected.me.org.name, [
+    ...(prior?.workspaces ?? []).map((workspace) => workspace.workspaceId),
+    ...resolvedPrior.links.map((link) => link.workspaceId)
+  ], available);
   if (workspaces.length === 0) {
     throw new Error("choose at least one Workspace");
   }
   const autoRecall = args.autoRecall ?? await askAutoRecall(loadProjectConfig(projectRoot)?.autoRecall);
-  const { results, removed, unresolvedConnectorIds, configPath: written } = await establishConnectors(projectRoot, { ...args, autoRecall }, selected.profileId, gateway, { controlUrl: control, org: selected.me.org, discoveredGateway }, workspaces, priorIds, available, resolvedPrior);
+  const { results, removed, unresolvedConnectorIds, configPath: written } = await establishConnectors(projectRoot, { ...args, autoRecall }, selected.profileId, gateway, {
+    controlUrl: control,
+    org: selected.me.org,
+    discoveredGateway,
+    owner,
+    knownProject: Boolean(prior?.projectKey),
+    recorded: prior?.workspaces
+  }, workspaces, priorIds, available, resolvedPrior);
   const live = results.filter((result) => result.connectorId);
   const failed = results.filter((result) => !result.connectorId);
   if (live.length > 0) {
@@ -1842,7 +1989,7 @@ async function connectProject(projectRoot, args) {
   }
   if (written) {
     for (const entry of removed) {
-      console.log(`No longer sending to ${entry.workspaceName ?? entry.workspaceId}. Its Connector ${entry.connectorId} is left in place and idle — remove it in Augenta if you want it gone.`);
+      console.log(entry.connectorId ? `No longer sending to ${entry.workspaceName ?? entry.workspaceId}. Its Connector ${entry.connectorId} is left in place and idle — remove it in Augenta if you want it gone.` : `No longer sending to ${entry.workspaceName ?? entry.workspaceId}.`);
     }
     if (unresolvedConnectorIds.length > 0) {
       console.log(`Dropped ${unresolvedConnectorIds.join(", ")}: this project listed ${unresolvedConnectorIds.length === 1 ? "that Connector" : "those Connectors"} but ${unresolvedConnectorIds.length === 1 ? "it is" : "they are"} no longer readable with this sign-in.`);
@@ -1865,9 +2012,31 @@ async function workspaceStep(profileId, gateway, me) {
     workspaces: workspaces.map(({ id, name }) => ({ id, name }))
   };
 }
-async function priorDestinations(profileId, gateway, ids, workspaces) {
+async function priorDestinations(profileId, gateway, userId, prior, ids, workspaces) {
   const destinations = [];
   const unresolvedConnectorIds = [];
+  if (prior?.workspaces) {
+    for (const recorded of prior.workspaces) {
+      const name = workspaces.find((n) => n.id === recorded.workspaceId)?.name;
+      const mine = prior.destinations?.find((destination) => destination.workspaceId === recorded.workspaceId);
+      let connectorId;
+      if (mine) {
+        const link = await currentConnector(profileId, gateway, mine.connectorId).catch(() => {
+          return;
+        });
+        if (link?.ownerUserId === userId)
+          connectorId = link.id;
+        else
+          unresolvedConnectorIds.push(mine.connectorId);
+      }
+      destinations.push({
+        ...connectorId ? { connectorId } : {},
+        workspaceId: recorded.workspaceId,
+        ...name ? { workspaceName: name } : {}
+      });
+    }
+    return { destinations, unresolvedConnectorIds };
+  }
   for (const id of ids) {
     const link = await currentConnector(profileId, gateway, id).catch(() => {
       return;
@@ -1876,6 +2045,8 @@ async function priorDestinations(profileId, gateway, ids, workspaces) {
       unresolvedConnectorIds.push(id);
       continue;
     }
+    if (link.ownerUserId !== userId)
+      continue;
     const name = workspaces.find((n) => n.id === link.workspaceId)?.name;
     destinations.push({
       connectorId: link.id,
@@ -1891,7 +2062,7 @@ async function probeConnection(resolved, args) {
   const change = environmentChange(cfg, args);
   const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
-  const priorIds = prior?.connectorIds ?? [];
+  const priorIds = priorCandidateIds(resolved.projectRoot);
   const alreadyConnected = {
     alreadyConnected: Boolean(cfg),
     ...current ? { current } : {},
@@ -1916,7 +2087,7 @@ async function probeConnection(resolved, args) {
   return {
     ...step,
     ...alreadyConnected,
-    ...await priorDestinations(usable[0].profileId, gateway, priorIds, step.workspaces)
+    ...await priorDestinations(usable[0].profileId, gateway, usable[0].me.user.id, prior, priorIds, step.workspaces)
   };
 }
 async function startLogin(args) {
@@ -2070,7 +2241,14 @@ async function connectToWorkspaces(resolved, args) {
     };
   }
   const workspaces = available.filter((item) => requested.includes(item.id));
-  const { results, removed, unresolvedConnectorIds, configPath: configPath2 } = await establishConnectors(resolved.projectRoot, args, picked.profileId, gateway, { controlUrl: control, org: picked.me.org, discoveredGateway }, workspaces, prior?.connectorIds ?? [], available);
+  const { results, removed, unresolvedConnectorIds, configPath: configPath2 } = await establishConnectors(resolved.projectRoot, args, picked.profileId, gateway, {
+    controlUrl: control,
+    org: picked.me.org,
+    discoveredGateway,
+    owner: { userId: picked.me.user.id, projectKey: prior?.projectKey ?? randomUUID4() },
+    knownProject: Boolean(prior?.projectKey),
+    recorded: prior?.workspaces
+  }, workspaces, priorCandidateIds(resolved.projectRoot), available);
   const destinations = results.filter((result) => result.connectorId);
   const failed = results.filter((result) => !result.connectorId);
   if (destinations.length === 0) {
@@ -2106,7 +2284,7 @@ function environmentChange(cfg, args) {
 }
 function joinedState(cfg) {
   return {
-    adopted: cfg.authMode === "oauth" ? adoptionCovers(cfg.projectRoot, cfg.profileId, cfg.connectorIds ?? []) : true,
+    adopted: cfg.authMode === "oauth" ? cfg.join === "joined" : true,
     configTracked: isTrackedByGit(cfg.projectRoot, ".augenta/config.json")
   };
 }
@@ -2120,7 +2298,7 @@ function savedConnection(cfg) {
     authMode: cfg.authMode,
     environment: environmentLabel(cfg.controlUrl),
     organization: cfg.org?.name ?? cfg.org?.id,
-    destinations: cfg.destinations ?? [],
+    destinations: cfg.authMode === "oauth" ? cfg.workspaces ?? [] : cfg.destinations ?? [],
     autoRecall: autoRecallSetting(cfg)
   };
 }
@@ -2157,6 +2335,9 @@ async function repairHarness(projectRoot, args) {
   const cfg = loadProjectConfig(projectRoot);
   if (cfg?.authMode !== "oauth")
     return { status: "error", code: "oauth_connection_required", message: "repair requires a readable browser-connected project config" };
+  const owner = cfg.destinations?.length ? storedProfileUserId(cfg.profileId) : undefined;
+  if (!owner)
+    return { status: "error", code: "not_joined", message: "this checkout has not joined its project's connection; join it with connect first" };
   const savedGateway = cfg.endpoint || cfg.discoveredGateway;
   if (!savedGateway)
     return { status: "error", code: "endpoint_required", message: "repair requires a saved project endpoint" };
@@ -2168,8 +2349,8 @@ async function repairHarness(projectRoot, args) {
     try {
       const url = `${gateway}/v1/connectors/${encodeURIComponent(connectorId)}`;
       const { connector } = await bearerJson(cfg.profileId, url);
-      if (connector.id !== connectorId || connector.kind !== "agent" || connector.status !== "active" || connector.workspaceId !== destination.workspaceId || !connector._etag) {
-        throw new Error("Connector must be an active agent in the recorded Workspace with a current revision; nothing changed");
+      if (connector.id !== connectorId || connector.kind !== "agent" || connector.status !== "active" || connector.workspaceId !== destination.workspaceId || connector.ownerUserId !== owner || !connector._etag) {
+        throw new Error("Connector must be your active agent in the recorded Workspace with a current revision; nothing changed");
       }
       const { connector: updated } = await bearerJson(cfg.profileId, url, {
         method: "PATCH",
@@ -2227,54 +2408,94 @@ async function adoptProject(resolved, args) {
       message: `this project was connected in ${organization ?? "another organization"}, and this sign-in is not; sign in to that organization, or choose different Workspaces`
     };
   }
-  const reachable = [];
+  const owner = { userId: picked.me.user.id, projectKey: cfg.projectKey };
+  const available = await listWorkspaces(picked.profileId, gateway);
+  const workspaces = [];
   const unreachable = [];
-  for (const destination of cfg.destinations) {
-    try {
-      const link = await currentConnector(picked.profileId, gateway, destination.connectorId);
-      if (link && link.id === destination.connectorId && link.status === "active" && link.workspaceId === destination.workspaceId) {
-        reachable.push(destination);
-      } else {
-        unreachable.push({ ...destination });
-      }
-    } catch (error) {
-      unreachable.push({ ...destination, message: describeError(error) });
-    }
+  for (const entry of cfg.workspaces) {
+    const live = available.find((workspace) => workspace.id === entry.workspaceId);
+    if (live)
+      workspaces.push(live);
+    else
+      unreachable.push({ ...entry });
   }
   if (unreachable.length > 0) {
     return {
       status: "error",
       code: "destinations_unreachable",
-      reachable,
+      reachable: workspaces.map(({ id, name }) => ({ workspaceId: id, workspaceName: name })),
       unreachable,
       organization,
-      message: `this sign-in cannot use ${unreachable.map((item) => item.workspaceName ?? item.workspaceId).join(", ")}; you may need to be added to ${unreachable.length === 1 ? "that Workspace" : "those Workspaces"}. Capture stays off in this checkout`
+      message: `this sign-in cannot use ${unreachable.map((item) => item.workspaceName ?? item.workspaceId).join(", ")}; you may need to be added to ${unreachable.length === 1 ? "that Workspace" : "those Workspaces"}. Nothing was created, and capture stays off in this checkout`
     };
   }
-  const previouslyAdopted = readAdoption(resolved.projectRoot)?.connectorIds ?? [];
-  const freshKeys = cfg.connectorIds.filter((id) => !previouslyAdopted.includes(id));
-  writeAdoption(resolved.projectRoot, {
+  const previous = readLinks(resolved.projectRoot)?.links.map((link) => link.connectorId) ?? [];
+  const prior = await priorLinks(picked.profileId, gateway, previous, owner.userId);
+  const candidates = await adoptionCandidates(picked.profileId, gateway, owner, workspaces, prior.links, true);
+  const unchecked = workspaces.filter((workspace) => candidates.get(workspace.id) instanceof Error);
+  if (unchecked.length > 0) {
+    return {
+      status: "error",
+      code: "join_failed",
+      failed: unchecked.map((workspace) => ({
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
+        message: describeError(candidates.get(workspace.id))
+      })),
+      organization,
+      message: `could not check this sign-in's existing links into ${unchecked.map((workspace) => workspace.name).join(", ")}; nothing was created, and capture stays off in this checkout`
+    };
+  }
+  const results = await linkWorkspaces(resolved.projectRoot, args, picked.profileId, gateway, owner, workspaces, candidates);
+  const failed = results.filter((result) => !result.connectorId);
+  if (failed.length > 0) {
+    return {
+      status: "error",
+      code: "join_failed",
+      failed: failed.map(({ workspaceId, workspaceName, message }) => ({ workspaceId, workspaceName, message })),
+      organization,
+      message: `could not link ${failed.map((result) => result.workspaceName).join(", ")}; capture stays off in this checkout. Any link already made is kept and reused when you join again`
+    };
+  }
+  const destinations = results.map(({ connectorId, workspaceId, workspaceName, action }) => ({
+    connectorId,
+    workspaceId,
+    workspaceName,
+    action
+  }));
+  writeLinks(resolved.projectRoot, {
     profileId: picked.profileId,
-    connectorIds: cfg.connectorIds,
-    adoptedAt: new Date().toISOString()
+    userId: owner.userId,
+    projectKey: owner.projectKey,
+    joinedAt: new Date().toISOString(),
+    links: destinations.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId }))
   });
+  const ids = destinations.map((destination) => destination.connectorId);
   try {
-    new Outbox(resolved.projectRoot).registerDestinations(cfg.connectorIds, { freshKeys });
+    new Outbox(resolved.projectRoot).registerDestinations(ids, { freshKeys: ids.filter((id) => !previous.includes(id)) });
   } catch {}
   return {
     status: "adopted",
-    destinations: reachable,
+    destinations,
     organization,
     autoRecall: autoRecallSetting(cfg),
     captureHealth: captureHealth(resolved.projectRoot)
   };
 }
 function setAutoRecall(projectRoot, autoRecall) {
-  if (!loadProjectConfig(projectRoot)) {
+  const cfg = loadProjectConfig(projectRoot);
+  if (!cfg) {
     return {
       status: "error",
       code: "not_connected",
       message: "this project has no readable connection; connect it first, then change automatic recall"
+    };
+  }
+  if (cfg.authMode === "oauth" && cfg.join !== "joined") {
+    return {
+      status: "error",
+      code: "not_joined",
+      message: "this checkout has not joined its project's connection; join it with connect first, then change automatic recall"
     };
   }
   const path = configPath(projectRoot);

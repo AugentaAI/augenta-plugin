@@ -21,7 +21,8 @@ import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDocumentRecord, Outbox } from "../capture/outbox";
-import { writeAdoption } from "../capture/adoption";
+import { joinCheckout, writeSharedConfig, TEST_USER_ID } from "../__tests__/fixtures";
+import type { Destination } from "../capture/config";
 import type { CaptureEvent } from "../capture/event";
 
 const HOOK = join(import.meta.dir, "session-start.ts");
@@ -48,20 +49,21 @@ function writeMarkers(file: string, markers: Record<string, string>): void {
   writeFileSync(join(stateDir, file), JSON.stringify(markers));
 }
 
-/** This machine signed in to `profileId`, and this checkout joined those
- *  destinations: what connect leaves behind, and what capture now requires. */
-function signIn(profileId: string): void {
+/** This machine signed in to `profileId` as `userId`. */
+function signIn(profileId: string, userId = TEST_USER_ID): void {
   const authDir = join(home, ".augenta");
   mkdirSync(authDir, { recursive: true });
   writeFileSync(join(authDir, "auth.json"), JSON.stringify({
     version: 1,
-    profiles: { [profileId]: { accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, updatedAt: new Date().toISOString() } },
+    profiles: { [profileId]: { userId, orgId: "org_1", accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, updatedAt: new Date().toISOString() } },
   }));
 }
 
-function signInAndJoin(profileId: string, connectorIds: string[]): void {
+/** Signed in here, and this checkout joined those destinations with its own
+ *  links: what connect leaves behind, and what capture now requires. */
+function signInAndJoin(profileId: string, destinations: readonly Destination[]): void {
   signIn(profileId);
-  writeAdoption(project, { profileId, connectorIds, adoptedAt: new Date().toISOString() });
+  joinCheckout(project, { profileId, destinations });
 }
 
 function fire(payload: object, overrides: Record<string, string> = {}): string {
@@ -92,13 +94,19 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toContain("cannot read");
   });
 
-  test("a saved non-production environment is disclosed through Codex additionalContext", () => {
+  test("the pre-release shape, Connectors in the shared file, gets the reconnect prompt", () => {
     mkdirSync(join(project, ".augenta"), { recursive: true });
     writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({
-      authMode: "oauth", profileId: "profile_one", controlUrl: "https://control.example.com",
-      destinations: [{ connectorId: "connector_one", workspaceId: "ws-one", workspaceName: "Platform" }],
+      authMode: "oauth", profileId: "profile_one",
+      destinations: [{ connectorId: "connector_one", workspaceId: "ws-one" }],
     }));
-    signInAndJoin("profile_one", ["connector_one"]);
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toContain("cannot read");
+  });
+
+  test("a saved non-production environment is disclosed through Codex additionalContext", () => {
+    const destinations = [{ connectorId: "connector_one", workspaceId: "ws-one", workspaceName: "Platform" }];
+    writeSharedConfig(project, { profileId: "profile_one", destinations, extra: { controlUrl: "https://control.example.com" } });
+    signInAndJoin("profile_one", destinations);
     const payload = JSON.parse(fire({ transcript_path: CODEX_TP, cwd: project }));
     expect(payload.hookSpecificOutput).toEqual({
       hookEventName: "SessionStart",
@@ -174,13 +182,14 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
 describe("connected, but capture is off in this checkout — the join notice", () => {
   // A committed config arrives in every clone and worktree. Until connect runs
   // here, capture is off, and the one thing SessionStart owes is saying so.
-  const committed = (connectorIds = ["connector_one"]) => {
-    mkdirSync(join(project, ".augenta"), { recursive: true });
-    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({
-      authMode: "oauth", profileId: "profile_one", org: { id: "org_1", name: "Example Org" },
-      destinations: connectorIds.map((connectorId, i) => ({ connectorId, workspaceId: `ws-${i}`, workspaceName: `Workspace ${i}` })),
-    }));
-  };
+  const recorded = (connectorIds: string[]) =>
+    connectorIds.map((connectorId, i) => ({ connectorId, workspaceId: `ws-${i}`, workspaceName: `Workspace ${i}` }));
+  const committed = (connectorIds = ["connector_one"]) =>
+    writeSharedConfig(project, {
+      profileId: "profile_one",
+      destinations: recorded(connectorIds),
+      extra: { org: { id: "org_1", name: "Example Org" } },
+    });
 
   test("not signed in here: named destinations, capture off, offered and never started", () => {
     committed();
@@ -200,26 +209,44 @@ describe("connected, but capture is off in this checkout — the join notice", (
     signIn("profile_one");
     const out = fire({ transcript_path: CLAUDE_TP, cwd: project });
     expect(JSON.parse(out).hookSpecificOutput.additionalContext).toContain("this checkout has not joined it");
-    signInAndJoin("profile_one", ["connector_one"]);
+    signInAndJoin("profile_one", recorded(["connector_one"]));
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
   });
 
-  test("a pulled change to the destinations is raised again", () => {
-    committed();
-    signInAndJoin("profile_one", ["connector_one"]);
-    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+  test("a pulled change to the Workspaces is raised again, an addition or a removal", () => {
     committed(["connector_one", "connector_two"]);
-    const out = fire({ transcript_path: CLAUDE_TP, cwd: project });
-    expect(JSON.parse(out).hookSpecificOutput.additionalContext).toContain("its Workspaces changed since this checkout joined");
+    signInAndJoin("profile_one", recorded(["connector_one", "connector_two"]));
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+    committed(["connector_one"]);
+    const removal = fire({ transcript_path: CLAUDE_TP, cwd: project });
+    expect(JSON.parse(removal).hookSpecificOutput.additionalContext).toContain("its Workspaces changed since this checkout joined");
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+    committed(["connector_one", "connector_two", "connector_three"]);
+    const addition = fire({ transcript_path: CLAUDE_TP, cwd: project });
+    expect(JSON.parse(addition).hookSpecificOutput.additionalContext).toContain("its Workspaces changed since this checkout joined");
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+    // Back to the set this checkout joined: live again, and quiet.
+    committed(["connector_one", "connector_two"]);
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
   });
 
   test("a join under another sign-in is named as that, not as changed Workspaces", () => {
     committed();
     signIn("profile_one");
-    writeAdoption(project, { profileId: "profile_other", connectorIds: ["connector_one"], adoptedAt: new Date().toISOString() });
+    joinCheckout(project, { profileId: "profile_other", destinations: recorded(["connector_one"]) });
     const out = fire({ transcript_path: CLAUDE_TP, cwd: project });
     expect(JSON.parse(out).hookSpecificOutput.additionalContext).toContain("this checkout joined it under a different sign-in");
+  });
+
+  test("another person signing in to the same organization here is told, once", () => {
+    committed();
+    signInAndJoin("profile_one", recorded(["connector_one"]));
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+    // Same organization, so the same profile id, but not the person whose links these are.
+    signIn("profile_one", "user_2");
+    const out = fire({ transcript_path: CLAUDE_TP, cwd: project });
+    expect(JSON.parse(out).hookSpecificOutput.additionalContext).toContain("this checkout joined it under a different sign-in");
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
   });
 
   test("Codex gets user-facing wording and the $ invocation", () => {
@@ -292,6 +319,16 @@ describe("a config file the parser rejects is UNCONNECTED, not connected", () =>
   test("the reconnect prompt also fires exactly once", () => {
     writeConfig(LEGACY);
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).not.toBe("");
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+  });
+
+  test("a config made unreadable by a later format change is raised again", () => {
+    // A project that reconnected through an earlier format change already holds
+    // a reconnect marker; the next change must not turn capture off in silence.
+    writeConfig(LEGACY);
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).not.toBe("");
+    writeConfig(JSON.stringify({ authMode: "oauth", profileId: "p", destinations: [{ connectorId: "c", workspaceId: "w" }] }));
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toContain("cannot read");
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
   });
 

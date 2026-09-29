@@ -575,6 +575,10 @@ function storedProfileUpdatedAt(profileId) {
 function hasStoredProfile(profileId) {
   return storedProfile(profileId) !== undefined;
 }
+function storedProfileUserId(profileId) {
+  const userId = storedProfile(profileId)?.userId;
+  return typeof userId === "string" && userId ? userId : undefined;
+}
 function storedProfile(profileId) {
   try {
     const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
@@ -639,46 +643,68 @@ function takeAuthNotice(projectRoot) {
 import { readFileSync as readFileSync4 } from "node:fs";
 import { join as join5 } from "node:path";
 
-// capture/adoption.ts
+// capture/links.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
 import { join as join3 } from "node:path";
-function adoptionPath(projectRoot) {
+function linksPath(projectRoot) {
+  return join3(projectRoot, ".augenta", "state", "links.json");
+}
+function legacyAdoptionPath(projectRoot) {
   return join3(projectRoot, ".augenta", "state", "adopted.json");
 }
-function readAdoption(projectRoot) {
+var nonEmpty = (value) => typeof value === "string" && value.length > 0;
+function readLinks(projectRoot) {
   try {
-    const value = JSON.parse(readFileSync3(adoptionPath(projectRoot), "utf8"));
-    if (typeof value.profileId !== "string" || !value.profileId)
+    const value = JSON.parse(readFileSync3(linksPath(projectRoot), "utf8"));
+    if (value.version !== 1)
       return;
-    if (!Array.isArray(value.connectorIds) || !value.connectorIds.every((id) => typeof id === "string" && id.length > 0))
+    if (!nonEmpty(value.profileId) || !nonEmpty(value.userId) || !nonEmpty(value.projectKey))
       return;
-    if (typeof value.adoptedAt !== "string" || !Number.isFinite(Date.parse(value.adoptedAt)))
+    if (!nonEmpty(value.joinedAt) || !Number.isFinite(Date.parse(value.joinedAt)))
       return;
+    if (!Array.isArray(value.links) || value.links.length === 0)
+      return;
+    const links = [];
+    for (const item of value.links) {
+      const link = item;
+      if (!link || !nonEmpty(link.workspaceId) || !nonEmpty(link.connectorId))
+        return;
+      if (links.some((seen) => seen.workspaceId === link.workspaceId || seen.connectorId === link.connectorId)) {
+        return;
+      }
+      links.push({ workspaceId: link.workspaceId, connectorId: link.connectorId });
+    }
     return {
       profileId: value.profileId,
-      connectorIds: [...value.connectorIds],
-      adoptedAt: new Date(value.adoptedAt).toISOString()
+      userId: value.userId,
+      projectKey: value.projectKey,
+      joinedAt: new Date(value.joinedAt).toISOString(),
+      links
     };
   } catch {
     return;
   }
 }
-function writeAdoption(projectRoot, adoption) {
+function writeLinks(projectRoot, links) {
   const dir = join3(ensureAugentaDir(projectRoot), "state");
   mkdirSync3(dir, { recursive: true });
-  const path = join3(dir, "adopted.json");
+  const path = join3(dir, "links.json");
   const tmp = `${path}.${randomUUID2()}.tmp`;
   try {
-    writeFileSync3(tmp, JSON.stringify(adoption), { mode: 384 });
+    writeFileSync3(tmp, JSON.stringify({
+      version: 1,
+      profileId: links.profileId,
+      userId: links.userId,
+      projectKey: links.projectKey,
+      joinedAt: links.joinedAt,
+      links: links.links.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId }))
+    }), { mode: 384 });
     renameSync2(tmp, path);
   } finally {
     rmSync(tmp, { force: true });
   }
-}
-function adoptionCovers(projectRoot, profileId, connectorIds) {
-  const adoption = readAdoption(projectRoot);
-  return Boolean(adoption && adoption.profileId === profileId && connectorIds.every((id) => adoption.connectorIds.includes(id)));
+  rmSync(legacyAdoptionPath(projectRoot), { force: true });
 }
 
 // capture/project.ts
@@ -765,6 +791,42 @@ function parseDestinations(raw) {
   }
   return destinations;
 }
+function parseWorkspaces(raw) {
+  if (!Array.isArray(raw) || raw.length === 0)
+    return;
+  const workspaces = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object")
+      return;
+    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
+    if (!workspaceId)
+      return;
+    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
+      return;
+    if (workspaces.some((workspace) => workspace.workspaceId === workspaceId))
+      continue;
+    const workspaceName = item.workspaceName?.trim();
+    workspaces.push({ workspaceId, ...workspaceName ? { workspaceName } : {} });
+  }
+  return workspaces;
+}
+function joinedRoutes(projectRoot, profileId, projectKey, workspaces) {
+  const links = readLinks(projectRoot);
+  if (!links || links.projectKey !== projectKey)
+    return { join: "none" };
+  if (links.profileId !== profileId || storedProfileUserId(profileId) !== links.userId)
+    return { join: "signin" };
+  const destinations = [];
+  for (const workspace of workspaces) {
+    const link = links.links.find((entry) => entry.workspaceId === workspace.workspaceId);
+    if (!link)
+      return { join: "workspaces" };
+    destinations.push({ connectorId: link.connectorId, ...workspace });
+  }
+  if (links.links.length !== workspaces.length)
+    return { join: "workspaces" };
+  return { join: "joined", destinations, joinedAt: links.joinedAt };
+}
 function configPath(projectRoot) {
   return join5(projectRoot, ".augenta", "config.json");
 }
@@ -794,24 +856,36 @@ function loadProjectConfig(projectRoot) {
         return;
       settings.org = { id: value.org.id.trim(), ...value.org.name?.trim() ? { name: value.org.name.trim() } : {} };
     }
+    if (value.authMode === "oauth") {
+      if (value.destinations !== undefined)
+        return;
+      const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
+      const projectKey = typeof value.projectKey === "string" ? value.projectKey.trim() : "";
+      const workspaces = parseWorkspaces(value.workspaces);
+      if (!profileId || !projectKey || !workspaces)
+        return;
+      const routes = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      return {
+        ...settings,
+        authMode: "oauth",
+        profileId,
+        projectKey,
+        workspaces,
+        join: routes.join,
+        ...routes.destinations ? {
+          destinations: routes.destinations,
+          connectorIds: routes.destinations.map((destination) => destination.connectorId),
+          captureSince: routes.joinedAt
+        } : {},
+        projectRoot
+      };
+    }
     const destinations = value.destinations === undefined ? undefined : parseDestinations(value.destinations);
     if (value.destinations !== undefined && !destinations)
       return;
     if (destinations) {
       settings.destinations = destinations;
       settings.connectorIds = destinations.map((destination) => destination.connectorId);
-    }
-    if (value.authMode === "oauth") {
-      const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
-      if (!profileId || !destinations)
-        return;
-      return {
-        ...settings,
-        authMode: "oauth",
-        ...captureSince ? { captureSince } : {},
-        profileId,
-        projectRoot
-      };
     }
     if (value.authMode === "api-key") {
       const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
@@ -852,11 +926,9 @@ function captureGate(cfg) {
     return "killed";
   if (cfg.authMode !== "oauth")
     return cfg.apiKey ? "live" : "signed_out";
-  if (!cfg.profileId || !cfg.connectorIds?.length)
-    return "not_adopted";
-  if (!hasStoredProfile(cfg.profileId))
+  if (!cfg.profileId || !hasStoredProfile(cfg.profileId))
     return "signed_out";
-  if (!adoptionCovers(cfg.projectRoot, cfg.profileId, cfg.connectorIds))
+  if (!cfg.connectorIds?.length)
     return "not_adopted";
   return "live";
 }
@@ -864,14 +936,7 @@ function captureEnabled(cfg) {
   return Boolean(cfg) && captureGate(cfg) === "live";
 }
 function effectiveCaptureSince(cfg) {
-  if (cfg.authMode !== "oauth")
-    return cfg.captureSince;
-  const adoptedAt = readAdoption(cfg.projectRoot)?.adoptedAt;
-  if (!adoptedAt)
-    return cfg.captureSince;
-  if (!cfg.captureSince)
-    return adoptedAt;
-  return Date.parse(adoptedAt) > Date.parse(cfg.captureSince) ? adoptedAt : cfg.captureSince;
+  return cfg.captureSince;
 }
 
 // capture/platform.ts
@@ -1298,7 +1363,7 @@ async function askWorkspaces(searchRoot, request) {
     if (bearer === undefined && !getAuthProfile(profileId)) {
       return bail("need_login", "need_login", "this project's Augenta sign-in is missing; sign in again with the connect skill");
     }
-    if (!adoptionCovers(projectRoot, profileId, cfg.connectorIds ?? [])) {
+    if (!cfg.destinations?.length) {
       return bail("not_joined", "not_joined", "this checkout has not joined its project's Augenta connection; run the connect skill here to confirm its Workspaces first");
     }
     fetcher = bearer !== undefined ? (target, init) => fetch(target, {

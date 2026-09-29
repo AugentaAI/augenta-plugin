@@ -11,7 +11,7 @@
  *
  * Run: bun test scripts/recall.test.ts
  */
-import { writeAdoption } from "../capture/adoption";
+import { joinCheckout, writeOAuthProject, writeSharedConfig } from "../__tests__/fixtures";
 import { test, expect, describe, beforeEach, afterEach, spyOn } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -101,7 +101,7 @@ function writeConfig(config: Record<string, unknown>): void {
 function storedDestinations(connectorIds: string[]) {
   return connectorIds.map((connectorId) => ({
     connectorId,
-    workspaceId: connectorId === "connector_a_twin" ? "ws-default" : LINKS[connectorId] ?? "ws-gone",
+    workspaceId: LINKS[connectorId] ?? "ws-gone",
     workspaceName: "Saved Workspace",
   }));
 }
@@ -109,7 +109,6 @@ function storedDestinations(connectorIds: string[]) {
 /** Connector id → the Workspace it is anchored to, as the platform would say. */
 const LINKS: Record<string, string> = {
   connector_a: "ws-default",
-  connector_a_twin: "ws-default",
   connector_b: "ws-scratch",
 };
 const WORKSPACES = [
@@ -652,12 +651,17 @@ describe("a project that cannot be asked", () => {
     // config's Workspaces: its question must not reach them.
     route();
     const { profileId } = await signIn();
-    writeConfig({ authMode: "oauth", profileId, destinations: storedDestinations(["connector_a"]), endpoint: GATEWAY });
+    const fixture = { profileId, destinations: storedDestinations(["connector_a"]), extra: { endpoint: GATEWAY } };
+    writeSharedConfig(project, fixture);
     const payload = await runRecall({ projectRoot: project }, args());
     expect(payload).toMatchObject({ status: "not_joined", code: "not_joined" });
     expect(requests).toEqual([]);
+    // Joined by someone else on this machine: their links are not this sign-in's.
+    joinCheckout(project, { ...fixture, userId: "user_2" });
+    expect(await runRecall({ projectRoot: project }, args())).toMatchObject({ status: "not_joined" });
+    expect(requests).toEqual([]);
     // Still independent of the capture kill switch once joined.
-    writeAdoption(project, { profileId, connectorIds: ["connector_a"], adoptedAt: new Date().toISOString() });
+    joinCheckout(project, fixture);
     process.env.AUGENTA_CAPTURE_ENABLED = "0";
     try {
       expect((await runRecall({ projectRoot: project }, args())).code).not.toBe("not_joined");
@@ -668,11 +672,10 @@ describe("a project that cannot be asked", () => {
 
   test("a missing sign-in is need_login, and starts no authorization", async () => {
     route();
-    writeConfig({
-      authMode: "oauth",
+    writeOAuthProject(project, {
       profileId: "profile_gone",
       destinations: storedDestinations(["connector_a"]),
-      endpoint: GATEWAY,
+      extra: { endpoint: GATEWAY },
     });
     const payload = await runRecall({ projectRoot: project }, args());
     expect(payload).toMatchObject({ status: "need_login", code: "need_login" });
@@ -683,8 +686,7 @@ describe("a project that cannot be asked", () => {
 describe("the fan-out", () => {
   async function connectedProject(connectorIds = ["connector_a", "connector_b"]) {
     const { profileId } = await signIn();
-    writeConfig({ authMode: "oauth", profileId, destinations: storedDestinations(connectorIds), endpoint: GATEWAY });
-    writeAdoption(project, { profileId, connectorIds, adoptedAt: new Date().toISOString() });
+    writeOAuthProject(project, { profileId, destinations: storedDestinations(connectorIds), extra: { endpoint: GATEWAY } });
     return profileId;
   }
 
@@ -1080,8 +1082,7 @@ describe("the fan-out", () => {
 describe("recorded destinations and live recall", () => {
   async function configure(connectorIds = ["connector_a", "connector_b"], extra = {}) {
     const { profileId } = await signIn();
-    writeConfig({ authMode: "oauth", profileId, destinations: storedDestinations(connectorIds), endpoint: GATEWAY, ...extra });
-    writeAdoption(project, { profileId, connectorIds, adoptedAt: new Date().toISOString() });
+    writeOAuthProject(project, { profileId, destinations: storedDestinations(connectorIds), extra: { endpoint: GATEWAY, ...extra } });
   }
 
   for (const answer of [false, true]) {
@@ -1185,31 +1186,6 @@ describe("recorded destinations and live recall", () => {
     expect(recallCalls()).toEqual([]);
   });
 
-  test("checks every link before deduplicating a shared Workspace", async () => {
-    await configure(["connector_a", "connector_a_twin"]);
-    route({
-      [`GET ${GATEWAY}/v1/connectors/connector_a`]: () =>
-        Response.json({ connector: { id: "connector_a", workspaceId: "ws-default", status: "disabled" } }),
-      [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a"),
-    });
-    const payload = await runRecall({ projectRoot: project }, args());
-    expect(payload.status).toBe("partially_answered");
-    expect(payload.unresolvedConnectorIds).toEqual(["connector_a"]);
-    expect(payload.answers).toMatchObject([{ connectorId: "connector_a_twin", workspaceId: "ws-default" }]);
-    expect(recallCalls()).toHaveLength(1);
-  });
-
-  test("a refused shared Workspace does not report a disabled link twice", async () => {
-    await configure(["connector_a", "connector_a_twin"]);
-    route({
-      [`GET ${GATEWAY}/v1/connectors/connector_a`]: () =>
-        Response.json({ connector: { id: "connector_a", workspaceId: "ws-default", status: "disabled" } }),
-      [`POST ${GATEWAY}/v1/recall`]: () => typedError(403, "forbidden", "no access"),
-    });
-    const payload = await runRecall({ projectRoot: project }, args());
-    expect(payload.unresolvedConnectorIds).toEqual(["connector_a", "connector_a_twin"]);
-  });
-
   for (const failure of ["network", "server"] as const) {
     test(`a Connector ${failure} failure blocks its question without claiming it was disabled`, async () => {
       await configure();
@@ -1277,17 +1253,6 @@ describe("recorded destinations and live recall", () => {
     expect(payload.status).toBe("recall_timeout");
     expect(payload.unresolvedConnectorIds).toEqual(["connector_b"]);
     expect(payload.failed).toMatchObject([{ connectorId: "connector_a", code: "recall_timeout", message: "deadline exceeded" }]);
-  });
-
-  test("a shared Workspace is asked once and every refused Connector is reported", async () => {
-    await configure(["connector_a", "connector_a_twin"]);
-    route({ [`POST ${GATEWAY}/v1/recall`]: () => typedError(403, "forbidden", "no access") });
-    const payload = await runRecall({ projectRoot: project }, args());
-    expect(recallCalls()).toHaveLength(1);
-    expect(payload.status).toBe("error");
-    expect(payload.unresolvedConnectorIds).toEqual(["connector_a", "connector_a_twin"]);
-    expect(payload.failed).toMatchObject([{ code: "not_entitled", message: "no access" }]);
-    expect(payload.code).toBeUndefined();
   });
 
   test("listing and recall overlap, and the live name wins without rewriting config", async () => {

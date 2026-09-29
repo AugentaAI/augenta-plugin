@@ -44,7 +44,7 @@ export function captureHealth(projectRoot: string) {
   return { configured: !!cfg, enabled: gate === "live", ...(gate ? { gate } : {}),
     configuration: cfg ? "valid" : existsSync(join(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
     activityScope: "project", hostDispatch: "unverified",
-    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds!.length : cfg ? 1 : 0,
+    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg ? 1 : 0,
     pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
     ...activity,
     // Local plugin state cannot establish host approval or lake persistence.

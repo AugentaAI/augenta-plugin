@@ -49,14 +49,13 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { isCodexHarness } from "./harness";
-import { readAdoption } from "../capture/adoption";
 import { ephemeralProject } from "../capture/environment";
-import { captureEnabled, captureGate, controlUrl, loadProjectConfig, resolveProjectRoot } from "../capture/config";
+import { captureEnabled, captureGate, configPath, controlUrl, loadProjectConfig, resolveProjectRoot } from "../capture/config";
 import { environmentLabel } from "../capture/platform";
 import { Outbox } from "../capture/outbox";
 import { spawnShipper } from "../capture/shipper";
 import { captureAgentMemory } from "../capture/memory";
-import { takeAuthNotice } from "../capture/auth";
+import { storedProfileUserId, takeAuthNotice } from "../capture/auth";
 import { readStdin } from "../runtime/node";
 
 // SessionStart passes a JSON payload on stdin; we need the transcript path (to
@@ -120,6 +119,17 @@ function firstTime(key: string): boolean {
   return true;
 }
 
+/** A short digest of the unreadable config's bytes (empty when it cannot be read). */
+function staleConfigDigest(): string {
+  let bytes: Buffer | string = "";
+  try {
+    bytes = readFileSync(configPath(configuredRoot!));
+  } catch {
+    /* an unreadable file still prompts, once */
+  }
+  return createHash("sha256").update(bytes).digest("hex").slice(0, 16);
+}
+
 // --- Connected? An ancestor has a .augenta/config.json the parser ACCEPTS. ----
 const configuredRoot = resolveProjectRoot(projectPath);
 const cfg = configuredRoot ? loadProjectConfig(configuredRoot) : undefined;
@@ -138,7 +148,7 @@ if (connectedRoot) {
     const notices: string[] = [];
     const environment = environmentLabel(controlUrl(cfg));
     if (environment !== "prod") {
-      const names = cfg?.destinations?.map((destination) => destination.workspaceName || destination.workspaceId).join(", ");
+      const names = (cfg?.workspaces ?? cfg?.destinations)?.map((workspace) => workspace.workspaceName || workspace.workspaceId).join(", ");
       notices.push(`Augenta: this project is connected to the ${environment} environment, not production${names ? `, feeding ${names}` : ""}.`);
     }
     const authNotice = takeAuthNotice(connectedRoot);
@@ -198,29 +208,34 @@ if (connectedRoot) {
   } else {
     // Connected, but capture is off HERE for a reason connect fixes: this machine
     // has no sign-in for the config's profile, or this checkout has not joined a
-    // (typically committed) config, or its destinations changed since it did.
-    // Said once per exact connection, so a pulled change to the destinations is
-    // raised again. The kill switch stays silent, as above.
+    // (typically committed) config, or joined it as someone else, or its
+    // Workspaces changed since it did. Said once per exact connection and person,
+    // so a pulled change to the Workspaces, or a different sign-in, is raised
+    // again. The kill switch stays silent, as above.
     const gate = captureGate(cfg!);
     if (gate === "signed_out" || gate === "not_adopted") {
       const identity = createHash("sha256")
-        .update([cfg!.profileId ?? "", ...(cfg!.connectorIds ?? [])].join("\0"))
+        .update([
+          cfg!.profileId ?? "",
+          cfg!.projectKey ?? "",
+          ...(cfg!.workspaces ?? []).map((workspace) => workspace.workspaceId).sort(),
+          (cfg!.profileId && storedProfileUserId(cfg!.profileId)) || "",
+        ].join("\0"))
         .digest("hex")
         .slice(0, 16);
       if (firstTime(`join:${connectedRoot}:${identity}`)) {
-        const names = (cfg!.destinations ?? []).map((destination) => destination.workspaceName || destination.workspaceId).join(", ");
+        const names = (cfg!.workspaces ?? cfg!.destinations ?? []).map((workspace) => workspace.workspaceName || workspace.workspaceId).join(", ");
         const environment = environmentLabel(controlUrl(cfg));
         const where = [cfg!.org?.name, environment === "prod" ? undefined : `the ${environment} environment`]
           .filter(Boolean)
           .join(", ");
-        const joined = readAdoption(connectedRoot);
         const reason = gate === "signed_out"
           ? "this machine is not signed in to Augenta for it"
-          : !joined
-            ? "this checkout has not joined it"
-            : joined.profileId !== cfg!.profileId
-              ? "this checkout joined it under a different sign-in"
-              : "its Workspaces changed since this checkout joined";
+          : cfg!.join === "signin"
+            ? "this checkout joined it under a different sign-in"
+            : cfg!.join === "workspaces"
+              ? "its Workspaces changed since this checkout joined"
+              : "this checkout has not joined it";
         const additionalContext = codex
           ? `Augenta: this project is set up to send capture to ${names}${where ? ` (${where})` : ""}, but capture is off in this checkout because ${reason}. Run ${connectAction} to join it.`
           : `[Augenta] This project's .augenta/config.json sends Augenta capture to ${names}${where ? ` (${where})` : ""}, ` +
@@ -240,8 +255,11 @@ if (connectedRoot) {
 // one-shot key, and deliberately ignores the pre-0.3.0 marker — every project
 // with a legacy config has one, and honoring it here would re-silence exactly
 // the users this prompt exists for. Recording the key is what makes this the
-// project's only automatic fire ever.
-const markerKey = staleConfig ? `reconnect:${projectPath}` : projectPath;
+// project's only automatic fire ever — for that file. The key carries a hash of
+// the unreadable bytes, because a project that already reconnected through an
+// earlier format change holds the bare key, and a later change that makes its
+// config unreadable again must still say so rather than turn capture off in silence.
+const markerKey = staleConfig ? `reconnect:${projectPath}:${staleConfigDigest()}` : projectPath;
 if (!staleConfig && readMarkers(legacyMarkerPath)[projectPath]) process.exit(0);
 // A throwaway session outside any checkout cannot keep a connection (connect
 // refuses it), and its home, where this marker lives, is new every time: the

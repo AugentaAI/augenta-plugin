@@ -21,7 +21,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeAdoption } from "../capture/adoption";
 import { ensureAugentaDir } from "../capture/augenta-dir";
 import {
   augentaOAuthConfig,
@@ -29,6 +28,7 @@ import {
   getAuthProfile,
 } from "../capture/auth";
 import { loadProjectConfig } from "../capture/config";
+import { writeLinks } from "../capture/links";
 import { Outbox } from "../capture/outbox";
 import { resolveTargetProject } from "./connect";
 
@@ -48,6 +48,8 @@ interface Connector {
   direction: "inbound" | "outbound" | "bidirectional";
   status: "active" | "disabled";
   revision: number;
+  ownerUserId?: string;
+  metadata?: Record<string, unknown>;
 }
 
 interface ExperienceRow {
@@ -140,9 +142,9 @@ const projectRoot = resolveTargetProject(
   process.cwd(),
 );
 const cfg = loadProjectConfig(projectRoot);
-if (cfg?.authMode !== "oauth" || !cfg.profileId || !cfg.connectorIds?.length) {
+if (cfg?.authMode !== "oauth" || !cfg.profileId || !cfg.projectKey || !cfg.connectorIds?.length) {
   console.error(
-    `Connect ${projectRoot} with an Augenta sign-in before running this test.`,
+    `Connect ${projectRoot} with an Augenta sign-in, and join it in this checkout, before running this test.`,
   );
   process.exit(2);
 }
@@ -194,6 +196,13 @@ for (const id of destinations) {
     `configured Connector ${id} is active and inbound`,
     `workspace=${connector.workspaceId}`,
   );
+  // Per-person links: the platform accepts records through a link only from its
+  // owner (or a manager), and connect finds a checkout's links by projectKey.
+  check(
+    connector.ownerUserId === me.user?.id && connector.metadata?.projectKey === cfg.projectKey,
+    `configured Connector ${id} is this sign-in's own link for this project`,
+    `owner=${connector.ownerUserId ?? "?"}`,
+  );
 }
 check(
   new Set([...links.values()].map((l) => l.workspaceId)).size === destinations.length,
@@ -209,10 +218,11 @@ try {
     `${JSON.stringify(
       {
         authMode: "oauth",
+        projectKey: cfg.projectKey,
         profileId: cfg.profileId,
         controlUrl,
         org: cfg.org,
-        destinations: cfg.destinations,
+        workspaces: cfg.workspaces,
         endpoint: gateway,
       },
       null,
@@ -221,12 +231,14 @@ try {
     { mode: 0o600 },
   );
   chmodSync(configPath, 0o600);
-  // Joined, as connect leaves a checkout: without it the shipper treats this
-  // temp project as a clone nobody has adopted and ships nothing.
-  writeAdoption(tempProject, {
+  // Joined, as connect leaves a checkout: without its own links the shipper
+  // treats this temp project as a clone nobody has joined and ships nothing.
+  writeLinks(tempProject, {
     profileId: cfg.profileId,
-    connectorIds: cfg.connectorIds,
-    adoptedAt: new Date().toISOString(),
+    userId: me.user.id,
+    projectKey: cfg.projectKey,
+    joinedAt: new Date().toISOString(),
+    links: cfg.destinations!.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId })),
   });
 
   const sid = `sess-hosted-oauth-${Date.now()}`;
