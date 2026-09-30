@@ -89,7 +89,8 @@ async function oauthProject(expiresAt = Date.now() + 3_600_000) {
   writeOAuthProject(project, {
     profileId,
     destinations: [{ connectorId: "connector_a", workspaceId: "ws-default", workspaceName: "Default Workspace" }],
-    extra: { endpoint: GATEWAY },
+    // As connect writes a production project: the endpoint is discovery's.
+    extra: { endpoint: GATEWAY, discoveredGateway: GATEWAY },
   });
   return profileId;
 }
@@ -197,6 +198,8 @@ describe("runAutoRecall: gated like capture, asked like recall", () => {
     route({ [`POST ${GATEWAY}/v1/recall`]: () => memory("remembered") });
     const context = await run();
     expect(context).toContain("## Default Workspace: remembered notes");
+    // Production's discovered gateway is production, not a named environment.
+    expect(context).not.toContain("not production");
     expect(requests.map((r) => `${r.method} ${r.url.split("?")[0]}`)).toEqual([
       `GET ${GATEWAY}/v1/connectors/connector_a`,
       `POST ${GATEWAY}/v1/recall`,

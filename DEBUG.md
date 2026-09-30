@@ -56,7 +56,10 @@ that environment. So a project connected against dev asks dev, whatever
 `AUGENTA_CONTROL_URL` says. To aim recall somewhere else, either reconnect the
 project or set `AUGENTA_API_URL`, which `gatewayBase` reads first. This is also
 why `recallEnvironment` in `capture/recall-client.ts` consults BOTH coordinates — the
-control URL alone would report `prod` about a question going to dev.
+control URL alone would report `prod` about a question going to dev. Under a
+production control URL, the gateway counts as production when it is the one
+production's discovery named (`discoveredGateway`, trusted only in a config
+recorded against production) or the built-in default; any other gateway is named.
 
 **Neither skill has an environment flag, on purpose.** `SKILL.md` stays
 environment-agnostic and the variable does the work, for two reasons. A user

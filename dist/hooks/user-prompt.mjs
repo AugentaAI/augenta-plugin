@@ -1774,7 +1774,8 @@ function recallEnvironment(gateway, cfg) {
   const label = environmentLabel(controlUrl(cfg));
   if (label !== "prod")
     return label;
-  return gateway === DEFAULT_GATEWAY ? "prod" : gateway;
+  const discovered = environmentLabel(cfg?.controlUrl) === "prod" ? cfg?.discoveredGateway : undefined;
+  return gateway === DEFAULT_GATEWAY || gateway === discovered ? "prod" : gateway;
 }
 async function askWorkspaces(searchRoot, request) {
   const startedAt = Date.now();

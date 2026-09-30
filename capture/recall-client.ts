@@ -666,12 +666,21 @@ export function aggregateStatus(payload: {
  * environment with. Recall never touches the control plane: it posts to the
  * GATEWAY the project config points at. So a project connected to dev, run
  * without an override, uses its recorded control URL. Either coordinate being
- * non-default is enough to say so.
+ * non-production is enough to say so.
+ *
+ * Production's gateway is whatever production's discovery names, which connect
+ * records as `discoveredGateway` — not `DEFAULT_GATEWAY`, which only stands in
+ * where there was no discovery (a platform key). Comparing against the default
+ * alone called every browser-connected production project "not production".
+ * The marker vouches only for a config recorded against production: a dev
+ * config under a production `AUGENTA_CONTROL_URL` still posts to dev's gateway,
+ * and a gateway override differs from the marker, so both are still named.
  */
 export function recallEnvironment(gateway: string, cfg?: ProjectConfig): string {
   const label = environmentLabel(controlUrl(cfg));
   if (label !== "prod") return label;
-  return gateway === DEFAULT_GATEWAY ? "prod" : gateway;
+  const discovered = environmentLabel(cfg?.controlUrl) === "prod" ? cfg?.discoveredGateway : undefined;
+  return gateway === DEFAULT_GATEWAY || gateway === discovered ? "prod" : gateway;
 }
 
 /**

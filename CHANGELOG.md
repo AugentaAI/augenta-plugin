@@ -12,6 +12,20 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.11.1] — 2026-09-29
+
+No reconnect is required.
+
+### Fixed
+
+- Recall no longer says a production project's Workspaces are "not production".
+  Recall compared the project's gateway against an old production address
+  instead of the one production's sign-in names, so every browser-connected
+  production project was labelled `https://api.augenta.ai`, both in the automatic
+  recall block and in `/augenta:recall` answers. A project really pointed at
+  another Augenta environment, or at another gateway with `AUGENTA_API_URL`, is
+  still named.
+
 ## [0.11.0] — 2026-09-29
 
 ### Upgrading
@@ -440,6 +454,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.11.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.0...v0.10.1

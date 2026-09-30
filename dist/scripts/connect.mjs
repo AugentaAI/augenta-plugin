@@ -1317,7 +1317,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.11.0";
+var PLUGIN_VERSION = "0.11.1";
 
 // capture/environment.ts
 import { existsSync as existsSync6 } from "node:fs";

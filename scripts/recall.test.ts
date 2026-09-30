@@ -27,6 +27,7 @@ import {
   type RecallArgs,
 } from "./recall";
 import { saveDeviceProfile } from "../capture/auth";
+import { gatewayBase, type ProjectConfig } from "../capture/config";
 
 const RECALL = join(import.meta.dir, "recall.ts");
 const realFetch = globalThis.fetch;
@@ -1315,6 +1316,15 @@ describe("recorded destinations and live recall", () => {
     expect(overridden.environment).toBe("https://other-gateway.example.com");
     expect(overridden.unresolvedConnectorIds).toEqual(["connector_a"]);
   });
+
+  test("a project connected to production reports prod", async () => {
+    // As connect writes it: the endpoint is discovery's gateway, marked so.
+    await configure(["connector_a"], { discoveredGateway: GATEWAY });
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a") });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload.status).toBe("answered");
+    expect(payload.environment).toBe("prod");
+  });
 });
 
 describe("platform-key projects", () => {
@@ -1380,6 +1390,42 @@ describe("recallEnvironment", () => {
     // Restored by afterEach along with the caller's own value.
     process.env.AUGENTA_CONTROL_URL = "https://control.example.com";
     expect(recallEnvironment("https://anything")).toBe("https://control.example.com");
+  });
+
+  /** What connect writes for production: discovery's gateway, marked as such. */
+  const production = (extra: Partial<ProjectConfig> = {}): ProjectConfig => ({
+    authMode: "oauth",
+    projectRoot: "/p",
+    controlUrl: "https://augenta.ai",
+    endpoint: "https://api.augenta.ai",
+    discoveredGateway: "https://api.augenta.ai",
+    ...extra,
+  });
+
+  test("the gateway production's discovery named is production", () => {
+    // The reported bug: discovery names api.augenta.ai, which is not the
+    // built-in default, and recall called production "not production".
+    expect(recallEnvironment("https://api.augenta.ai", production())).toBe("prod");
+    // A config written with the default control URL left implicit.
+    expect(recallEnvironment("https://api.augenta.ai", production({ controlUrl: undefined }))).toBe("prod");
+  });
+
+  test("a gateway override on a production project is still named", () => {
+    process.env.AUGENTA_API_URL = "https://dev-gateway.example.com";
+    const cfg = production();
+    expect(recallEnvironment(gatewayBase(cfg), cfg)).toBe("https://dev-gateway.example.com");
+  });
+
+  test("a dev project's discovered gateway does not become production under a production override", () => {
+    // Connected to dev, so the marker is DEV's discovery answer; pointing the
+    // control URL at production does not move where recall posts.
+    process.env.AUGENTA_CONTROL_URL = "https://augenta.ai";
+    const cfg = production({
+      controlUrl: "https://control.example.com",
+      endpoint: "https://dev-gateway.example.com",
+      discoveredGateway: "https://dev-gateway.example.com",
+    });
+    expect(recallEnvironment(gatewayBase(cfg), cfg)).toBe("https://dev-gateway.example.com");
   });
 });
 
