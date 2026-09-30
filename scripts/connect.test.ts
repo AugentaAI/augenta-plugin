@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   awaitLogin,
+  blockedNetworkMessage,
   connectProject,
   createWorkspaceForSelection,
   connectToWorkspaces,
@@ -198,6 +199,31 @@ describe("parseArgs", () => {
         "--wait must be a positive number of seconds",
       );
     }
+  });
+});
+
+describe("blockedNetworkMessage", () => {
+  const refused = { host: "augenta.ai", ok: false, reason: "a proxy refused it (403)", kind: "proxy_refused" } as const;
+  const intercepted = { host: "api.augenta.ai", ok: false, reason: "its TLS certificate was not trusted", kind: "tls" } as const;
+
+  test("names every blocked host, what to allow, and where the setting lives", () => {
+    const message = blockedNetworkMessage([refused, { host: "auth.augenta.ai", ok: true }]);
+    expect(message).toContain("augenta.ai (a proxy refused it (403))");
+    expect(message).toContain("connect needs augenta.ai, auth.augenta.ai");
+    expect(message).toContain("ask your administrator");
+    expect(message).toContain("Allow network egress");
+    expect(message).toContain("Start a new task");
+  });
+
+  // The CA sentence is the only actionable line for a TLS-intercepting proxy,
+  // so it is chosen by the structured kind and cannot be lost to a reword.
+  test("the trusted-CA advice follows the TLS kind, not the wording of the reason", () => {
+    const ca = "supply its trusted proxy CA for Node";
+    expect(blockedNetworkMessage([intercepted])).toContain(ca);
+    expect(blockedNetworkMessage([{ ...intercepted, reason: "the certificate did not check out" }])).toContain(ca);
+    expect(blockedNetworkMessage([refused])).not.toContain(ca);
+    // A host that answered as something other than Augenta carries no kind.
+    expect(blockedNetworkMessage([{ host: "augenta.ai", ok: false, reason: "answered 403, not as Augenta does" }])).not.toContain(ca);
   });
 });
 

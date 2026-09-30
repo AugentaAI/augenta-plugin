@@ -31,7 +31,7 @@ import { ensureAugentaDir, setAugentaIgnore } from "../capture/augenta-dir";
 import { readLinks, writeLinks } from "../capture/links";
 import { displayOrigin, sameOrigin } from "../capture/url";
 import { ephemeralProject, sessionEnvironment } from "../capture/environment";
-import { blockedNetworkMessage, classifyNetworkError, diagnoseHosts } from "../capture/network";
+import { classifyNetworkError, diagnoseHosts, type HostCheck } from "../capture/network";
 import {
   DEFAULT_CONTROL_URL,
   DEFAULT_GATEWAY,
@@ -1907,6 +1907,24 @@ function savedConnection(cfg: ProjectConfig | undefined) {
     destinations: cfg.authMode === "oauth" ? cfg.workspaces ?? [] : cfg.destinations ?? [],
     autoRecall: autoRecallSetting(cfg),
   };
+}
+
+/**
+ * What to tell a user whose network refused Augenta. Lives here, not beside
+ * `diagnoseHosts`: `capture/network.ts` is in every entrypoint's import graph,
+ * so a builder only connect calls would be inlined, dead, into all six bundles.
+ * The TLS suffix reads `HostCheck.kind`, never the display `reason`.
+ */
+export function blockedNetworkMessage(hosts: HostCheck[]): string {
+  const blocked = hosts.filter((host) => !host.ok);
+  const needed = hosts.map((host) => host.host).join(", ");
+  return `this network does not let connect reach ${blocked.map((host) => `${host.host} (${host.reason})`).join(", ")}; ` +
+    `connect needs ${needed}. Allow these hosts in this environment's network settings, or ask your administrator to allow them. ` +
+    "In Cowork, the setting is Organization settings → Capabilities → Code execution → Allow network egress " +
+    "(also called Admin settings → Capabilities → Network egress). Start a new task after the setting changes; existing tasks keep their original settings." +
+    (blocked.some((host) => host.kind === "tls")
+      ? " If your network intercepts TLS, ask your administrator to supply its trusted proxy CA for Node."
+      : "");
 }
 
 export async function runJsonVerb(

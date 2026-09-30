@@ -45,13 +45,16 @@ ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/augenta/*/dist/scrip
       "$HOME/Library/Application Support/Claude/local-agent-mode-sessions/"*/*/rpm/plugin_*/dist/scripts/connect.mjs 2>/dev/null
 ```
 
-The last layout is Cowork desktop's account-scoped plugin cache. For an RPM
-candidate, read `../../.claude-plugin/plugin.json` from the script's directory and use it only when its
-name is `augenta` and its version matches the skill being followed. If more
-than one matching install remains, stop and report the ambiguity. A cache path
-does not establish that the project and plugin share a runtime.
+The last layout is Cowork desktop's account-scoped plugin cache, which is
+per session: several copies of the same install are normal there. For an RPM
+candidate, read `../../.claude-plugin/plugin.json` from the script's directory
+and keep it only when its name is `augenta`. Then compare the surviving
+candidates' `version`: if they all report the same one, use any of them; if they
+disagree, stop and report the ambiguity rather than guessing which install these
+instructions came from. A cache path does not establish that the project and
+plugin share a runtime.
 
-If neither finds the script, do not keep searching other machines or shells. In a
+If none of these finds the script, do not keep searching other machines or shells. In a
 cloud session whose shell reaches the user's folder through a separate device
 shell (a Cowork cloud task), the plugin is not in that shell: say that connect
 cannot run in this session, and suggest a local session with the project folder

@@ -53,7 +53,7 @@ describe("shipped Node network behavior", () => {
       expect(result.stderr).toBe("");
       const payload = JSON.parse(result.stdout);
       expect(payload).toMatchObject({ status: "error", code: "network_blocked" });
-      expect(payload.hosts).toEqual(["augenta.ai", "auth.augenta.ai", "api.augenta.ai"].map(host => ({ host, ok: false, reason: "a proxy refused it (403)" })));
+      expect(payload.hosts).toEqual(["augenta.ai", "auth.augenta.ai", "api.augenta.ai"].map(host => ({ host, ok: false, reason: "a proxy refused it (403)", kind: "proxy_refused" })));
       expect(seen).toContain("augenta.ai:443");
       expect(payload.message).toContain("admin");
       expect(payload.message).toContain("Allow network egress");
