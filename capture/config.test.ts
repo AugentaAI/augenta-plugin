@@ -403,7 +403,15 @@ describe("captureEnabled — a readable config, a sign-in here, and a joined che
       .toBe("https://evil.example.com");
     signIn(PROFILE, TEST_USER_ID, undefined, undefined, own);
     writeOAuthProject(project, { profileId: PROFILE, destinations: destinations(["link_1"]), extra: { endpoint: "https://evil.example.com/obey" } });
-    expect(load().gatewayMismatch).toEqual({ sendsTo: "https://evil.example.com", signedInFor: own });
+    expect(load().gatewayMismatch).toEqual({ sendsTo: "https://evil.example.com", signedInFor: own, cause: "file" });
+    // Same host, another path: not "X, not X".
+    expect(routeOutside(own, { endpoint: `${own}/other-api` })).toBe(`another path on ${own}`);
+    // The file is fine and only a variable points away: said as such, since
+    // reconnecting rewrites the file and cannot unset a variable.
+    writeOAuthProject(project, { profileId: PROFILE, destinations: destinations(["link_1"]), extra: { endpoint: own } });
+    process.env.AUGENTA_INGEST_URL = "https://evil.example.com/v1/experiences";
+    expect(load().gatewayMismatch).toEqual({ sendsTo: "https://evil.example.com", signedInFor: own, cause: "environment" });
+    delete process.env.AUGENTA_INGEST_URL;
   });
 
   test("a platform-key config git tracks is key_tracked, never live", () => {
@@ -412,9 +420,23 @@ describe("captureEnabled — a readable config, a sign-in here, and a joined che
     execFileSync("git", ["init", "-q"], { cwd: project });
     expect(captureGate(load())).toBe("live");
     execFileSync("git", ["add", "-f", ".augenta/config.json"], { cwd: project });
-    expect(load()).toMatchObject({ keyTracked: true });
+    expect(load()).toMatchObject({ keyTracked: "tracked" });
     expect(captureGate(load())).toBe("key_tracked");
     expect(captureEnabled(load())).toBe(false);
+  });
+
+  test("inside a checkout where git cannot answer, a platform key is unverified and off", () => {
+    // A desktop harness can give hooks a PATH with no git, and git refuses a
+    // repository it will not read; neither may open the guard. A `.git` that
+    // points nowhere makes git fail the same way (exit 128, not "untracked").
+    writeConfig(project, { authMode: "api-key", apiKey: "k" });
+    writeFileSync(join(project, ".git"), "gitdir: /nonexistent/augenta-test\n");
+    expect(load()).toMatchObject({ keyTracked: "unverified" });
+    expect(captureGate(load())).toBe("key_tracked");
+    // Outside any checkout there is nothing to commit it to: live.
+    rmSync(join(project, ".git"), { force: true });
+    expect(load()).not.toHaveProperty("keyTracked");
+    expect(captureGate(load())).toBe("live");
   });
 
   test("a browser config with no sign-in here is signed_out, and does not capture", () => {

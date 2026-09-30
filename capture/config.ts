@@ -27,7 +27,9 @@
  * A platform key is never committable. Its writer refuses a tracked file, and a
  * tracked one is read as `keyTracked` and never captures or recalls: a key
  * config pushed with `git add -f` would otherwise route every teammate's capture
- * to that key's Workspace with no question asked.
+ * to that key's Workspace with no question asked. Inside a checkout where git
+ * cannot answer, it is `unverified` and treated the same, so a missing `git`
+ * cannot open the guard.
  *
  * `authMode` names the CREDENTIAL KIND, which decides both what else the file
  * must contain and which authorization header the shipper sends.
@@ -47,8 +49,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { hasStoredProfile, storedProfileGateway, storedProfileUserId } from "./auth";
+import { insideGitCheckout } from "./environment";
 import { readLinks } from "./links";
-import { isTrackedByGit, resolveProjectRoot } from "./project";
+import { gitTracks, resolveProjectRoot } from "./project";
+import { displayOrigin, sameOrigin } from "./url";
 export { resolveProjectRoot } from "./project";
 
 export const DEFAULT_GATEWAY =
@@ -82,6 +86,20 @@ export interface RecordedWorkspace {
  */
 export type JoinState = "joined" | "none" | "signin" | "workspaces" | "gateway";
 
+/**
+ * Why a joined browser checkout is not routing: where it would send the token
+ * instead of its sign-in's gateway — said as an origin, see {@link routeOutside}
+ * — the gateway that sign-in was made for, when it records one, and whether the
+ * config file or only this process's environment (`AUGENTA_API_URL`,
+ * `AUGENTA_INGEST_URL`) points elsewhere. Reconnecting repairs the file; it does
+ * not unset a variable.
+ */
+export interface GatewayMismatch {
+  sendsTo: string;
+  signedInFor?: string;
+  cause: "file" | "environment";
+}
+
 export interface Organization {
   id: string;
   name?: string;
@@ -111,14 +129,11 @@ export interface ProjectConfig {
   controlUrl?: string;
   ingestUrl?: string;
   apiKey?: string;
-  /** A platform-key config that git tracks: never live (see the file header). */
-  keyTracked?: boolean;
-  /**
-   * Why `join` is `gateway`: where this config would send the token (an origin,
-   * for saying so — see {@link routeOutside}), and the gateway the stored
-   * sign-in was made for, when it records one.
-   */
-  gatewayMismatch?: { sendsTo: string; signedInFor?: string };
+  /** A platform-key config git tracks, or one in a checkout where git could not
+   *  say it does not: never live (see the file header). */
+  keyTracked?: "tracked" | "unverified";
+  /** Why `join` is `gateway` ({@link GatewayMismatch}). */
+  gatewayMismatch?: GatewayMismatch;
   endpoint?: string;
   discoveredGateway?: string;
   /**
@@ -254,9 +269,15 @@ export function loadProjectConfig(
       // for, so a config it wrote always passes; only an edit — a pulled commit,
       // a hand change, an environment override — can fail this.
       const own = joined.join === "joined" ? storedProfileGateway(profileId) : undefined;
-      const gatewayMismatch = joined.join !== "joined" || (own && routesOnlyTo(own, settings))
+      const gatewayMismatch: GatewayMismatch | undefined = joined.join !== "joined" || (own && routesOnlyTo(own, settings))
         ? undefined
-        : { sendsTo: own ? routeOutside(own, settings)! : displayOrigin(gatewayBase(settings)), ...(own ? { signedInFor: own } : {}) };
+        : {
+            sendsTo: own ? routeOutside(own, settings)! : displayOrigin(gatewayBase(settings)),
+            ...(own ? { signedInFor: own } : {}),
+            // The file as written, without the environment: if it alone routes to
+            // the sign-in's gateway, only a variable is pointing elsewhere.
+            cause: own && fileRoutesOnlyTo(own, settings) ? "environment" : "file",
+          };
       const routes: ReturnType<typeof joinedRoutes> = gatewayMismatch ? { join: "gateway" } : joined;
       return {
         ...settings,
@@ -291,7 +312,7 @@ export function loadProjectConfig(
         authMode: "api-key",
         ...(captureSince ? { captureSince } : {}),
         apiKey,
-        ...(isTrackedByGit(projectRoot, ".augenta/config.json") ? { keyTracked: true } : {}),
+        ...keyTracking(projectRoot),
         projectRoot,
       };
     }
@@ -343,15 +364,10 @@ export function routesOnlyTo(gateway: string, cfg: Pick<ProjectConfig, "endpoint
   return gatewayBase(cfg) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg), gateway);
 }
 
-/** Whether two URLs share an origin. An unparseable one shares none: it routes
- *  nowhere a token should go. */
-export function sameOrigin(a: string, b: string): boolean {
-  try {
-    const origin = new URL(a).origin;
-    return origin !== "null" && origin === new URL(b).origin;
-  } catch {
-    return false;
-  }
+/** {@link routesOnlyTo} for the file as written, leaving the environment out. */
+function fileRoutesOnlyTo(gateway: string, cfg: Pick<ProjectConfig, "endpoint" | "ingestUrl">): boolean {
+  const base = (cfg.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+  return base === gateway.replace(/\/+$/, "") && sameOrigin(cfg.ingestUrl || `${base}/v1/experiences`, gateway);
 }
 
 /**
@@ -367,17 +383,30 @@ export function sameOrigin(a: string, b: string): boolean {
 export function routeOutside(gateway: string, cfg: Pick<ProjectConfig, "endpoint" | "ingestUrl">): string | undefined {
   if (routesOnlyTo(gateway, cfg)) return undefined;
   const base = gatewayBase(cfg);
-  return displayOrigin(base !== gateway.replace(/\/+$/, "") ? base : experiencesUrl(cfg));
+  const elsewhere = base !== gateway.replace(/\/+$/, "") ? base : experiencesUrl(cfg);
+  // Same host, another path (another API behind the same gateway): naming the
+  // origin alone would read "X, not X". The path itself is not repeated.
+  return sameOrigin(elsewhere, gateway) ? `another path on ${displayOrigin(gateway)}` : displayOrigin(elsewhere);
 }
 
-function displayOrigin(value: string): string {
-  try {
-    const origin = new URL(value).origin;
-    if (origin !== "null") return origin;
-  } catch {
-    /* said as a fixed phrase below */
-  }
-  return "an address that is not a valid Augenta URL";
+/** "X, not Y, the gateway this checkout's sign-in was made for" — the one
+ *  wording every surface uses for a {@link GatewayMismatch}. */
+export function describeGatewayMismatch(mismatch: GatewayMismatch): string {
+  return mismatch.signedInFor
+    ? `${mismatch.sendsTo}, not ${displayOrigin(mismatch.signedInFor)}, the gateway this checkout's sign-in was made for`
+    : `${mismatch.sendsTo}, which this checkout's sign-in does not record as its gateway`;
+}
+
+/**
+ * A platform-key config's standing with git: tracked, or — inside a checkout
+ * where git could not answer — unverified, which is treated the same. Outside
+ * any checkout there is nothing to commit it to.
+ */
+function keyTracking(projectRoot: string): Pick<ProjectConfig, "keyTracked"> {
+  const tracked = gitTracks(projectRoot, ".augenta/config.json");
+  if (tracked === true) return { keyTracked: "tracked" };
+  if (tracked === undefined && insideGitCheckout(projectRoot)) return { keyTracked: "unverified" };
+  return {};
 }
 
 export function captureKilled(): boolean {

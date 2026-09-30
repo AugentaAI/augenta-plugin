@@ -19,12 +19,19 @@ where to read what changed.
 - **A project connected normally needs nothing.** No reconnect is required, and
   Codex does not ask to approve the hooks again.
 - **A browser-connected project stops capturing if it is pointed somewhere its
-  sign-in was not made for,** until you run connect in it again. That covers a
-  hand-edited `endpoint` in `.augenta/config.json`, an `ingestUrl` on another
-  host, and `AUGENTA_API_URL` or `AUGENTA_INGEST_URL` set to another address. To
-  use another gateway, set the variable when you connect.
+  sign-in was not made for.** That covers a hand-edited `endpoint` in
+  `.augenta/config.json` or an `ingestUrl` on another host (run connect in it
+  again), and `AUGENTA_API_URL` or `AUGENTA_INGEST_URL` set to another address
+  (unset it).
+- **`AUGENTA_API_URL` alone no longer chooses a gateway for connect.** When it
+  names a different gateway than the environment's, connect stops with nothing
+  sent. To use another gateway, pass `--endpoint` when you connect; that
+  project's `config.json` then stays out of git.
 - **A platform-key `.augenta/config.json` that git tracks stops capturing and
-  recalling.** Untrack it with `git rm --cached .augenta/config.json`.
+  recalling.** Untrack it with `git rm --cached .augenta/config.json`. Inside a
+  repository, a platform-key project also needs `git` on the coding app's PATH,
+  able to read that repository (for example, not refused as a `safe.directory`),
+  so the plugin can check; otherwise capture stays off and the session says why.
 
 ### Security
 
@@ -32,11 +39,12 @@ where to read what changed.
   this, a change to a committed `.augenta/config.json`, or an `AUGENTA_API_URL`
   set by a committed `.claude/settings.json`, could send each teammate's sign-in,
   captured transcripts, project memory and recall questions to another server,
-  with no warning. Now a checkout that would send anywhere else sends nothing, and
-  the next session says where the config points. Connect takes the gateway from
-  the environment's own sign-in, or from an override you give when connecting,
-  which it tells you about before you choose Workspaces. Joining a config that
-  points elsewhere is refused.
+  with no warning. Now a checkout that would send anywhere else sends nothing,
+  and the next session says where it points and what to undo. Connect takes the
+  gateway from the environment's own sign-in, or from `--endpoint` given when
+  connecting, and says so — and names a non-production environment — before you
+  sign in, since signing in sends your new sign-in there straight away. Joining a
+  config that points elsewhere is refused.
 - **A committed platform-key config no longer captures.** A key config added to
   git anyway sent the capture of everyone who pulled it to that key's Workspace.
   A tracked key config is now off, and the next session says so once.

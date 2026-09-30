@@ -42,10 +42,11 @@ import {
   controlUrl,
   gatewayBase,
   loadProjectConfig,
+  describeGatewayMismatch,
   resolveProjectRoot,
   type ProjectConfig,
 } from "./config";
-import { REQUEST_TIMEOUT_MS, assertSignInTarget, fetchWithProfile, getAuthProfile, ReLoginRequiredError } from "./auth";
+import { REQUEST_TIMEOUT_MS, assertSignInTarget, fetchWithProfile, getAuthProfile, ReLoginRequiredError, storedProfileGateway } from "./auth";
 import {
   AugentaRequestError,
   describeError,
@@ -809,13 +810,21 @@ export async function askWorkspaces(searchRoot: string, request: RecallRequest):
         "not_joined",
         "not_joined",
         mismatch
-          ? `this project's Augenta requests would go to ${mismatch.sendsTo}, not ${mismatch.signedInFor ? `${mismatch.signedInFor}, the gateway` : "the gateway"} this checkout's sign-in was made for, so nothing was sent; run the connect skill here to point it back`
+          ? `this project's Augenta requests would go to ${describeGatewayMismatch(mismatch)}, so nothing was sent; ${
+              mismatch.cause === "environment"
+                ? "AUGENTA_API_URL or AUGENTA_INGEST_URL is doing that, and reconnecting will not change it: unset it (check any committed .claude/settings.json)"
+                : "run the connect skill here to point it back"
+            }`
           : "this checkout has not joined its project's Augenta connection; run the connect skill here to confirm its Workspaces first",
       );
     }
-    /* Looked up at call time, never captured: tests swap `globalThis.fetch`. */
+    /* Looked up at call time, never captured: tests swap `globalThis.fetch`.
+       The stored-token path checks each target against the sign-in's gateway,
+       read once here rather than on every request (fetchWithProfile checks on
+       the profile it reads anyway). */
+    const signedInFor = bearer !== undefined ? storedProfileGateway(profileId) : undefined;
     fetcher = bearer !== undefined
-      ? (target, init) => (assertSignInTarget(profileId, target), fetch(target, {
+      ? (target, init) => (assertSignInTarget(profileId, target, signedInFor), fetch(target, {
           ...init,
           signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
           headers: { ...(init.headers as Record<string, string> | undefined), authorization: `Bearer ${bearer}` },
@@ -885,7 +894,9 @@ export async function askWorkspaces(searchRoot: string, request: RecallRequest):
       return bail(
         "error",
         "key_tracked",
-        "this project's .augenta/config.json holds a platform key and git tracks it, so recall sends nothing from it; if the key is yours, untrack the file with git rm --cached .augenta/config.json",
+        cfg.keyTracked === "tracked"
+          ? "this project's .augenta/config.json holds a platform key and git tracks it, so recall sends nothing from it; if the key is yours, untrack the file with git rm --cached .augenta/config.json"
+          : "this project's .augenta/config.json holds a platform key, and git could not be run here to confirm the repository does not track it, so recall sends nothing from it; make git available to the coding app",
       );
     }
     if (request.workspaces?.length) {

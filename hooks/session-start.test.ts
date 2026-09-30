@@ -258,6 +258,18 @@ describe("connected, but capture is off in this checkout — the join notice", (
       .toContain("check the history of .augenta/config.json");
   });
 
+  test("when only a variable points away, it says so, and does not send the user to reconnect", () => {
+    committed();
+    signInAndJoin("profile_one", recorded(["connector_one"]));
+    const out = fire({ transcript_path: CLAUDE_TP, cwd: project }, { AUGENTA_INGEST_URL: "https://evil.example.com/v1/experiences" });
+    const context = JSON.parse(out).hookSpecificOutput.additionalContext as string;
+    expect(context).toContain("it now points Augenta at https://evil.example.com");
+    expect(context).toContain("AUGENTA_API_URL or AUGENTA_INGEST_URL in the environment that started this app");
+    expect(context).toContain("committed .claude/settings.json");
+    expect(context).toContain("running connect does not");
+    expect(context).not.toContain("points the project back");
+  });
+
   test("a platform-key config git tracks is off, said once, and never names connect as the fix", () => {
     mkdirSync(join(project, ".augenta"), { recursive: true });
     writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ authMode: "api-key", apiKey: "platform-test-key" }));

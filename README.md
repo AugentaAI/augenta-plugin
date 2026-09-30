@@ -218,9 +218,11 @@ config private instead, add `.augenta/` to your repository's `.gitignore`.
 - **Your sign-in goes only where you signed in.** If the config, or an
   environment variable, points a checkout at a different Augenta address than
   the one your sign-in was made for, that checkout stops capturing and recalling
-  and says where the config points. Connecting again restores the environment's
-  own address; if nobody on the team made that change, check the file's history
-  first.
+  and says where it points. If the config changed, connecting again restores the
+  environment's own address; if a variable is the cause, unset it. Either way,
+  if nobody on the team made that change, check its history first. Connect never
+  sends your sign-in to a gateway that only the environment or the config chose,
+  and it names a non-production environment before you sign in.
 - **Everyone sharing a config needs plugin 0.11.0 or newer** to read it, and
   0.12.0 or newer for that check. API-key configs hold the key, so connect never makes them committable, and one
   that git tracks neither captures nor recalls.

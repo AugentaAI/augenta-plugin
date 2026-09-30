@@ -27,6 +27,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ensureAugentaDir } from "./augenta-dir";
 import { DiscoveryError } from "./network";
+import { displayOrigin, sameOrigin } from "./url";
 import { openBrowser } from "../runtime/node";
 
 export interface OAuthConfig {
@@ -524,6 +525,9 @@ export function reusableProfiles(config: OAuthConfig): Array<{
 export async function accessTokenForProfile(
   profileId: string,
   forceRefresh = false,
+  /** Where the token is about to go: refused unless it is this sign-in's own
+   *  gateway, checked on the profile this call already read, before any refresh. */
+  target?: string,
 ): Promise<string> {
   return withAuthLock(async () => {
     const store = readAuthStore();
@@ -533,6 +537,7 @@ export async function accessTokenForProfile(
         "the Augenta sign-in is missing; run augenta:connect again",
       );
     }
+    if (target !== undefined) assertSignInTarget(profileId, target, profile.gateway);
     if (!forceRefresh && profile.expiresAt > Date.now() + 60_000) {
       return profile.accessToken;
     }
@@ -635,33 +640,29 @@ function storedProfile(profileId: string): Partial<AuthProfile> | undefined {
  * rule hold at the request itself, whoever built the URL. Throws before any
  * token is read, so nothing is refreshed on a refused request either.
  */
-export function assertSignInTarget(profileId: string, url: string): void {
-  const own = storedProfileGateway(profileId);
-  const origin = (value: string) => {
-    try {
-      const parsed = new URL(value).origin;
-      return parsed === "null" ? undefined : parsed;
-    } catch {
-      return undefined;
-    }
-  };
-  const target = origin(url);
-  if (!own || !target || target !== origin(own)) {
+export function assertSignInTarget(
+  profileId: string,
+  url: string,
+  /** The sign-in's gateway when the caller has already read it; read here otherwise. */
+  gateway: string | undefined = storedProfileGateway(profileId),
+): void {
+  const own = gateway?.trim().replace(/\/+$/, "") || undefined;
+  if (!own || !sameOrigin(url, own)) {
     throw new Error(
-      `refusing to send this Augenta sign-in to ${target ?? "an address that is not a valid URL"}: it was made for ${own ?? "a gateway this machine does not record"}`,
+      `refusing to send this Augenta sign-in to ${displayOrigin(url)}: it was made for ${own ? displayOrigin(own) : "a gateway this machine does not record"}`,
     );
   }
 }
 
-/** One bearer request with exactly one locked refresh/retry on a 401. */
+/** One bearer request with exactly one locked refresh/retry on a 401. The
+ *  token goes only to the gateway its sign-in was made for ({@link assertSignInTarget}). */
 export async function fetchWithProfile(
   profileId: string,
   url: string,
   init: RequestInit = {},
 ): Promise<Response> {
-  assertSignInTarget(profileId, url);
   const send = async (forceRefresh: boolean) => {
-    const accessToken = await accessTokenForProfile(profileId, forceRefresh);
+    const accessToken = await accessTokenForProfile(profileId, forceRefresh, url);
     return fetch(url, {
       ...init,
       signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),

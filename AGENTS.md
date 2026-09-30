@@ -269,7 +269,9 @@ deliberate:
   ask what was already remembered, and gating a read on it would make one off
   switch silently mean two things. What governs recall is the same thing that
   governs everything else: a readable `.augenta/config.json`, and, for a browser
-  connection, this checkout's join of it. A committed config reaches checkouts
+  connection, this checkout's join of it — which includes its resolving to the
+  sign-in's own gateway — or, for a platform key, its not being committed
+  (`key_tracked`, refused with nothing sent). A committed config reaches checkouts
   whose users never affirmed its Workspaces, so recall from one that has not
   joined returns `not_joined` and sends nothing. That check lives in the request
   layer and is the checkout's own links, never the capture switch. Deleting the config
@@ -410,16 +412,25 @@ goes. A checkout counts as joined only while the gateway it resolves is the one
 its stored profile in `~/.augenta/auth.json` records, and its capture URL is on
 that gateway's origin (`routesOnlyTo` in `capture/config.ts`). Otherwise `join`
 is `gateway`: capture and automatic recall are silent, explicit recall answers
-`not_joined`, nothing is sent, and session start names where the config points.
-**No override is exempt**; a contributor sets it when connecting, which signs in
-for that gateway. Connect never reads a gateway from the file: it takes the one
-discovery names or this run's `--endpoint`/`AUGENTA_API_URL`, states an override
-before the user answers (`gatewayOverride`), keeps a hand-set `ingestUrl` only on
-the gateway's origin, and `--adopt` refuses a config that routes elsewhere rather
-than joining it. Every config connect writes passes, because it writes `endpoint`
-from the gateway the sign-in was made for; a mismatch always means an edit. A new
-request that carries a browser token must go to `storedProfileGateway` or through
-a config that passes this check — never to a URL read from the file alone.
+`not_joined`, nothing is sent, and session start names where the config points
+— as an origin, never as written, because a commit chose the text and it reaches
+the model — and whether the file or only a variable is the cause.
+**No override is exempt** at runtime, and the sign-in itself is where an override
+could otherwise be minted: `--await-login` sends the new token to the gateway at
+once and binds the stored profile to it, which this check then trusts. So connect
+never reads a gateway from the file or from `AUGENTA_API_URL` alone — the
+variable can arrive in a committed `.claude/settings.json` — and refuses one that
+differs from discovery (`gateway_override_unconfirmed`), nothing sent. Only this
+run's `--endpoint`, which no commit can set, picks another gateway; it is stated
+**before any sign-in** (`gatewayOverride`), as is a non-production environment,
+whose issuer owns the sign-in page. An override connection keeps the local ignore
+form and is refused for a config git already tracks (`override_config_tracked`),
+since teammates' sign-ins were made for discovery's gateway. Connect keeps a
+hand-set `ingestUrl` only on the gateway's origin, and `--adopt` refuses a config
+that routes elsewhere rather than joining it. Every config connect writes passes,
+because it writes `endpoint` from the gateway the sign-in was made for; a mismatch
+always means an edit. Every request that carries a browser token asserts its
+target is that sign-in's gateway (`assertSignInTarget`); a new one must too.
 
 **A Connector belongs to one person, so each person links their own.** The
 platform accepts records through a Connector only from its owner or an

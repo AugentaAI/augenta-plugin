@@ -34,13 +34,13 @@ var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, 
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // capture/health.ts
-import { existsSync as existsSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync6, renameSync as renameSync4, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join7 } from "node:path";
+import { existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync6, renameSync as renameSync4, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join8 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
 // capture/config.ts
 import { readFileSync as readFileSync4 } from "node:fs";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 
 // capture/auth.ts
 import {
@@ -171,6 +171,23 @@ async function diagnoseHosts(controlUrl, options = {}) {
     gateway ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) => response.status === 401 && typeof body?.error === "string") : undefined
   ]);
   return [discovery, ...rest.filter((item) => Boolean(item))];
+}
+
+// capture/url.ts
+function urlOrigin(value) {
+  try {
+    const origin = new URL(value).origin;
+    return origin === "null" ? undefined : origin;
+  } catch {
+    return;
+  }
+}
+function sameOrigin(a, b) {
+  const origin = urlOrigin(a);
+  return origin !== undefined && origin === urlOrigin(b);
+}
+function displayOrigin(value) {
+  return urlOrigin(value) ?? "an address that is not a valid Augenta URL";
 }
 
 // runtime/node.ts
@@ -542,13 +559,15 @@ function getAuthProfile(profileId) {
 function reusableProfiles(config) {
   return Object.entries(readAuthStore().profiles).filter(([, profile]) => profile.issuer.replace(/\/+$/, "") === config.issuer.replace(/\/+$/, "") && profile.clientId === config.clientId && profile.gateway.replace(/\/+$/, "") === config.gateway.replace(/\/+$/, "")).map(([profileId, profile]) => ({ profileId, profile })).sort((a, b) => b.profile.updatedAt.localeCompare(a.profile.updatedAt));
 }
-async function accessTokenForProfile(profileId, forceRefresh = false) {
+async function accessTokenForProfile(profileId, forceRefresh = false, target) {
   return withAuthLock(async () => {
     const store = readAuthStore();
     const profile = store.profiles[profileId];
     if (!profile) {
       throw new ReLoginRequiredError("the Augenta sign-in is missing; run augenta:connect again");
     }
+    if (target !== undefined)
+      assertSignInTarget(profileId, target, profile.gateway);
     if (!forceRefresh && profile.expiresAt > Date.now() + 60000) {
       return profile.accessToken;
     }
@@ -599,25 +618,15 @@ function storedProfile(profileId) {
     return;
   }
 }
-function assertSignInTarget(profileId, url) {
-  const own = storedProfileGateway(profileId);
-  const origin = (value) => {
-    try {
-      const parsed = new URL(value).origin;
-      return parsed === "null" ? undefined : parsed;
-    } catch {
-      return;
-    }
-  };
-  const target = origin(url);
-  if (!own || !target || target !== origin(own)) {
-    throw new Error(`refusing to send this Augenta sign-in to ${target ?? "an address that is not a valid URL"}: it was made for ${own ?? "a gateway this machine does not record"}`);
+function assertSignInTarget(profileId, url, gateway = storedProfileGateway(profileId)) {
+  const own = gateway?.trim().replace(/\/+$/, "") || undefined;
+  if (!own || !sameOrigin(url, own)) {
+    throw new Error(`refusing to send this Augenta sign-in to ${displayOrigin(url)}: it was made for ${own ? displayOrigin(own) : "a gateway this machine does not record"}`);
   }
 }
 async function fetchWithProfile(profileId, url, init = {}) {
-  assertSignInTarget(profileId, url);
   const send = async (forceRefresh) => {
-    const accessToken = await accessTokenForProfile(profileId, forceRefresh);
+    const accessToken = await accessTokenForProfile(profileId, forceRefresh, url);
     return fetch(url, {
       ...init,
       signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -665,15 +674,53 @@ function takeAuthNotice(projectRoot) {
   return found;
 }
 
+// capture/environment.ts
+import { existsSync as existsSync3 } from "node:fs";
+import { dirname, join as join3, resolve as resolve2 } from "node:path";
+function sessionEnvironment(env = process.env) {
+  const declared = env.AUGENTA_EPHEMERAL?.trim().toLowerCase();
+  if (declared === "0" || declared === "false")
+    return { ephemeral: false, signals: ["AUGENTA_EPHEMERAL=0"] };
+  const signals = [];
+  let kind;
+  if (env.CLAUDE_CODE_REMOTE === "true") {
+    signals.push("CLAUDE_CODE_REMOTE");
+    kind ??= "claude-cloud";
+  }
+  if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {
+    signals.push("CODEX_HOME=/opt/codex (heuristic)");
+    kind ??= "codex-cloud";
+  }
+  if (declared === "1" || declared === "true") {
+    signals.push("AUGENTA_EPHEMERAL=1");
+    kind ??= "declared";
+  }
+  return { ephemeral: signals.length > 0, ...kind ? { kind } : {}, signals };
+}
+function insideGitCheckout(dir) {
+  let current = resolve2(dir);
+  while (true) {
+    if (existsSync3(join3(current, ".git")))
+      return true;
+    const parent = dirname(current);
+    if (parent === current)
+      return false;
+    current = parent;
+  }
+}
+function ephemeralProject(projectRoot, env = process.env) {
+  return sessionEnvironment(env).ephemeral && !insideGitCheckout(projectRoot);
+}
+
 // capture/links.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 function linksPath(projectRoot) {
-  return join3(projectRoot, ".augenta", "state", "links.json");
+  return join4(projectRoot, ".augenta", "state", "links.json");
 }
 function legacyAdoptionPath(projectRoot) {
-  return join3(projectRoot, ".augenta", "state", "adopted.json");
+  return join4(projectRoot, ".augenta", "state", "adopted.json");
 }
 var nonEmpty = (value) => typeof value === "string" && value.length > 0;
 function readLinks(projectRoot) {
@@ -709,9 +756,9 @@ function readLinks(projectRoot) {
   }
 }
 function writeLinks(projectRoot, links) {
-  const dir = join3(ensureAugentaDir(projectRoot), "state");
+  const dir = join4(ensureAugentaDir(projectRoot), "state");
   mkdirSync3(dir, { recursive: true });
-  const path = join3(dir, "links.json");
+  const path = join4(dir, "links.json");
   const tmp = `${path}.${randomUUID2()}.tmp`;
   try {
     writeFileSync3(tmp, JSON.stringify({
@@ -731,8 +778,8 @@ function writeLinks(projectRoot, links) {
 
 // capture/project.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync3, realpathSync as realpathSync2 } from "node:fs";
-import { dirname, join as join4, resolve as resolve2 } from "node:path";
+import { existsSync as existsSync4, realpathSync as realpathSync2 } from "node:fs";
+import { dirname as dirname2, join as join5, resolve as resolve3 } from "node:path";
 function gitRevParse(cwd, arg) {
   try {
     const value = execFileSync("git", ["rev-parse", arg], {
@@ -745,14 +792,17 @@ function gitRevParse(cwd, arg) {
   }
 }
 function isTrackedByGit(projectRoot, relativePath) {
+  return gitTracks(projectRoot, relativePath) === true;
+}
+function gitTracks(projectRoot, relativePath) {
   try {
     execFileSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
       cwd: projectRoot,
       stdio: "ignore"
     });
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return error.status === 1 ? false : undefined;
   }
 }
 function resolveProjectRoot(cwd) {
@@ -765,11 +815,11 @@ function resolveProjectRoot(cwd) {
     return;
   }
   while (true) {
-    if (existsSync3(join4(dir, ".augenta", "config.json")))
+    if (existsSync4(join5(dir, ".augenta", "config.json")))
       return dir;
-    if (existsSync3(join4(dir, ".git")))
+    if (existsSync4(join5(dir, ".git")))
       return;
-    const parent = dirname(dir);
+    const parent = dirname2(dir);
     if (parent === dir)
       return;
     dir = parent;
@@ -777,7 +827,7 @@ function resolveProjectRoot(cwd) {
 }
 function resolveProject(args, cwd) {
   if (args.project)
-    return { projectRoot: resolve2(cwd, args.project) };
+    return { projectRoot: resolve3(cwd, args.project) };
   const configured = resolveProjectRoot(cwd);
   if (configured)
     return { projectRoot: configured };
@@ -850,7 +900,7 @@ function joinedRoutes(projectRoot, profileId, projectKey, workspaces) {
   return { join: "joined", destinations, joinedAt: links.joinedAt };
 }
 function configPath(projectRoot) {
-  return join5(projectRoot, ".augenta", "config.json");
+  return join6(projectRoot, ".augenta", "config.json");
 }
 function loadProjectConfig(projectRoot) {
   try {
@@ -888,7 +938,11 @@ function loadProjectConfig(projectRoot) {
         return;
       const joined = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
       const own = joined.join === "joined" ? storedProfileGateway(profileId) : undefined;
-      const gatewayMismatch = joined.join !== "joined" || own && routesOnlyTo(own, settings) ? undefined : { sendsTo: own ? routeOutside(own, settings) : displayOrigin(gatewayBase(settings)), ...own ? { signedInFor: own } : {} };
+      const gatewayMismatch = joined.join !== "joined" || own && routesOnlyTo(own, settings) ? undefined : {
+        sendsTo: own ? routeOutside(own, settings) : displayOrigin(gatewayBase(settings)),
+        ...own ? { signedInFor: own } : {},
+        cause: own && fileRoutesOnlyTo(own, settings) ? "environment" : "file"
+      };
       const routes = gatewayMismatch ? { join: "gateway" } : joined;
       return {
         ...settings,
@@ -922,7 +976,7 @@ function loadProjectConfig(projectRoot) {
         authMode: "api-key",
         ...captureSince ? { captureSince } : {},
         apiKey,
-        ...isTrackedByGit(projectRoot, ".augenta/config.json") ? { keyTracked: true } : {},
+        ...keyTracking(projectRoot),
         projectRoot
       };
     }
@@ -947,27 +1001,27 @@ function experiencesUrl(cfg) {
 function routesOnlyTo(gateway, cfg) {
   return gatewayBase(cfg) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg), gateway);
 }
-function sameOrigin(a, b) {
-  try {
-    const origin = new URL(a).origin;
-    return origin !== "null" && origin === new URL(b).origin;
-  } catch {
-    return false;
-  }
+function fileRoutesOnlyTo(gateway, cfg) {
+  const base = (cfg.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+  return base === gateway.replace(/\/+$/, "") && sameOrigin(cfg.ingestUrl || `${base}/v1/experiences`, gateway);
 }
 function routeOutside(gateway, cfg) {
   if (routesOnlyTo(gateway, cfg))
     return;
   const base = gatewayBase(cfg);
-  return displayOrigin(base !== gateway.replace(/\/+$/, "") ? base : experiencesUrl(cfg));
+  const elsewhere = base !== gateway.replace(/\/+$/, "") ? base : experiencesUrl(cfg);
+  return sameOrigin(elsewhere, gateway) ? `another path on ${displayOrigin(gateway)}` : displayOrigin(elsewhere);
 }
-function displayOrigin(value) {
-  try {
-    const origin = new URL(value).origin;
-    if (origin !== "null")
-      return origin;
-  } catch {}
-  return "an address that is not a valid Augenta URL";
+function describeGatewayMismatch(mismatch) {
+  return mismatch.signedInFor ? `${mismatch.sendsTo}, not ${displayOrigin(mismatch.signedInFor)}, the gateway this checkout's sign-in was made for` : `${mismatch.sendsTo}, which this checkout's sign-in does not record as its gateway`;
+}
+function keyTracking(projectRoot) {
+  const tracked = gitTracks(projectRoot, ".augenta/config.json");
+  if (tracked === true)
+    return { keyTracked: "tracked" };
+  if (tracked === undefined && insideGitCheckout(projectRoot))
+    return { keyTracked: "unverified" };
+  return {};
 }
 function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
@@ -992,8 +1046,8 @@ function effectiveCaptureSince(cfg) {
 }
 
 // capture/outbox.ts
-import { join as join6 } from "node:path";
-import { mkdirSync as mkdirSync4, existsSync as existsSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync4, appendFileSync, renameSync as renameSync3, statSync as statSync2, unlinkSync as unlinkSync2 } from "node:fs";
+import { join as join7 } from "node:path";
+import { mkdirSync as mkdirSync4, existsSync as existsSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync4, appendFileSync, renameSync as renameSync3, statSync as statSync2, unlinkSync as unlinkSync2 } from "node:fs";
 var NEWLINE = 10;
 var MAX_SPOOL_BYTES = 50 * 1024 * 1024;
 var MAX_DEST_LAG_BYTES = 16 * 1024 * 1024;
@@ -1025,9 +1079,9 @@ class Outbox {
   maxDestLagBytes;
   constructor(projectRoot, opts = {}) {
     this.projectRoot = projectRoot;
-    this.dir = join6(projectRoot, ".augenta", "outbox");
-    this.spoolPath = join6(this.dir, "spool.jsonl");
-    this.cursorPath = join6(this.dir, "cursor.json");
+    this.dir = join7(projectRoot, ".augenta", "outbox");
+    this.spoolPath = join7(this.dir, "spool.jsonl");
+    this.cursorPath = join7(this.dir, "cursor.json");
     this.maxSpoolBytes = opts.maxSpoolBytes ?? MAX_SPOOL_BYTES;
     this.maxDestLagBytes = opts.maxDestLagBytes ?? MAX_DEST_LAG_BYTES;
   }
@@ -1057,12 +1111,12 @@ class Outbox {
 `);
   }
   dropEpisodePath() {
-    return join6(this.dir, "dropped.json");
+    return join7(this.dir, "dropped.json");
   }
   markDropped() {
     this.ensure();
     const path = this.dropEpisodePath();
-    if (existsSync4(path))
+    if (existsSync5(path))
       return false;
     writeFileSync4(path, JSON.stringify({ since: new Date().toISOString() }));
     return true;
@@ -1073,7 +1127,7 @@ class Outbox {
     } catch {}
   }
   discardNoticePath() {
-    return join6(this.dir, "discarded.json");
+    return join7(this.dir, "discarded.json");
   }
   markDiscarded(entries) {
     if (entries.length === 0)
@@ -1218,7 +1272,7 @@ class Outbox {
   }
   readPending(maxBatch = Infinity, destKey) {
     const shipped = this.shippedOffset(destKey);
-    if (!existsSync4(this.spoolPath))
+    if (!existsSync5(this.spoolPath))
       return { records: [], endOffset: shipped, hasMore: false };
     const buf = readFileSync5(this.spoolPath);
     const start = Math.min(shipped, buf.length);
@@ -1261,7 +1315,7 @@ class Outbox {
     return this.readPending(Infinity, destKey).records.length;
   }
   compact() {
-    if (!existsSync4(this.spoolPath))
+    if (!existsSync5(this.spoolPath))
       return;
     let size;
     try {
@@ -1294,7 +1348,7 @@ var STAGES = ["dispatch", "capture", "delivery"];
 var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
 function read(projectRoot, stage) {
   try {
-    const s = JSON.parse(readFileSync6(join7(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    const s = JSON.parse(readFileSync6(join8(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
     if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
       return;
     return {
@@ -1310,7 +1364,7 @@ function read(projectRoot, stage) {
 }
 function recordHealth(projectRoot, stage, outcome, count = 0) {
   try {
-    const dir = join7(ensureAugentaDir(projectRoot), "state");
+    const dir = join8(ensureAugentaDir(projectRoot), "state");
     mkdirSync5(dir, { recursive: true });
     const old = read(projectRoot, stage);
     const at = new Date().toISOString();
@@ -1322,7 +1376,7 @@ function recordHealth(projectRoot, stage, outcome, count = 0) {
       successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
       ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
     };
-    const file = join7(dir, `health-${stage}.json`);
+    const file = join8(dir, `health-${stage}.json`);
     const tmp = `${file}.${randomUUID3()}.tmp`;
     writeFileSync5(tmp, JSON.stringify(value), { mode: 384 });
     renameSync4(tmp, file);
@@ -1336,15 +1390,15 @@ function captureHealth(projectRoot) {
     configured: !!cfg,
     enabled: gate === "live",
     ...gate ? { gate } : {},
-    configuration: cfg ? "valid" : existsSync5(join7(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    configuration: cfg ? "valid" : existsSync6(join8(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
     activityScope: "project",
     hostDispatch: "unverified",
-    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg ? 1 : 0,
+    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg && !cfg.keyTracked ? 1 : 0,
     pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
     ...activity,
     hostApproval: "unknown",
     ingestion: "unverified",
-    nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in" : gate === "not_adopted" ? "adopt" : gate === "key_tracked" ? "untrack_config" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
+    nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in" : cfg.gatewayMismatch ? cfg.gatewayMismatch.cause === "environment" ? "unset_gateway_override" : "review_config_gateway" : gate === "not_adopted" ? "adopt" : gate === "key_tracked" ? cfg.keyTracked === "tracked" ? "untrack_config" : "make_git_available" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
   };
 }
 
@@ -1368,44 +1422,6 @@ import { stdin as input, stdout as output } from "node:process";
 
 // runtime/version.ts
 var PLUGIN_VERSION = "0.12.0";
-
-// capture/environment.ts
-import { existsSync as existsSync6 } from "node:fs";
-import { dirname as dirname2, join as join8, resolve as resolve3 } from "node:path";
-function sessionEnvironment(env = process.env) {
-  const declared = env.AUGENTA_EPHEMERAL?.trim().toLowerCase();
-  if (declared === "0" || declared === "false")
-    return { ephemeral: false, signals: ["AUGENTA_EPHEMERAL=0"] };
-  const signals = [];
-  let kind;
-  if (env.CLAUDE_CODE_REMOTE === "true") {
-    signals.push("CLAUDE_CODE_REMOTE");
-    kind ??= "claude-cloud";
-  }
-  if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {
-    signals.push("CODEX_HOME=/opt/codex (heuristic)");
-    kind ??= "codex-cloud";
-  }
-  if (declared === "1" || declared === "true") {
-    signals.push("AUGENTA_EPHEMERAL=1");
-    kind ??= "declared";
-  }
-  return { ephemeral: signals.length > 0, ...kind ? { kind } : {}, signals };
-}
-function insideGitCheckout(dir) {
-  let current = resolve3(dir);
-  while (true) {
-    if (existsSync6(join8(current, ".git")))
-      return true;
-    const parent = dirname2(current);
-    if (parent === current)
-      return false;
-    current = parent;
-  }
-}
-function ephemeralProject(projectRoot, env = process.env) {
-  return sessionEnvironment(env).ephemeral && !insideGitCheckout(projectRoot);
-}
 
 // capture/platform.ts
 class AugentaRequestError extends Error {
@@ -1602,7 +1618,7 @@ function writeOAuthConfig(projectRoot, connection) {
     rmSync2(tmp, { force: true });
   }
   chmodSync3(path, 384);
-  setAugentaIgnore(projectRoot, "shared");
+  setAugentaIgnore(projectRoot, connection.shared === false ? "local" : "shared");
   writeLinks(projectRoot, {
     profileId: connection.profileId,
     userId: connection.userId,
@@ -1905,12 +1921,27 @@ async function resolveOAuth(args, projectRoot = args.project ?? process.cwd()) {
   const control = controlUrl(prior, args.controlUrl);
   const discovered = await augentaOAuthConfig(control);
   const gateway = gatewayBase({ endpoint: discovered.gateway }, args.endpoint);
-  const discoveredGateway = gatewayOverride(args) ? undefined : discovered.gateway;
+  if (gateway !== discovered.gateway) {
+    if (!args.endpoint?.trim())
+      throw new GatewayOverrideError("gateway_override_unconfirmed", gateway, discovered.gateway);
+    if (isTrackedByGit(projectRoot, ".augenta/config.json")) {
+      throw new GatewayOverrideError("override_config_tracked", gateway, discovered.gateway);
+    }
+  }
+  const discoveredGateway = gatewayOverride(args) || process.env.AUGENTA_API_URL?.trim() ? undefined : discovered.gateway;
   return { oauth: { ...discovered, gateway }, gateway, control, discovered: discovered.gateway, discoveredGateway };
 }
 function gatewayOverride(args) {
-  const override = args.endpoint?.trim() || process.env.AUGENTA_API_URL?.trim();
+  const override = args.endpoint?.trim();
   return override ? override.replace(/\/+$/, "") : undefined;
+}
+
+class GatewayOverrideError extends Error {
+  code;
+  constructor(code, gateway, discovered) {
+    super(code === "gateway_override_unconfirmed" ? `AUGENTA_API_URL points connect at ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, the gateway this environment's sign-in names, and connect does not sign in or send to a gateway the environment alone chose; nothing was sent. Unset AUGENTA_API_URL (check any committed .claude/settings.json), or pass --endpoint to choose that gateway yourself` : `this connection would use the gateway ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, and git tracks this project's .augenta/config.json, so the override would reach everyone who pulls it and stop their capture; nothing was sent. Connect without --endpoint, or untrack the config first`);
+    this.code = code;
+  }
 }
 function priorConnection(projectRoot) {
   if (!existsSync7(join9(projectRoot, ".augenta", "config.json")))
@@ -1962,6 +1993,7 @@ async function establishConnectors(projectRoot, args, profileId, gateway, connec
     controlUrl: connection.controlUrl,
     org: connection.org,
     discoveredGateway: connection.discoveredGateway,
+    shared: connection.shared,
     endpoint: gateway,
     destinations: results.filter((result) => Boolean(result.connectorId)).map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
     autoRecall: args.autoRecall ?? previous?.autoRecall ?? false,
@@ -2004,23 +2036,29 @@ async function linkWorkspaces(projectRoot, args, profileId, gateway, owner, work
 async function connectProject(projectRoot, args) {
   const { oauth, gateway, control, discovered, discoveredGateway } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
+  const environment = environmentLabel(control);
+  if (environment !== "prod") {
+    console.log(`This is the ${environment} environment, not production.`);
+  }
+  if (gateway !== discovered) {
+    console.log(`This connection uses the gateway ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, the one this environment's sign-in names.`);
+  }
+  if (prior?.controlUrl && prior.controlUrl !== control) {
+    console.log(`This project is moving from ${environmentLabel(prior.controlUrl)} to ${environment}.`);
+  }
   const selected = await selectOrCreateProfile(oauth, prior?.profileId);
   console.log(`Signed in as ${selected.me.user.name || selected.me.user.email} to ${selected.me.org.name} (${selected.me.org.id}).`);
   const priorIds = priorCandidateIds(projectRoot, { userId: selected.me.user.id });
   const owner = { userId: selected.me.user.id, projectKey: prior?.projectKey ?? randomUUID4() };
   const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds, owner.userId);
   const available = await listWorkspaces(selected.profileId, gateway);
-  const environment = environmentLabel(control);
   console.log("Every Workspace you select receives the FULL record — this project's agent activity, its raw transcript lines (structurally sanitized, but NOT secret-scrubbed), and its project memory, complete, in each.");
   console.log("So anyone with access to ANY Workspace you select can read this project's captured activity: the audience is the union of all of them.");
   if (environment !== "prod") {
     console.log(`This is the ${environment} environment, not production.`);
   }
   if (gateway !== discovered) {
-    console.log(`This connection uses the gateway ${gateway} instead of ${discovered}, the one this environment's sign-in names.`);
-  }
-  if (prior?.controlUrl && prior.controlUrl !== control) {
-    console.log(`This project is moving from ${environmentLabel(prior.controlUrl)} to ${environment}.`);
+    console.log(`This connection uses the gateway ${displayOrigin(gateway)}, not the one this environment's sign-in names.`);
   }
   if (prior && isTrackedByGit(projectRoot, ".augenta/config.json")) {
     console.log("Git tracks this project's .augenta/config.json, so the set you choose changes the Workspaces for everyone who pulls it.");
@@ -2037,6 +2075,7 @@ async function connectProject(projectRoot, args) {
     controlUrl: control,
     org: selected.me.org,
     discoveredGateway,
+    shared: gateway === discovered,
     owner,
     knownProject: Boolean(prior?.projectKey),
     recorded: prior?.workspaces
@@ -2267,7 +2306,7 @@ async function createWorkspaceForSelection(resolved, args) {
   }
 }
 async function connectToWorkspaces(resolved, args) {
-  const { oauth, gateway, control, discoveredGateway } = await resolveOAuth(args, resolved.projectRoot);
+  const { oauth, gateway, control, discovered, discoveredGateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
   const usable = await usableProfiles(oauth, args.profile ?? prior?.profileId);
   if (usable.length === 0) {
@@ -2315,6 +2354,7 @@ async function connectToWorkspaces(resolved, args) {
     controlUrl: control,
     org: picked.me.org,
     discoveredGateway,
+    shared: gateway === discovered,
     owner: { userId: picked.me.user.id, projectKey: prior?.projectKey ?? randomUUID4() },
     knownProject: Boolean(prior?.projectKey),
     recorded: prior?.workspaces
@@ -2385,6 +2425,9 @@ async function runJsonVerb(resolved, args) {
   try {
     return { ...await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot }), ...metadata };
   } catch (error) {
+    if (error instanceof GatewayOverrideError) {
+      return { status: "error", code: error.code, message: error.message, ...metadata };
+    }
     if (classifyNetworkError(error)) {
       const hosts = await diagnoseHosts(controlUrl(cfg, args.controlUrl));
       const blocked = hosts.filter((host) => !host.ok);
@@ -2409,7 +2452,8 @@ async function repairHarness(projectRoot, args) {
     return { status: "error", code: "oauth_connection_required", message: "repair requires a readable browser-connected project config" };
   const gateway = storedProfileGateway(cfg.profileId);
   if (cfg.gatewayMismatch) {
-    return { status: "error", code: "gateway_mismatch", message: `this project's Augenta requests would go to ${cfg.gatewayMismatch.sendsTo}, not ${cfg.gatewayMismatch.signedInFor ? `${cfg.gatewayMismatch.signedInFor}, the gateway` : "the gateway"} this checkout's sign-in was made for; nothing was changed. Unset AUGENTA_API_URL and AUGENTA_INGEST_URL, or connect again here` };
+    const remedy = cfg.gatewayMismatch.cause === "environment" ? "unset AUGENTA_API_URL and AUGENTA_INGEST_URL" : "connect again here to point it back";
+    return { status: "error", code: "gateway_mismatch", message: `this project's Augenta requests would go to ${describeGatewayMismatch(cfg.gatewayMismatch)}; nothing was changed. ${remedy[0].toUpperCase()}${remedy.slice(1)}` };
   }
   const owner = cfg.destinations?.length ? storedProfileUserId(cfg.profileId) : undefined;
   if (!owner || !gateway)

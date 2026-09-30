@@ -29,6 +29,7 @@ import { isMain, reexecForEnvProxy } from "../runtime/node";
 import { PLUGIN_VERSION } from "../runtime/version";
 import { ensureAugentaDir, setAugentaIgnore } from "../capture/augenta-dir";
 import { readLinks, writeLinks } from "../capture/links";
+import { displayOrigin, sameOrigin } from "../capture/url";
 import { ephemeralProject, sessionEnvironment } from "../capture/environment";
 import { classifyNetworkError, diagnoseHosts } from "../capture/network";
 import {
@@ -36,10 +37,10 @@ import {
   DEFAULT_GATEWAY,
   configPath,
   controlUrl,
+  describeGatewayMismatch,
   gatewayBase,
   loadProjectConfig,
   routeOutside,
-  sameOrigin,
   type Destination,
   type Organization,
   type ProjectConfig,
@@ -278,6 +279,10 @@ export function writeOAuthConfig(
     /** Always written explicitly; `false` when the caller has no answer, which
      *  is the question's default. */
     autoRecall?: boolean;
+    /** False for a connection made with a gateway override: its `endpoint` is
+     *  this person's own choice, and committing it would stop capture for every
+     *  teammate, whose sign-ins were made for discovery's gateway. */
+    shared?: boolean;
   },
 ): string {
   if (connection.destinations.length === 0) {
@@ -317,8 +322,9 @@ export function writeOAuthConfig(
   chmodSync(path, 0o600);
   // A browser connection holds no credential, so its config may be committed
   // and shared; each checkout still joins through connect, with its own links.
-  // The user who just answered the destination question here has joined.
-  setAugentaIgnore(projectRoot, "shared");
+  // The user who just answered the destination question here has joined. One
+  // made with a gateway override stays local (see `shared`).
+  setAugentaIgnore(projectRoot, connection.shared === false ? "local" : "shared");
   writeLinks(projectRoot, {
     profileId: connection.profileId,
     userId: connection.userId,
@@ -941,15 +947,45 @@ async function resolveOAuth(
   const control = controlUrl(prior, args.controlUrl);
   const discovered = await augentaOAuthConfig(control);
   const gateway = gatewayBase({ endpoint: discovered.gateway }, args.endpoint);
-  const discoveredGateway = gatewayOverride(args) ? undefined : discovered.gateway;
+  if (gateway !== discovered.gateway) {
+    // The variable alone never picks where a browser sign-in goes. It can come
+    // from a committed .claude/settings.json, and signing in sends the new token
+    // to this gateway at once (verifyFreshLogin) — before any question could
+    // name it — then binds the sign-in to it, which the capture check trusts
+    // from then on. Only this run's own --endpoint, which no commit can set,
+    // chooses another gateway, and it is stated before anything is sent.
+    if (!args.endpoint?.trim()) throw new GatewayOverrideError("gateway_override_unconfirmed", gateway, discovered.gateway);
+    // A connection made this way keeps its config out of git (writeOAuthConfig);
+    // one git already tracks would carry the override to every teammate, whose
+    // sign-ins were made for discovery's gateway, and stop their capture.
+    if (isTrackedByGit(projectRoot, ".augenta/config.json")) {
+      throw new GatewayOverrideError("override_config_tracked", gateway, discovered.gateway);
+    }
+  }
+  const discoveredGateway = gatewayOverride(args) || process.env.AUGENTA_API_URL?.trim() ? undefined : discovered.gateway;
   return { oauth: { ...discovered, gateway }, gateway, control, discovered: discovered.gateway, discoveredGateway };
 }
 
-/** This run's explicit gateway override, when there is one. Written without the
- *  `discoveredGateway` marker even when it equals discovery (DEBUG.md). */
+/** This run's own `--endpoint`, the one gateway override connect honors for a
+ *  browser sign-in. Written without the `discoveredGateway` marker (DEBUG.md). */
 function gatewayOverride(args: Args): string | undefined {
-  const override = args.endpoint?.trim() || process.env.AUGENTA_API_URL?.trim();
+  const override = args.endpoint?.trim();
   return override ? override.replace(/\/+$/, "") : undefined;
+}
+
+/** A gateway override connect will not act on; nothing was sent to it. */
+class GatewayOverrideError extends Error {
+  constructor(
+    readonly code: "gateway_override_unconfirmed" | "override_config_tracked",
+    gateway: string,
+    discovered: string,
+  ) {
+    super(
+      code === "gateway_override_unconfirmed"
+        ? `AUGENTA_API_URL points connect at ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, the gateway this environment's sign-in names, and connect does not sign in or send to a gateway the environment alone chose; nothing was sent. Unset AUGENTA_API_URL (check any committed .claude/settings.json), or pass --endpoint to choose that gateway yourself`
+        : `this connection would use the gateway ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, and git tracks this project's .augenta/config.json, so the override would reach everyone who pulls it and stop their capture; nothing was sent. Connect without --endpoint, or untrack the config first`,
+    );
+  }
 }
 
 /**
@@ -1029,6 +1065,8 @@ async function establishConnectors(
     controlUrl: string;
     org: Organization;
     discoveredGateway?: string;
+    /** Whether `gateway` is the one discovery names, so the config may be shared. */
+    shared: boolean;
     owner: LinkOwner;
     /** Whether `owner.projectKey` predates this run, so other checkouts may hold
      *  links under it worth finding. A key minted now has none anywhere. */
@@ -1112,6 +1150,7 @@ async function establishConnectors(
     controlUrl: connection.controlUrl,
     org: connection.org,
     discoveredGateway: connection.discoveredGateway,
+    shared: connection.shared,
     endpoint: gateway,
     destinations: results
       .filter((result): result is DestinationResult & { connectorId: string } => Boolean(result.connectorId))
@@ -1202,6 +1241,20 @@ export async function connectProject(
 ): Promise<void> {
   const { oauth, gateway, control, discovered, discoveredGateway } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
+  const environment = environmentLabel(control);
+  // BEFORE the sign-in, not only before the answer: signing in sends the new
+  // token to this environment's gateway at once, and the sign-in page belongs
+  // to its issuer. A non-production environment or a gateway override is said
+  // while declining still sends nothing.
+  if (environment !== "prod") {
+    console.log(`This is the ${environment} environment, not production.`);
+  }
+  if (gateway !== discovered) {
+    console.log(`This connection uses the gateway ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, the one this environment's sign-in names.`);
+  }
+  if (prior?.controlUrl && prior.controlUrl !== control) {
+    console.log(`This project is moving from ${environmentLabel(prior.controlUrl)} to ${environment}.`);
+  }
   const selected = await selectOrCreateProfile(oauth, prior?.profileId);
   console.log(
     `Signed in as ${selected.me.user.name || selected.me.user.email} to ${selected.me.org.name} (${selected.me.org.id}).`,
@@ -1210,7 +1263,6 @@ export async function connectProject(
   const owner: LinkOwner = { userId: selected.me.user.id, projectKey: prior?.projectKey ?? randomUUID() };
   const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds, owner.userId);
   const available = await listWorkspaces(selected.profileId, gateway);
-  const environment = environmentLabel(control);
 
   // BEFORE the answer, not after. This is the disclosure the consent invariant
   // turns on (AGENTS.md → Privacy invariants): a list of Workspace names does not
@@ -1222,16 +1274,12 @@ export async function connectProject(
   console.log(
     "So anyone with access to ANY Workspace you select can read this project's captured activity: the audience is the union of all of them.",
   );
+  // Said again beside the destination question, which is the answer they bear on.
   if (environment !== "prod") {
     console.log(`This is the ${environment} environment, not production.`);
   }
-  // Like a non-production environment, a gateway override is stated before the
-  // answer: it is where this sign-in and everything captured are sent.
   if (gateway !== discovered) {
-    console.log(`This connection uses the gateway ${gateway} instead of ${discovered}, the one this environment's sign-in names.`);
-  }
-  if (prior?.controlUrl && prior.controlUrl !== control) {
-    console.log(`This project is moving from ${environmentLabel(prior.controlUrl)} to ${environment}.`);
+    console.log(`This connection uses the gateway ${displayOrigin(gateway)}, not the one this environment's sign-in names.`);
   }
   if (prior && isTrackedByGit(projectRoot, ".augenta/config.json")) {
     console.log(
@@ -1266,6 +1314,7 @@ export async function connectProject(
         controlUrl: control,
         org: selected.me.org,
         discoveredGateway,
+        shared: gateway === discovered,
         owner,
         knownProject: Boolean(prior?.projectKey),
         recorded: prior?.workspaces,
@@ -1652,7 +1701,7 @@ export async function connectToWorkspaces(
   resolved: ResolvedProject,
   args: Args,
 ): Promise<JsonPayload> {
-  const { oauth, gateway, control, discoveredGateway } = await resolveOAuth(args, resolved.projectRoot);
+  const { oauth, gateway, control, discovered, discoveredGateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
   const usable = await usableProfiles(oauth, args.profile ?? prior?.profileId);
   if (usable.length === 0) {
@@ -1710,6 +1759,7 @@ export async function connectToWorkspaces(
       controlUrl: control,
       org: picked.me.org,
       discoveredGateway,
+      shared: gateway === discovered,
       owner: { userId: picked.me.user.id, projectKey: prior?.projectKey ?? randomUUID() },
       knownProject: Boolean(prior?.projectKey),
       recorded: prior?.workspaces,
@@ -1818,6 +1868,9 @@ export async function runJsonVerb(
   try {
     return { ...(await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot })), ...metadata };
   } catch (error) {
+    if (error instanceof GatewayOverrideError) {
+      return { status: "error", code: error.code, message: error.message, ...metadata };
+    }
     // A failure that could be the network refusing Augenta is checked host by
     // host before it is reported, so the answer names what to allow instead of
     // "Request was cancelled.". Only a confirmed block is reported as
@@ -1852,7 +1905,8 @@ async function repairHarness(projectRoot: string, args: Args): Promise<JsonPaylo
   // to it, so one that points elsewhere is refused rather than repaired.
   const gateway = storedProfileGateway(cfg.profileId!);
   if (cfg.gatewayMismatch) {
-    return { status: "error", code: "gateway_mismatch", message: `this project's Augenta requests would go to ${cfg.gatewayMismatch.sendsTo}, not ${cfg.gatewayMismatch.signedInFor ? `${cfg.gatewayMismatch.signedInFor}, the gateway` : "the gateway"} this checkout's sign-in was made for; nothing was changed. Unset AUGENTA_API_URL and AUGENTA_INGEST_URL, or connect again here` };
+    const remedy = cfg.gatewayMismatch.cause === "environment" ? "unset AUGENTA_API_URL and AUGENTA_INGEST_URL" : "connect again here to point it back";
+    return { status: "error", code: "gateway_mismatch", message: `this project's Augenta requests would go to ${describeGatewayMismatch(cfg.gatewayMismatch)}; nothing was changed. ${remedy[0]!.toUpperCase()}${remedy.slice(1)}` };
   }
   // Only this person's own links, which exist only once this checkout joined.
   const owner = cfg.destinations?.length ? storedProfileUserId(cfg.profileId!) : undefined;

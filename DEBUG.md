@@ -37,14 +37,21 @@ without a flag or variable defaults to that recorded URL. Every URL follows
 **CLI flag > environment variable > config.json > default**.
 
 The gateway is the exception for a browser connection: **connect never takes it
-from the file.** It is the one the environment's discovery names, unless this
-run's `--endpoint` or `AUGENTA_API_URL` overrides it, and an override is stated
-before the destination question (`gatewayOverride` in `--json` payloads). Connect
-writes it as `endpoint`, marked with `discoveredGateway` when discovery chose it;
-explicit overrides are written without the marker, even when their value happens
-to equal discovery. A hand-edited `endpoint` no longer survives a reconnect, and
-until one, it stops capture (below). A hand-set `ingestUrl` survives only on the
-gateway's own origin.
+from the file, and never from the environment alone.** It is the one the
+environment's discovery names, unless this run passes `--endpoint`. A browser
+sign-in sends its new token to the gateway at once (`/v1/me`) and is then bound to
+it, and a committed `.claude/settings.json` `env` block reaches every process
+Claude Code starts, so an `AUGENTA_API_URL` that differs from discovery makes
+connect refuse (`gateway_override_unconfirmed`) with nothing sent. `--endpoint`
+cannot arrive in a commit; it is stated before any sign-in (`gatewayOverride` in
+`--json` payloads, and a line in the terminal flow). Connect writes the gateway
+as `endpoint`, marked with `discoveredGateway` when discovery chose it; an
+override is written without the marker, and its config keeps the local ignore
+form so it is not committed, and connect refuses one git already tracks
+(`override_config_tracked`), since teammates' sign-ins were made for discovery's
+gateway. A hand-edited `endpoint` no longer survives a reconnect, and until one,
+it stops capture (below). A hand-set `ingestUrl` survives only on the gateway's
+own origin.
 
 **A browser sign-in's token goes only to the gateway it was made for.** A
 checkout counts as joined only while the gateway it resolves — file and
@@ -52,14 +59,16 @@ environment together — is the one its stored sign-in in `~/.augenta/auth.json`
 records, and its capture URL is on that gateway's origin (`routesOnlyTo` in
 `capture/config.ts`). Otherwise capture and automatic recall are off, recall
 answers `not_joined` with nothing sent, and session start says where the config
-points. No override is exempt, because Claude Code applies a committed
-`.claude/settings.json` `env` block to hooks. So to use another gateway, set
-`AUGENTA_API_URL` (or pass `--endpoint`) **when connecting**: the sign-in is then
-made for that gateway, and the variable must stay set, or be unset everywhere, to
-match it.
+points, and whether the file or only a variable is the cause. Every token-sending
+request asserts the same thing (`assertSignInTarget` in `capture/auth.ts`). So to
+use another gateway, **connect with `--endpoint`**: the sign-in is then made for
+that gateway, the config records it, and no variable is needed afterwards. A
+variable left set to anything else stops capture until it is unset.
+
 When the control URL changes, connect uses the new environment's discovered
-gateway unless `--endpoint` or `AUGENTA_API_URL` explicitly overrides it. The payload's
-`environmentChange` names the old and new environments when the control URL moves.
+gateway unless `--endpoint` overrides it. The payload's
+`environmentChange` names the old and new environments when the control URL moves,
+before any sign-in.
 
 Do not use `--endpoint` alone to reach another environment. It moves the gateway
 only, leaving the issuer and client id on the previous environment, which fails
@@ -69,9 +78,9 @@ later as an unexplained 401 rather than at the point of the mistake.
 touches the control plane: it posts to the GATEWAY in the project's own
 `.augenta/config.json`, which connect wrote when the project was connected to
 that environment. So a project connected against dev asks dev, whatever
-`AUGENTA_CONTROL_URL` says. To aim recall somewhere else, reconnect the project:
-setting `AUGENTA_API_URL` alone points the checkout away from its sign-in's
-gateway, and recall then sends nothing (above). This is also
+`AUGENTA_CONTROL_URL` says. To aim recall somewhere else, reconnect the project
+(with `--endpoint` for another gateway): setting `AUGENTA_API_URL` alone points
+the checkout away from its sign-in's gateway, and recall then sends nothing (above). This is also
 why `recallEnvironment` in `capture/recall-client.ts` consults BOTH coordinates — the
 control URL alone would report `prod` about a question going to dev. Under a
 production control URL, the gateway counts as production when it is the one

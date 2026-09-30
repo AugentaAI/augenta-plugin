@@ -50,7 +50,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { isCodexHarness } from "./harness";
 import { ephemeralProject } from "../capture/environment";
-import { captureEnabled, captureGate, configPath, controlUrl, loadProjectConfig, resolveProjectRoot } from "../capture/config";
+import { captureEnabled, captureGate, configPath, controlUrl, describeGatewayMismatch, loadProjectConfig, resolveProjectRoot } from "../capture/config";
 import { environmentLabel } from "../capture/platform";
 import { Outbox } from "../capture/outbox";
 import { spawnShipper } from "../capture/shipper";
@@ -217,21 +217,29 @@ if (connectedRoot) {
     if (gate === "key_tracked") {
       // Not connect's to fix: its --api-key path refuses a tracked file, and the
       // browser path would replace the key. Said once per project.
-      if (firstTime(`key-tracked:${connectedRoot}`)) {
-        const fact = "this project's .augenta/config.json holds a platform key and git tracks it, so Augenta capture and recall are off in this checkout: " +
-          "a committed key would send everyone's capture to that key's Workspace.";
+      const tracked = cfg!.keyTracked === "tracked";
+      if (firstTime(`key-${cfg!.keyTracked}:${connectedRoot}`)) {
+        const fact = tracked
+          ? "this project's .augenta/config.json holds a platform key and git tracks it, so Augenta capture and recall are off in this checkout: " +
+            "a committed key would send everyone's capture to that key's Workspace."
+          : "this project's .augenta/config.json holds a platform key, and git could not be run here to confirm the repository does not track it, " +
+            "so Augenta capture and recall are off in this checkout: a committed key would send everyone's capture to that key's Workspace.";
+        const remedy = tracked
+          ? { codex: "If the key is yours, untrack the file with git rm --cached .augenta/config.json; if it is not, remove it.",
+              claude: "If the key is theirs, the fix is `git rm --cached .augenta/config.json`; if they do not recognize it, it should be removed." }
+          : { codex: "Make git available to the coding app (on its PATH), then start a new session.",
+              claude: "The fix is making `git` available on the PATH the coding app gives hooks, then starting a new session." };
         const additionalContext = codex
-          ? `Augenta: ${fact} If the key is yours, untrack the file with git rm --cached .augenta/config.json; if it is not, remove it.`
-          : `[Augenta] ${fact[0]!.toUpperCase()}${fact.slice(1)} Tell the user. If the key is theirs, the fix is ` +
-            "`git rm --cached .augenta/config.json`; if they do not recognize it, it should be removed. Do not run the " +
+          ? `Augenta: ${fact} ${remedy.codex}`
+          : `[Augenta] ${fact[0]!.toUpperCase()}${fact.slice(1)} Tell the user. ${remedy.claude} Do not run the ` +
             "connect skill to fix this, and never ask for the key in the chat.";
         process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }));
       }
     } else if (gate === "signed_out" || gate === "not_adopted") {
       // Where this checkout would send its sign-in instead of that sign-in's own
       // gateway, when that is why capture is off (an origin; see routeOutside).
-      const elsewhere = cfg!.gatewayMismatch?.sendsTo;
-      const own = cfg!.gatewayMismatch?.signedInFor ?? "the address";
+      const mismatch = cfg!.gatewayMismatch;
+      const elsewhere = mismatch?.sendsTo;
       const identity = createHash("sha256")
         .update([
           cfg!.profileId ?? "",
@@ -251,24 +259,32 @@ if (connectedRoot) {
           .join(", ");
         const reason = gate === "signed_out"
           ? "this machine is not signed in to Augenta for it"
-          : elsewhere
-            ? `it now points Augenta at ${elsewhere}, not ${own}${own === "the address" ? "" : ", the address"} this machine's sign-in was made for`
+          : mismatch
+            ? `it now points Augenta at ${describeGatewayMismatch(mismatch)}`
             : cfg!.join === "signin"
               ? "this checkout joined it under a different sign-in"
               : cfg!.join === "workspaces"
                 ? "its Workspaces changed since this checkout joined"
                 : "this checkout has not joined it";
-        const additionalContext = elsewhere
-          // A pulled commit (or a committed .claude/settings.json variable) may
-          // have made this change, and the next step connect offers is where the
-          // sign-in would go, so the history comes first.
+        const additionalContext = mismatch?.cause === "environment"
+          // Only a variable points elsewhere; reconnecting cannot unset it, and
+          // connect refuses a gateway the environment alone chose.
           ? codex
-            ? `Augenta: capture and recall are off in this checkout because ${reason}. If nobody on your team changed that, check the history of .augenta/config.json and of any AUGENTA_API_URL or AUGENTA_INGEST_URL setting first; running ${connectAction} and choosing the Workspaces points it back.`
+            ? `Augenta: capture and recall are off in this checkout because ${reason}. AUGENTA_API_URL or AUGENTA_INGEST_URL in the environment that started this app is doing that; nothing was sent there. If you did not set it, look for it in a committed .claude/settings.json. Unsetting it turns capture back on; reconnecting does not.`
+            : `[Augenta] Capture and recall are off in this checkout because ${reason}. Nothing was sent there. It is ` +
+              "AUGENTA_API_URL or AUGENTA_INGEST_URL in the environment that started this app, not the project's config. Tell " +
+              "the user. If they did not set it, suggest looking for it in a committed .claude/settings.json (an `env` block) " +
+              "and its history. Unsetting it turns capture back on; running connect does not, and connect refuses a gateway " +
+              "only the environment chose."
+          : elsewhere
+          // A pulled commit may have made this change, and the next step connect
+          // offers re-points the file, so the history comes first.
+          ? codex
+            ? `Augenta: capture and recall are off in this checkout because ${reason}. If nobody on your team changed that, check the history of .augenta/config.json first; running ${connectAction} and choosing the Workspaces points it back.`
             : `[Augenta] Capture and recall are off in this checkout because ${reason}. Nothing was sent there. Tell the ` +
-              "user. If nobody on their team made that change, suggest checking `git log -p .augenta/config.json` and any " +
-              "AUGENTA_API_URL or AUGENTA_INGEST_URL setting (including a committed .claude/settings.json) before anything " +
-              "else. Running the augenta connect skill (/augenta:connect) and choosing the Workspaces points the project " +
-              "back at the environment's own address. Do not start it without their go-ahead."
+              "user. If nobody on their team made that change, suggest checking `git log -p .augenta/config.json` before " +
+              "anything else. Running the augenta connect skill (/augenta:connect) and choosing the Workspaces points the " +
+              "project back at the environment's own address. Do not start it without their go-ahead."
           : codex
             ? `Augenta: this project is set up to send capture to ${names}${where ? ` (${where})` : ""}, but capture is off in this checkout because ${reason}. Run ${connectAction} to join it.`
             : `[Augenta] This project's .augenta/config.json sends Augenta capture to ${names}${where ? ` (${where})` : ""}, ` +

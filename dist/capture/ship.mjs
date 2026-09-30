@@ -4550,8 +4550,8 @@ var require_promise = __commonJS((exports) => {
     _resolve;
     _reject;
     constructor() {
-      this._promise = new Promise((resolve3, reject) => {
-        this._resolve = resolve3;
+      this._promise = new Promise((resolve4, reject) => {
+        this._resolve = resolve4;
         this._reject = reject;
       });
     }
@@ -4639,9 +4639,9 @@ var require_exporter = __commonJS((exports) => {
   var api_1 = require_src();
   var suppress_tracing_1 = require_suppress_tracing();
   function _export(exporter, arg) {
-    return new Promise((resolve3) => {
+    return new Promise((resolve4) => {
       api_1.context.with((0, suppress_tracing_1.suppressTracing)(api_1.context.active()), () => {
-        exporter.export(arg, resolve3);
+        exporter.export(arg, resolve4);
       });
     });
   }
@@ -11268,7 +11268,7 @@ var require_http_transport_utils = __commonJS((exports) => {
   var DEFAULT_USER_AGENT = `OTel-OTLP-Exporter-JavaScript/${version_1.VERSION}`;
   exports.MAX_RESPONSE_BODY_SIZE = 4 * 1024 * 1024;
   function sendWithHttp(request, url, headers, compression, userAgent, agent, data, timeoutMillis) {
-    return new Promise((resolve3) => {
+    return new Promise((resolve4) => {
       const parsedUrl = new URL(url);
       if (userAgent) {
         headers["User-Agent"] = `${userAgent} ${DEFAULT_USER_AGENT}`;
@@ -11287,7 +11287,7 @@ var require_http_transport_utils = __commonJS((exports) => {
           responseSize += chunk.length;
           if (responseSize > exports.MAX_RESPONSE_BODY_SIZE) {
             const sizeError = new Error(`OTLP export response body exceeded size limit of ${exports.MAX_RESPONSE_BODY_SIZE} bytes`);
-            resolve3({ status: "failure", error: sizeError });
+            resolve4({ status: "failure", error: sizeError });
             res.destroy();
             return;
           }
@@ -11295,18 +11295,18 @@ var require_http_transport_utils = __commonJS((exports) => {
         });
         res.on("end", () => {
           if (res.statusCode && res.statusCode <= 299) {
-            resolve3({
+            resolve4({
               status: "success",
               data: Buffer.concat(responseData)
             });
           } else if (res.statusCode && (0, is_export_retryable_1.isExportHTTPErrorRetryable)(res.statusCode)) {
-            resolve3({
+            resolve4({
               status: "retryable",
               retryInMillis: (0, is_export_retryable_1.parseRetryAfterToMills)(res.headers["retry-after"])
             });
           } else {
             const error = new types_1.OTLPExporterError(res.statusMessage, res.statusCode, Buffer.concat(responseData).toString());
-            resolve3({
+            resolve4({
               status: "failure",
               error
             });
@@ -11314,17 +11314,17 @@ var require_http_transport_utils = __commonJS((exports) => {
         });
         res.on("error", (error) => {
           if (res.statusCode && res.statusCode <= 299) {
-            resolve3({
+            resolve4({
               status: "success"
             });
           } else if (res.statusCode && (0, is_export_retryable_1.isExportHTTPErrorRetryable)(res.statusCode)) {
-            resolve3({
+            resolve4({
               status: "retryable",
               error,
               retryInMillis: (0, is_export_retryable_1.parseRetryAfterToMills)(res.headers["retry-after"])
             });
           } else {
-            resolve3({
+            resolve4({
               status: "failure",
               error
             });
@@ -11333,26 +11333,26 @@ var require_http_transport_utils = __commonJS((exports) => {
       });
       req.setTimeout(timeoutMillis, () => {
         req.destroy();
-        resolve3({
+        resolve4({
           status: "retryable",
           error: new Error("Request timed out")
         });
       });
       req.on("error", (error) => {
         if (isHttpTransportNetworkErrorRetryable(error)) {
-          resolve3({
+          resolve4({
             status: "retryable",
             error
           });
         } else {
-          resolve3({
+          resolve4({
             status: "failure",
             error
           });
         }
       });
       compressAndSend(req, compression, data, (error) => {
-        resolve3({
+        resolve4({
           status: "failure",
           error
         });
@@ -11455,9 +11455,9 @@ var require_retrying_transport = __commonJS((exports) => {
       this._transport = transport;
     }
     retry(data, timeoutMillis, inMillis) {
-      return new Promise((resolve3, reject) => {
+      return new Promise((resolve4, reject) => {
         setTimeout(() => {
-          this._transport.send(data, timeoutMillis).then(resolve3, reject);
+          this._transport.send(data, timeoutMillis).then(resolve4, reject);
         }, inMillis);
       });
     }
@@ -12960,8 +12960,8 @@ var require_BatchLogRecordProcessorBase = __commonJS((exports) => {
     _metrics;
     _exportScheduledResolve;
     constructor(exporter, logRecords, exportTimeoutMillis, metrics) {
-      this._exportScheduledPromise = new Promise((resolve3) => {
-        this._exportScheduledResolve = resolve3;
+      this._exportScheduledPromise = new Promise((resolve4) => {
+        this._exportScheduledResolve = resolve4;
       });
       this._exportCompleted = this._executeExport(exporter, logRecords, exportTimeoutMillis);
       this._metrics = metrics;
@@ -12984,7 +12984,7 @@ var require_BatchLogRecordProcessorBase = __commonJS((exports) => {
       }
     }
     async _exportWithTimeout(exporter, logRecords, exportTimeoutMillis) {
-      return new Promise((resolve3, reject) => {
+      return new Promise((resolve4, reject) => {
         const timer = setTimeout(() => {
           reject(new Error("Timeout"));
         }, exportTimeoutMillis);
@@ -12992,7 +12992,7 @@ var require_BatchLogRecordProcessorBase = __commonJS((exports) => {
           this._metrics.finishLogs(logRecords.length, result.error);
           clearTimeout(timer);
           if (result.code === core_1.ExportResultCode.SUCCESS) {
-            resolve3();
+            resolve4();
           } else {
             reject(result.error ?? new Error("BatchLogRecordProcessor: log record export failed"));
           }
@@ -14160,12 +14160,12 @@ var require_MultiSpanProcessor = __commonJS((exports) => {
       for (const spanProcessor of this._spanProcessors) {
         promises.push(spanProcessor.forceFlush());
       }
-      return new Promise((resolve3) => {
+      return new Promise((resolve4) => {
         Promise.all(promises).then(() => {
-          resolve3();
+          resolve4();
         }).catch((error) => {
           (0, core_1.globalErrorHandler)(error || new Error("MultiSpanProcessor: forceFlush failed"));
-          resolve3();
+          resolve4();
         });
       });
     }
@@ -14191,9 +14191,9 @@ var require_MultiSpanProcessor = __commonJS((exports) => {
       for (const spanProcessor of this._spanProcessors) {
         promises.push(spanProcessor.shutdown());
       }
-      return new Promise((resolve3, reject) => {
+      return new Promise((resolve4, reject) => {
         Promise.all(promises).then(() => {
-          resolve3();
+          resolve4();
         }, reject);
       });
     }
@@ -14439,14 +14439,14 @@ var require_BatchSpanProcessorBase = __commonJS((exports) => {
       this._maybeStartTimer();
     }
     _flushAll() {
-      return new Promise((resolve3, reject) => {
+      return new Promise((resolve4, reject) => {
         const promises = [];
         const count = Math.ceil(this._finishedSpans.length / this._maxExportBatchSize);
         for (let i = 0, j = count;i < j; i++) {
           promises.push(this._flushOneBatch());
         }
         Promise.all(promises).then(() => {
-          resolve3();
+          resolve4();
         }).catch(reject);
       });
     }
@@ -14455,7 +14455,7 @@ var require_BatchSpanProcessorBase = __commonJS((exports) => {
       if (this._finishedSpans.length === 0) {
         return Promise.resolve();
       }
-      return new Promise((resolve3, reject) => {
+      return new Promise((resolve4, reject) => {
         const timer = setTimeout(() => {
           reject(new Error("Timeout"));
         }, this._exportTimeoutMillis);
@@ -14471,7 +14471,7 @@ var require_BatchSpanProcessorBase = __commonJS((exports) => {
             clearTimeout(timer);
             this._metrics.finishSpans(spans.length, result.error);
             if (result.code === core_1.ExportResultCode.SUCCESS) {
-              resolve3();
+              resolve4();
             } else {
               reject(result.error ?? new Error("BatchSpanProcessor: span export failed"));
             }
@@ -14663,32 +14663,32 @@ var require_TracerProvider = __commonJS((exports) => {
     forceFlush(options) {
       const timeout = options?.timeoutMillis ?? this._forceFlushTimeoutMillis;
       const promises = this._activeSpanProcessor["_spanProcessors"].map((spanProcessor) => {
-        return new Promise((resolve3) => {
+        return new Promise((resolve4) => {
           let state;
           const timeoutInterval = setTimeout(() => {
-            resolve3(new Error(`Span processor did not completed within timeout period of ${timeout} ms`));
+            resolve4(new Error(`Span processor did not completed within timeout period of ${timeout} ms`));
             state = ForceFlushState.timeout;
           }, timeout);
           spanProcessor.forceFlush().then(() => {
             clearTimeout(timeoutInterval);
             if (state !== ForceFlushState.timeout) {
               state = ForceFlushState.resolved;
-              resolve3(state);
+              resolve4(state);
             }
           }).catch((error) => {
             clearTimeout(timeoutInterval);
             state = ForceFlushState.error;
-            resolve3(error);
+            resolve4(error);
           });
         });
       });
-      return new Promise((resolve3, reject) => {
+      return new Promise((resolve4, reject) => {
         Promise.all(promises).then((results) => {
           const errors = results.filter((result) => result !== ForceFlushState.resolved);
           if (errors.length > 0) {
             reject(errors);
           } else {
-            resolve3();
+            resolve4();
           }
         }).catch((error) => reject([error]));
       });
@@ -15321,13 +15321,13 @@ var require_src15 = __commonJS((exports) => {
 });
 
 // capture/health.ts
-import { existsSync as existsSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync6, renameSync as renameSync4, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join7 } from "node:path";
+import { existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync6, renameSync as renameSync4, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join8 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
 // capture/config.ts
 import { readFileSync as readFileSync4 } from "node:fs";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 
 // capture/auth.ts
 import {
@@ -15458,6 +15458,23 @@ async function diagnoseHosts(controlUrl, options = {}) {
     gateway ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) => response.status === 401 && typeof body?.error === "string") : undefined
   ]);
   return [discovery, ...rest.filter((item) => Boolean(item))];
+}
+
+// capture/url.ts
+function urlOrigin(value) {
+  try {
+    const origin = new URL(value).origin;
+    return origin === "null" ? undefined : origin;
+  } catch {
+    return;
+  }
+}
+function sameOrigin(a, b) {
+  const origin = urlOrigin(a);
+  return origin !== undefined && origin === urlOrigin(b);
+}
+function displayOrigin(value) {
+  return urlOrigin(value) ?? "an address that is not a valid Augenta URL";
 }
 
 // runtime/node.ts
@@ -15829,13 +15846,15 @@ function getAuthProfile(profileId) {
 function reusableProfiles(config) {
   return Object.entries(readAuthStore().profiles).filter(([, profile]) => profile.issuer.replace(/\/+$/, "") === config.issuer.replace(/\/+$/, "") && profile.clientId === config.clientId && profile.gateway.replace(/\/+$/, "") === config.gateway.replace(/\/+$/, "")).map(([profileId, profile]) => ({ profileId, profile })).sort((a, b) => b.profile.updatedAt.localeCompare(a.profile.updatedAt));
 }
-async function accessTokenForProfile(profileId, forceRefresh = false) {
+async function accessTokenForProfile(profileId, forceRefresh = false, target) {
   return withAuthLock(async () => {
     const store = readAuthStore();
     const profile = store.profiles[profileId];
     if (!profile) {
       throw new ReLoginRequiredError("the Augenta sign-in is missing; run augenta:connect again");
     }
+    if (target !== undefined)
+      assertSignInTarget(profileId, target, profile.gateway);
     if (!forceRefresh && profile.expiresAt > Date.now() + 60000) {
       return profile.accessToken;
     }
@@ -15886,25 +15905,15 @@ function storedProfile(profileId) {
     return;
   }
 }
-function assertSignInTarget(profileId, url) {
-  const own = storedProfileGateway(profileId);
-  const origin = (value) => {
-    try {
-      const parsed = new URL(value).origin;
-      return parsed === "null" ? undefined : parsed;
-    } catch {
-      return;
-    }
-  };
-  const target = origin(url);
-  if (!own || !target || target !== origin(own)) {
-    throw new Error(`refusing to send this Augenta sign-in to ${target ?? "an address that is not a valid URL"}: it was made for ${own ?? "a gateway this machine does not record"}`);
+function assertSignInTarget(profileId, url, gateway = storedProfileGateway(profileId)) {
+  const own = gateway?.trim().replace(/\/+$/, "") || undefined;
+  if (!own || !sameOrigin(url, own)) {
+    throw new Error(`refusing to send this Augenta sign-in to ${displayOrigin(url)}: it was made for ${own ? displayOrigin(own) : "a gateway this machine does not record"}`);
   }
 }
 async function fetchWithProfile(profileId, url, init = {}) {
-  assertSignInTarget(profileId, url);
   const send = async (forceRefresh) => {
-    const accessToken = await accessTokenForProfile(profileId, forceRefresh);
+    const accessToken = await accessTokenForProfile(profileId, forceRefresh, url);
     return fetch(url, {
       ...init,
       signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -15952,15 +15961,53 @@ function takeAuthNotice(projectRoot) {
   return found;
 }
 
+// capture/environment.ts
+import { existsSync as existsSync3 } from "node:fs";
+import { dirname, join as join3, resolve as resolve2 } from "node:path";
+function sessionEnvironment(env = process.env) {
+  const declared = env.AUGENTA_EPHEMERAL?.trim().toLowerCase();
+  if (declared === "0" || declared === "false")
+    return { ephemeral: false, signals: ["AUGENTA_EPHEMERAL=0"] };
+  const signals = [];
+  let kind;
+  if (env.CLAUDE_CODE_REMOTE === "true") {
+    signals.push("CLAUDE_CODE_REMOTE");
+    kind ??= "claude-cloud";
+  }
+  if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {
+    signals.push("CODEX_HOME=/opt/codex (heuristic)");
+    kind ??= "codex-cloud";
+  }
+  if (declared === "1" || declared === "true") {
+    signals.push("AUGENTA_EPHEMERAL=1");
+    kind ??= "declared";
+  }
+  return { ephemeral: signals.length > 0, ...kind ? { kind } : {}, signals };
+}
+function insideGitCheckout(dir) {
+  let current = resolve2(dir);
+  while (true) {
+    if (existsSync3(join3(current, ".git")))
+      return true;
+    const parent = dirname(current);
+    if (parent === current)
+      return false;
+    current = parent;
+  }
+}
+function ephemeralProject(projectRoot, env = process.env) {
+  return sessionEnvironment(env).ephemeral && !insideGitCheckout(projectRoot);
+}
+
 // capture/links.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 function linksPath(projectRoot) {
-  return join3(projectRoot, ".augenta", "state", "links.json");
+  return join4(projectRoot, ".augenta", "state", "links.json");
 }
 function legacyAdoptionPath(projectRoot) {
-  return join3(projectRoot, ".augenta", "state", "adopted.json");
+  return join4(projectRoot, ".augenta", "state", "adopted.json");
 }
 var nonEmpty = (value) => typeof value === "string" && value.length > 0;
 function readLinks(projectRoot) {
@@ -15996,9 +16043,9 @@ function readLinks(projectRoot) {
   }
 }
 function writeLinks(projectRoot, links) {
-  const dir = join3(ensureAugentaDir(projectRoot), "state");
+  const dir = join4(ensureAugentaDir(projectRoot), "state");
   mkdirSync3(dir, { recursive: true });
-  const path = join3(dir, "links.json");
+  const path = join4(dir, "links.json");
   const tmp = `${path}.${randomUUID2()}.tmp`;
   try {
     writeFileSync3(tmp, JSON.stringify({
@@ -16018,8 +16065,8 @@ function writeLinks(projectRoot, links) {
 
 // capture/project.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync3, realpathSync as realpathSync2 } from "node:fs";
-import { dirname, join as join4, resolve as resolve2 } from "node:path";
+import { existsSync as existsSync4, realpathSync as realpathSync2 } from "node:fs";
+import { dirname as dirname2, join as join5, resolve as resolve3 } from "node:path";
 function gitRevParse(cwd, arg) {
   try {
     const value = execFileSync("git", ["rev-parse", arg], {
@@ -16032,14 +16079,17 @@ function gitRevParse(cwd, arg) {
   }
 }
 function isTrackedByGit(projectRoot, relativePath) {
+  return gitTracks(projectRoot, relativePath) === true;
+}
+function gitTracks(projectRoot, relativePath) {
   try {
     execFileSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
       cwd: projectRoot,
       stdio: "ignore"
     });
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return error.status === 1 ? false : undefined;
   }
 }
 function resolveProjectRoot(cwd) {
@@ -16052,11 +16102,11 @@ function resolveProjectRoot(cwd) {
     return;
   }
   while (true) {
-    if (existsSync3(join4(dir, ".augenta", "config.json")))
+    if (existsSync4(join5(dir, ".augenta", "config.json")))
       return dir;
-    if (existsSync3(join4(dir, ".git")))
+    if (existsSync4(join5(dir, ".git")))
       return;
-    const parent = dirname(dir);
+    const parent = dirname2(dir);
     if (parent === dir)
       return;
     dir = parent;
@@ -16064,7 +16114,7 @@ function resolveProjectRoot(cwd) {
 }
 function resolveProject(args, cwd) {
   if (args.project)
-    return { projectRoot: resolve2(cwd, args.project) };
+    return { projectRoot: resolve3(cwd, args.project) };
   const configured = resolveProjectRoot(cwd);
   if (configured)
     return { projectRoot: configured };
@@ -16137,7 +16187,7 @@ function joinedRoutes(projectRoot, profileId, projectKey, workspaces) {
   return { join: "joined", destinations, joinedAt: links.joinedAt };
 }
 function configPath(projectRoot) {
-  return join5(projectRoot, ".augenta", "config.json");
+  return join6(projectRoot, ".augenta", "config.json");
 }
 function loadProjectConfig(projectRoot) {
   try {
@@ -16175,7 +16225,11 @@ function loadProjectConfig(projectRoot) {
         return;
       const joined = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
       const own = joined.join === "joined" ? storedProfileGateway(profileId) : undefined;
-      const gatewayMismatch = joined.join !== "joined" || own && routesOnlyTo(own, settings) ? undefined : { sendsTo: own ? routeOutside(own, settings) : displayOrigin(gatewayBase(settings)), ...own ? { signedInFor: own } : {} };
+      const gatewayMismatch = joined.join !== "joined" || own && routesOnlyTo(own, settings) ? undefined : {
+        sendsTo: own ? routeOutside(own, settings) : displayOrigin(gatewayBase(settings)),
+        ...own ? { signedInFor: own } : {},
+        cause: own && fileRoutesOnlyTo(own, settings) ? "environment" : "file"
+      };
       const routes = gatewayMismatch ? { join: "gateway" } : joined;
       return {
         ...settings,
@@ -16209,7 +16263,7 @@ function loadProjectConfig(projectRoot) {
         authMode: "api-key",
         ...captureSince ? { captureSince } : {},
         apiKey,
-        ...isTrackedByGit(projectRoot, ".augenta/config.json") ? { keyTracked: true } : {},
+        ...keyTracking(projectRoot),
         projectRoot
       };
     }
@@ -16234,27 +16288,27 @@ function experiencesUrl(cfg) {
 function routesOnlyTo(gateway, cfg) {
   return gatewayBase(cfg) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg), gateway);
 }
-function sameOrigin(a, b) {
-  try {
-    const origin = new URL(a).origin;
-    return origin !== "null" && origin === new URL(b).origin;
-  } catch {
-    return false;
-  }
+function fileRoutesOnlyTo(gateway, cfg) {
+  const base = (cfg.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+  return base === gateway.replace(/\/+$/, "") && sameOrigin(cfg.ingestUrl || `${base}/v1/experiences`, gateway);
 }
 function routeOutside(gateway, cfg) {
   if (routesOnlyTo(gateway, cfg))
     return;
   const base = gatewayBase(cfg);
-  return displayOrigin(base !== gateway.replace(/\/+$/, "") ? base : experiencesUrl(cfg));
+  const elsewhere = base !== gateway.replace(/\/+$/, "") ? base : experiencesUrl(cfg);
+  return sameOrigin(elsewhere, gateway) ? `another path on ${displayOrigin(gateway)}` : displayOrigin(elsewhere);
 }
-function displayOrigin(value) {
-  try {
-    const origin = new URL(value).origin;
-    if (origin !== "null")
-      return origin;
-  } catch {}
-  return "an address that is not a valid Augenta URL";
+function describeGatewayMismatch(mismatch) {
+  return mismatch.signedInFor ? `${mismatch.sendsTo}, not ${displayOrigin(mismatch.signedInFor)}, the gateway this checkout's sign-in was made for` : `${mismatch.sendsTo}, which this checkout's sign-in does not record as its gateway`;
+}
+function keyTracking(projectRoot) {
+  const tracked = gitTracks(projectRoot, ".augenta/config.json");
+  if (tracked === true)
+    return { keyTracked: "tracked" };
+  if (tracked === undefined && insideGitCheckout(projectRoot))
+    return { keyTracked: "unverified" };
+  return {};
 }
 function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
@@ -16279,8 +16333,8 @@ function effectiveCaptureSince(cfg) {
 }
 
 // capture/outbox.ts
-import { join as join6 } from "node:path";
-import { mkdirSync as mkdirSync4, existsSync as existsSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync4, appendFileSync, renameSync as renameSync3, statSync as statSync2, unlinkSync as unlinkSync2 } from "node:fs";
+import { join as join7 } from "node:path";
+import { mkdirSync as mkdirSync4, existsSync as existsSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync4, appendFileSync, renameSync as renameSync3, statSync as statSync2, unlinkSync as unlinkSync2 } from "node:fs";
 var NEWLINE = 10;
 var MAX_SPOOL_BYTES = 50 * 1024 * 1024;
 var MAX_DEST_LAG_BYTES = 16 * 1024 * 1024;
@@ -16312,9 +16366,9 @@ class Outbox {
   maxDestLagBytes;
   constructor(projectRoot, opts = {}) {
     this.projectRoot = projectRoot;
-    this.dir = join6(projectRoot, ".augenta", "outbox");
-    this.spoolPath = join6(this.dir, "spool.jsonl");
-    this.cursorPath = join6(this.dir, "cursor.json");
+    this.dir = join7(projectRoot, ".augenta", "outbox");
+    this.spoolPath = join7(this.dir, "spool.jsonl");
+    this.cursorPath = join7(this.dir, "cursor.json");
     this.maxSpoolBytes = opts.maxSpoolBytes ?? MAX_SPOOL_BYTES;
     this.maxDestLagBytes = opts.maxDestLagBytes ?? MAX_DEST_LAG_BYTES;
   }
@@ -16344,12 +16398,12 @@ class Outbox {
 `);
   }
   dropEpisodePath() {
-    return join6(this.dir, "dropped.json");
+    return join7(this.dir, "dropped.json");
   }
   markDropped() {
     this.ensure();
     const path = this.dropEpisodePath();
-    if (existsSync4(path))
+    if (existsSync5(path))
       return false;
     writeFileSync4(path, JSON.stringify({ since: new Date().toISOString() }));
     return true;
@@ -16360,7 +16414,7 @@ class Outbox {
     } catch {}
   }
   discardNoticePath() {
-    return join6(this.dir, "discarded.json");
+    return join7(this.dir, "discarded.json");
   }
   markDiscarded(entries) {
     if (entries.length === 0)
@@ -16505,7 +16559,7 @@ class Outbox {
   }
   readPending(maxBatch = Infinity, destKey) {
     const shipped = this.shippedOffset(destKey);
-    if (!existsSync4(this.spoolPath))
+    if (!existsSync5(this.spoolPath))
       return { records: [], endOffset: shipped, hasMore: false };
     const buf = readFileSync5(this.spoolPath);
     const start = Math.min(shipped, buf.length);
@@ -16548,7 +16602,7 @@ class Outbox {
     return this.readPending(Infinity, destKey).records.length;
   }
   compact() {
-    if (!existsSync4(this.spoolPath))
+    if (!existsSync5(this.spoolPath))
       return;
     let size;
     try {
@@ -16581,7 +16635,7 @@ var STAGES = ["dispatch", "capture", "delivery"];
 var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
 function read(projectRoot, stage) {
   try {
-    const s = JSON.parse(readFileSync6(join7(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    const s = JSON.parse(readFileSync6(join8(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
     if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
       return;
     return {
@@ -16597,7 +16651,7 @@ function read(projectRoot, stage) {
 }
 function recordHealth(projectRoot, stage, outcome, count = 0) {
   try {
-    const dir = join7(ensureAugentaDir(projectRoot), "state");
+    const dir = join8(ensureAugentaDir(projectRoot), "state");
     mkdirSync5(dir, { recursive: true });
     const old = read(projectRoot, stage);
     const at = new Date().toISOString();
@@ -16609,7 +16663,7 @@ function recordHealth(projectRoot, stage, outcome, count = 0) {
       successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
       ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
     };
-    const file = join7(dir, `health-${stage}.json`);
+    const file = join8(dir, `health-${stage}.json`);
     const tmp = `${file}.${randomUUID3()}.tmp`;
     writeFileSync5(tmp, JSON.stringify(value), { mode: 384 });
     renameSync4(tmp, file);
@@ -16623,15 +16677,15 @@ function captureHealth(projectRoot) {
     configured: !!cfg,
     enabled: gate === "live",
     ...gate ? { gate } : {},
-    configuration: cfg ? "valid" : existsSync5(join7(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    configuration: cfg ? "valid" : existsSync6(join8(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
     activityScope: "project",
     hostDispatch: "unverified",
-    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg ? 1 : 0,
+    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg && !cfg.keyTracked ? 1 : 0,
     pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
     ...activity,
     hostApproval: "unknown",
     ingestion: "unverified",
-    nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in" : gate === "not_adopted" ? "adopt" : gate === "key_tracked" ? "untrack_config" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
+    nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in" : cfg.gatewayMismatch ? cfg.gatewayMismatch.cause === "environment" ? "unset_gateway_override" : "review_config_gateway" : gate === "not_adopted" ? "adopt" : gate === "key_tracked" ? cfg.keyTracked === "tracked" ? "untrack_config" : "make_git_available" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
   };
 }
 
@@ -16639,7 +16693,7 @@ function captureHealth(projectRoot) {
 var PLUGIN_VERSION = "0.12.0";
 
 // capture/ship.ts
-import { join as join8, dirname as dirname2 } from "node:path";
+import { join as join9, dirname as dirname3 } from "node:path";
 import { mkdirSync as mkdirSync6, openSync, writeSync, closeSync, unlinkSync as unlinkSync3, statSync as statSync3, appendFileSync as appendFileSync2 } from "node:fs";
 
 // capture/sanitize.ts
@@ -16832,7 +16886,7 @@ function createPluginTelemetry(options) {
       ])).then(() => {
         return;
       });
-      await Promise.race([work, new Promise((resolve3) => setTimeout(resolve3, timeoutMillis))]);
+      await Promise.race([work, new Promise((resolve4) => setTimeout(resolve4, timeoutMillis))]);
     }
   };
 }
@@ -17037,13 +17091,13 @@ async function postExperiences(url, token, experiences, connectorId, authMode = 
 var PERMANENT_STATUSES = new Set([400, 413, 422]);
 var MAX_REJECTED_BYTES = 10 * 1024 * 1024;
 function rejectedPath(projectRoot) {
-  return join8(projectRoot, ".augenta", "outbox", "rejected.jsonl");
+  return join9(projectRoot, ".augenta", "outbox", "rejected.jsonl");
 }
 function appendRejected(projectRoot, entries) {
   if (entries.length === 0)
     return;
   const path = rejectedPath(projectRoot);
-  mkdirSync6(dirname2(path), { recursive: true });
+  mkdirSync6(dirname3(path), { recursive: true });
   try {
     if (statSync3(path).size >= MAX_REJECTED_BYTES)
       return;
@@ -17223,11 +17277,11 @@ async function drainAll(opts) {
 }
 var STALE_LOCK_MS2 = 60000;
 function lockPath2(projectRoot) {
-  return join8(projectRoot, ".augenta", "outbox", ".lock");
+  return join9(projectRoot, ".augenta", "outbox", ".lock");
 }
 function acquireLock(projectRoot) {
   const lock = lockPath2(projectRoot);
-  mkdirSync6(dirname2(lock), { recursive: true });
+  mkdirSync6(dirname3(lock), { recursive: true });
   try {
     const fd = openSync(lock, "wx");
     writeSync(fd, String(process.pid));

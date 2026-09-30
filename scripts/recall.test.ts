@@ -1318,6 +1318,8 @@ describe("recorded destinations and live recall", () => {
     expect(overridden.environment).toBe("https://other-gateway.example.com");
     expect(overridden).toMatchObject({ status: "not_joined", code: "not_joined" });
     expect(overridden.message).toContain(`go to https://other-gateway.example.com, not ${GATEWAY}, the gateway this checkout's sign-in was made for`);
+    // Only the variable points away, so the remedy is unsetting it.
+    expect(overridden.message).toContain("reconnecting will not change it");
     expect(requests).toEqual([]);
   });
 

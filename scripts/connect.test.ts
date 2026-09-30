@@ -9,7 +9,7 @@
  *
  * Run: bun test scripts/connect.test.ts
  */
-import { test, expect, describe, beforeEach, afterEach, mock } from "bun:test";
+import { test, expect, describe, beforeEach, afterEach, mock, spyOn } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   awaitLogin,
+  connectProject,
   createWorkspaceForSelection,
   connectToWorkspaces,
   connectWithApiKey,
@@ -1070,17 +1071,74 @@ describe("JSON verbs", () => {
     expect(requests.some((request) => request.includes(GATEWAY))).toBe(false);
   });
 
-  test("a gateway override is disclosed on every connect payload", async () => {
+  test("an environment-only gateway override is refused by every browser verb, before any sign-in or token", async () => {
+    // It can come from a committed .claude/settings.json, and --await-login would
+    // send the new token to it at once and bind the sign-in to it.
     await signIn();
-    process.env.AUGENTA_API_URL = `${GATEWAY}/`;
+    process.env.AUGENTA_API_URL = "https://evil.example.com/";
+    route();
+    for (const verb of [{ probe: true }, { login: true }, { awaitLogin: true }, { workspaces: ["ws-default"] }, { createWorkspace: "New" }]) {
+      const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, ...verb });
+      expect(payload).toMatchObject({ status: "error", code: "gateway_override_unconfirmed" });
+      expect(String(payload.message)).toContain("https://evil.example.com");
+    }
+    // Discovery only: no token, no sign-in, nothing to the override.
+    expect(requests.filter((request) => !request.includes("/.well-known/"))).toEqual([]);
+    // Equal to discovery, it is not an override at all.
+    process.env.AUGENTA_API_URL = GATEWAY;
+    expect((await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true })).status).toBe("need_workspace");
+  });
+
+  test("this run's --endpoint is disclosed on every connect payload", async () => {
+    await signIn();
     route({ [`GET ${CONTROL}/.well-known/augenta.json`]: () =>
       Response.json({ issuer: ISSUER, clientId: "client_public", gateway: "https://discovered.example.com" }) });
-    const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true });
+    const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, endpoint: `${GATEWAY}/`, probe: true });
     expect(payload).toMatchObject({ status: "need_workspace", gatewayOverride: GATEWAY });
-    expect((await runJsonVerb({ projectRoot: project }, { ...baseArgs, endpoint: GATEWAY, probe: true })).gatewayOverride).toBe(GATEWAY);
-    delete process.env.AUGENTA_API_URL;
     route();
     expect(await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true })).not.toHaveProperty("gatewayOverride");
+  });
+
+  test("the terminal flow states a gateway override and a non-production environment before it signs in", async () => {
+    // Signing in sends the new token to the gateway at once, so both are said
+    // while declining still sends nothing. No stored sign-in fits, so connect
+    // goes straight to the device sign-in, which fails here at the issuer.
+    route({ [`GET ${CONTROL}/.well-known/augenta.json`]: () =>
+      Response.json({ issuer: ISSUER, clientId: "client_public", gateway: "https://discovered.example.com" }) });
+    const lines: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((...parts: unknown[]) => {
+      lines.push(parts.join(" "));
+      // What had been requested when each line was printed.
+      lines.push(`requests so far: ${requests.filter((request) => !request.includes("/.well-known/")).length}`);
+    });
+    try {
+      await expect(connectProject(project, { controlUrl: CONTROL, endpoint: GATEWAY })).rejects.toThrow();
+    } finally {
+      log.mockRestore();
+    }
+    const override = lines.findIndex((line) => line.includes(`uses the gateway ${GATEWAY} instead of https://discovered.example.com`));
+    const environment = lines.findIndex((line) => line.includes(`${CONTROL} environment, not production`));
+    expect(override).toBeGreaterThan(-1);
+    expect(environment).toBeGreaterThan(-1);
+    expect(lines[override + 1]).toBe("requests so far: 0");
+    expect(lines[environment + 1]).toBe("requests so far: 0");
+    // And nothing ever reached the gateway without a sign-in.
+    expect(requests.some((request) => request.includes(GATEWAY))).toBe(false);
+  });
+
+  test("an --endpoint connection keeps its config out of git, and is refused for a config git tracks", async () => {
+    await signIn();
+    route({ [`GET ${CONTROL}/.well-known/augenta.json`]: () =>
+      Response.json({ issuer: ISSUER, clientId: "client_public", gateway: "https://discovered.example.com" }) });
+    const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, endpoint: GATEWAY, workspaces: ["ws-default"] });
+    expect(payload.status).toBe("connected");
+    expect(readFileSync(join(project, ".augenta", ".gitignore"), "utf8")).toBe("*\n");
+    execFileSync("git", ["init", "-q"], { cwd: project });
+    execFileSync("git", ["add", "-f", ".augenta/config.json"], { cwd: project });
+    requests.length = 0;
+    const tracked = await runJsonVerb({ projectRoot: project }, { ...baseArgs, endpoint: GATEWAY, probe: true });
+    expect(tracked).toMatchObject({ status: "error", code: "override_config_tracked" });
+    expect(requests.filter((request) => !request.includes("/.well-known/"))).toEqual([]);
   });
 
   test("reconnect refreshes an automatically recorded gateway in the same environment", async () => {
@@ -1149,23 +1207,24 @@ describe("JSON verbs", () => {
     expect(readFileSync(path, "utf8")).toBe(saved);
   });
 
-  for (const override of ["flag", "env"] as const) {
-    test(`an explicit gateway ${override} still wins during an environment switch`, async () => {
-      await signIn();
-      writeOAuthConfig(project, {
-        ...connectionRecord("saved", ["connector_new"], "https://old-gateway.example.com"),
-        controlUrl: "https://old-control.example.com",
-      });
-      process.env.AUGENTA_API_URL = override === "env" ? GATEWAY : "https://ignored.example.com";
-      route({ [`GET ${CONTROL}/.well-known/augenta.json`]: () =>
-        Response.json({ issuer: ISSUER, clientId: "client_public", gateway: "https://discovered.example.com" }) });
-      const payload = await runJsonVerb({ projectRoot: project }, {
-        ...baseArgs, probe: true, ...(override === "flag" ? { endpoint: GATEWAY } : {}),
-      });
-      expect(payload.status).toBe("need_workspace");
-      expect(requests).toContain(`GET ${GATEWAY}/v1/me`);
+  test("an explicit --endpoint still wins during an environment switch; the variable alone is refused", async () => {
+    await signIn();
+    writeOAuthConfig(project, {
+      ...connectionRecord("saved", ["connector_new"], "https://old-gateway.example.com"),
+      controlUrl: "https://old-control.example.com",
     });
-  }
+    process.env.AUGENTA_API_URL = "https://ignored.example.com";
+    route({ [`GET ${CONTROL}/.well-known/augenta.json`]: () =>
+      Response.json({ issuer: ISSUER, clientId: "client_public", gateway: "https://discovered.example.com" }) });
+    const flag = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true, endpoint: GATEWAY });
+    expect(flag.status).toBe("need_workspace");
+    expect(requests).toContain(`GET ${GATEWAY}/v1/me`);
+    requests.length = 0;
+    process.env.AUGENTA_API_URL = GATEWAY;
+    const env = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true });
+    expect(env).toMatchObject({ status: "error", code: "gateway_override_unconfirmed" });
+    expect(requests.some((request) => request.includes(GATEWAY))).toBe(false);
+  });
 
   test("reconnect keeps a hand-set ingest path only on the gateway's origin", async () => {
     const { profileId } = await signIn();

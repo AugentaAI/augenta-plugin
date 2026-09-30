@@ -90,23 +90,32 @@ Connect records the control URL and gateway used for this connection. Reconnecti
 defaults to the recorded environment. Normal browser setup writes the needed values.
 
 Changing connect's control URL selects the new environment's discovered gateway,
-not the previous environment's saved endpoint. An explicit `--endpoint` or
-`AUGENTA_API_URL` still takes precedence.
+not the previous environment's saved endpoint. An explicit `--endpoint` still
+takes precedence.
 
 For a browser connection, connect takes the gateway from the environment's
-sign-in discovery every time, or from an explicit `--endpoint` or
-`AUGENTA_API_URL` given when connecting, which it tells you about before you
-choose Workspaces. It never takes the gateway from `config.json`, because that
-file can be committed. Connect records a discovered gateway as both `endpoint`
-and `discoveredGateway`; the marker is bookkeeping, not another routing setting.
+sign-in discovery every time, or from an explicit `--endpoint` you pass when
+connecting, which it tells you about before you sign in. It never takes the
+gateway from `config.json` or from `AUGENTA_API_URL` alone, because a commit can
+set both (the variable through a committed `.claude/settings.json`) and signing
+in sends your new sign-in to that gateway straight away. When `AUGENTA_API_URL`
+names a different gateway, connect stops and says so, with nothing sent. A
+connection made with `--endpoint` keeps its `config.json` out of git, because
+your teammates' sign-ins are for the environment's own gateway. Connect records
+a discovered gateway as both `endpoint` and `discoveredGateway`; the marker is
+bookkeeping, not another routing setting.
+
+Connect names a non-production environment before you sign in, too: the sign-in
+link belongs to that environment.
 
 Your sign-in is only ever sent to the gateway it was made for. If
 `config.json`, `AUGENTA_API_URL` or `AUGENTA_INGEST_URL` points a browser
 connection anywhere else — a hand edit, a pulled commit, or a variable set by a
 committed `.claude/settings.json` — capture and recall stop in that checkout and
-the next session says where the config points. If you did not make that change,
-look at the file's history before reconnecting. Connecting again restores the
-environment's own gateway.
+the next session says where it points, and whether the file or a variable is the
+cause. If you did not make that change, look at its history first. When the file
+changed, connecting again restores the environment's own gateway; when a
+variable is the cause, unsetting it is the fix.
 
 | Setting in `config.json` | Environment override | What it selects |
 | --- | --- | --- |

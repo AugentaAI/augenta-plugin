@@ -173,7 +173,9 @@ back to the main checkout or sibling worktrees. An unconnected worktree returns
   Workspaces and asks whether to use them, and stop. When `message` says the
   requests would go somewhere other than the sign-in's gateway, report it as
   written: nothing was sent there, and if nobody expected that change the
-  config's history is worth checking before reconnecting.
+  config's history is worth checking before reconnecting. When it names
+  `AUGENTA_API_URL` or `AUGENTA_INGEST_URL`, unsetting the variable is the fix;
+  reconnecting is not.
 - **`recall_unavailable`** — recall is not available in this Augenta
   environment. Say so plainly and stop; there is nothing to retry and nothing
   the user can configure.
