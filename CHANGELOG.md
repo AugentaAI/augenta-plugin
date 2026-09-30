@@ -12,6 +12,23 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.12.2] — 2026-09-30
+
+No reconnect is required.
+
+### Fixed
+
+- **Blocked networks give an actionable next step.** Connect names the hosts
+  it needs and explains what to ask your administrator to allow, including
+  Cowork's network-egress setting and the need to start a new task afterwards.
+  This applies to probing, starting sign-in and waiting for sign-in.
+- **Scratch sessions stop before sign-in or Workspace creation.** An ephemeral
+  session outside a Git checkout now refuses every connection step, including
+  the interactive flow. Use a local Cowork task with the project attached.
+- **Cowork desktop's plugin cache can be located.** When the harness supplies
+  no skill directory, connect also checks the observed account-scoped RPM layout,
+  verifies the plugin identity/version, and stops if the install is ambiguous.
+
 ## [0.12.1] — 2026-09-30
 
 No reconnect is required, except for the one case in the first item.
@@ -518,6 +535,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.12.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.2...v0.11.0

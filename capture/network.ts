@@ -70,6 +70,18 @@ export interface HostCheck {
   reason?: string;
 }
 
+export function blockedNetworkMessage(hosts: HostCheck[]): string {
+  const blocked = hosts.filter(host => !host.ok);
+  const needed = hosts.map(host => host.host).join(", ");
+  return `this network does not let connect reach ${blocked.map(host => `${host.host} (${host.reason})`).join(", ")}; ` +
+    `connect needs ${needed}. Allow these hosts in this environment's network settings, or ask your administrator to allow them. ` +
+    "In Cowork, the setting is Organization settings → Capabilities → Code execution → Allow network egress " +
+    "(also called Admin settings → Capabilities → Network egress). Start a new task after the setting changes; existing tasks keep their original settings." +
+    (blocked.some(host => host.reason?.includes("TLS"))
+      ? " If your network intercepts TLS, ask your administrator to supply its trusted proxy CA for Node."
+      : "");
+}
+
 /** The production hosts, used only when discovery itself cannot be reached. */
 const PRODUCTION = { control: "https://augenta.ai", issuer: "https://auth.augenta.ai", gateway: "https://api.augenta.ai" };
 

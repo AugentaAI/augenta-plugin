@@ -130,6 +130,11 @@ function classifyNetworkError(error) {
   }
   return;
 }
+function blockedNetworkMessage(hosts) {
+  const blocked = hosts.filter((host) => !host.ok);
+  const needed = hosts.map((host) => host.host).join(", ");
+  return `this network does not let connect reach ${blocked.map((host) => `${host.host} (${host.reason})`).join(", ")}; ` + `connect needs ${needed}. Allow these hosts in this environment's network settings, or ask your administrator to allow them. ` + "In Cowork, the setting is Organization settings → Capabilities → Code execution → Allow network egress " + "(also called Admin settings → Capabilities → Network egress). Start a new task after the setting changes; existing tasks keep their original settings." + (blocked.some((host) => host.reason?.includes("TLS")) ? " If your network intercepts TLS, ask your administrator to supply its trusted proxy CA for Node." : "");
+}
 var PRODUCTION = { control: "https://augenta.ai", issuer: "https://auth.augenta.ai", gateway: "https://api.augenta.ai" };
 async function check(fetcher, url, timeoutMs, isAugenta) {
   const host = new URL(url).host;

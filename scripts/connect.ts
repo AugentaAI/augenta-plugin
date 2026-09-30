@@ -31,7 +31,7 @@ import { ensureAugentaDir, setAugentaIgnore } from "../capture/augenta-dir";
 import { readLinks, writeLinks } from "../capture/links";
 import { displayOrigin, sameOrigin } from "../capture/url";
 import { ephemeralProject, sessionEnvironment } from "../capture/environment";
-import { classifyNetworkError, diagnoseHosts } from "../capture/network";
+import { blockedNetworkMessage, classifyNetworkError, diagnoseHosts } from "../capture/network";
 import {
   DEFAULT_CONTROL_URL,
   DEFAULT_GATEWAY,
@@ -1286,10 +1286,18 @@ async function linkWorkspaces(
   return results;
 }
 
+function ephemeralProjectMessage(projectRoot: string): string {
+  const session = sessionEnvironment();
+  return `this session's machine is discarded when the session ends (${session.signals.join(", ")}), and ` +
+    `${projectRoot} is not inside a Git checkout, so a connection written here could not outlast it; ` +
+    "connect from a local session instead (in Cowork, a local session with the project folder attached)";
+}
+
 export async function connectProject(
   projectRoot: string,
   args: Args,
 ): Promise<void> {
+  if (ephemeralProject(projectRoot)) throw new Error(ephemeralProjectMessage(projectRoot));
   const { oauth, gateway, control, discovered, discoveredGateway } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
   const environment = environmentLabel(control);
@@ -1939,9 +1947,7 @@ export async function runJsonVerb(
           status: "error",
           code: "network_blocked",
           hosts,
-          message:
-            `this network does not let connect reach ${blocked.map((host) => `${host.host} (${host.reason})`).join(", ")}; ` +
-            `connect needs ${hosts.map((host) => host.host).join(", ")}, so allow them in this environment's network settings`,
+          message: blockedNetworkMessage(hosts),
           ...metadata,
           ...disclosures,
         };
@@ -2231,16 +2237,13 @@ async function dispatchJsonVerb(
   // A throwaway machine with no checkout to carry the config: refuse before any
   // sign-in starts or any link is made, rather than write a config no later
   // session will ever read (and leave Connectors behind for it).
-  if ((args.probe || args.workspaces?.length || args.adopt) && ephemeralProject(resolved.projectRoot)) {
+  if ((args.probe || args.login || args.awaitLogin || args.createWorkspace !== undefined || args.workspaces?.length || args.adopt) && ephemeralProject(resolved.projectRoot)) {
     const session = sessionEnvironment();
     return {
       status: "error",
       code: "ephemeral_project",
       session,
-      message:
-        `this session's machine is discarded when the session ends (${session.signals.join(", ")}), and ` +
-        `${resolved.projectRoot} is not inside a Git checkout, so a connection written here could not outlast it; ` +
-        "connect from a local session instead (in Cowork, a local session with the project folder attached)",
+      message: ephemeralProjectMessage(resolved.projectRoot),
     };
   }
   // Joining uses the recorded connection exactly as it is, so nothing that

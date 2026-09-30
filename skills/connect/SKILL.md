@@ -41,8 +41,15 @@ Only if your harness did not give you this file's directory, find the install:
 
 ```bash
 ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/augenta/*/dist/scripts/connect.mjs \
-      "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/augenta/*/dist/scripts/connect.mjs 2>/dev/null
+      "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/augenta/*/dist/scripts/connect.mjs \
+      "$HOME/Library/Application Support/Claude/local-agent-mode-sessions/"*/*/rpm/plugin_*/dist/scripts/connect.mjs 2>/dev/null
 ```
+
+The last layout is Cowork desktop's account-scoped plugin cache. For an RPM
+candidate, read `../../.claude-plugin/plugin.json` from the script's directory and use it only when its
+name is `augenta` and its version matches the skill being followed. If more
+than one matching install remains, stop and report the ambiguity. A cache path
+does not establish that the project and plugin share a runtime.
 
 If neither finds the script, do not keep searching other machines or shells. In a
 cloud session whose shell reaches the user's folder through a separate device
@@ -103,6 +110,12 @@ not `prod`, say so before any sign-in** (step 2), and again in the question and
 the confirmation: the sign-in link belongs to that environment, and signing in
 sends the new sign-in to it at once. Connecting a project to a dev or staging
 Workspace by accident is silent otherwise.
+
+For `network_blocked`, show the script's message and host checks, including
+what to ask the administrator to allow. Cowork's egress settings apply to new
+tasks: tell the user to create a new task after their administrator changes the
+setting. Stop this connection attempt; searching another install does not fix
+a blocked network.
 
 When `environmentChange` is present, say the project is moving from `from` to
 `to` before any sign-in, before the destination question and in the

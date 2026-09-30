@@ -2466,7 +2466,7 @@ describe("JSON verbs", () => {
     }
   });
 
-  test("a network that blocks Augenta is named host by host, before anything is asked", async () => {
+  test.each([{ probe: true }, { login: true }, { awaitLogin: true }])("a network that blocks Augenta is named host by host for %j", async verb => {
     // The first request of every verb is discovery; a refused tunnel there used
     // to reach the user as "cannot reach Augenta: Request was cancelled."
     globalThis.fetch = (async (url: string | URL | Request) => {
@@ -2477,13 +2477,16 @@ describe("JSON verbs", () => {
         }), { code: 0 }),
       });
     }) as unknown as typeof fetch;
-    const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true });
+    const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, ...verb });
     expect(payload).toMatchObject({
       status: "error",
       code: "network_blocked",
       hosts: [{ host: "control.example.com", ok: false, reason: "a proxy refused it (403)" }],
     });
     expect(String(payload.message)).toContain("this network does not let connect reach control.example.com");
+    expect(String(payload.message)).toContain("ask your administrator");
+    expect(String(payload.message)).toContain("Allow network egress");
+    expect(String(payload.message)).toContain("Start a new task");
     expect(() => statSync(join(project, ".augenta"))).toThrow();
   });
 
@@ -2504,10 +2507,12 @@ describe("JSON verbs", () => {
   test("a throwaway session outside any checkout is refused before anything is asked or sent", async () => {
     process.env.AUGENTA_EPHEMERAL = "1";
     route();
-    for (const extra of [{ probe: true }, { workspaces: ["ws-default"] }, { adopt: true }]) {
+    for (const extra of [{ probe: true }, { login: true }, { awaitLogin: true }, { createWorkspace: "Scratch" }, { workspaces: ["ws-default"] }, { adopt: true }]) {
       expect(await runJsonVerb({ projectRoot: project }, { ...baseArgs, ...extra }))
         .toMatchObject({ status: "error", code: "ephemeral_project", session: { ephemeral: true, kind: "declared" } });
     }
+    expect(requests).toEqual([]);
+    await expect(connectProject(project, { controlUrl: CONTROL })).rejects.toThrow("connect from a local session");
     expect(requests).toEqual([]);
     expect(() => statSync(join(project, ".augenta"))).toThrow();
 
