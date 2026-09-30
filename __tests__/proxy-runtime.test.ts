@@ -7,8 +7,10 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Outbox } from "../capture/outbox";
+import { nodeHonorsEnvProxy } from "../runtime/node";
 
 const ROOT = resolve(import.meta.dir, "..");
+const PROXY_CAPABLE = nodeHonorsEnvProxy(execFileSync("node", ["-p", "process.versions.node"], { encoding: "utf8" }).trim());
 
 async function listen(server: Server): Promise<number> {
   await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
@@ -36,7 +38,7 @@ async function run(home: string, bundle: string, args: string[], extra: Record<s
 }
 
 describe("shipped Node network behavior", () => {
-  test.each(["--probe", "--login", "--await-login"])("%s reports a denying CONNECT proxy safely", async verb => {
+  test.skipIf(!PROXY_CAPABLE).each(["--probe", "--login", "--await-login"])("%s reports a denying CONNECT proxy safely", async verb => {
     const home = mkdtempSync(join(tmpdir(), "aug-deny-"));
     const seen: string[] = [];
     const proxy = createServer((_req, res) => { res.writeHead(403); res.end(); });
@@ -60,7 +62,8 @@ describe("shipped Node network behavior", () => {
     } finally { proxy.closeAllConnections(); proxy.close(); rmSync(home, { recursive: true, force: true }); }
   });
 
-  test.each(["direct", "tunnel", "intercept", "no_proxy"])("connect, ship and recall work over %s", async mode => {
+  for (const mode of ["direct", "tunnel", "intercept", "no_proxy"]) {
+  test.skipIf(!PROXY_CAPABLE && mode !== "direct")(`connect, ship and recall work over ${mode}`, async () => {
     const home = mkdtempSync(join(tmpdir(), "aug-network-"));
     const keyPath = join(home, "key.pem");
     const certPath = join(home, "cert.pem");
@@ -143,4 +146,5 @@ describe("shipped Node network behavior", () => {
       rmSync(home, { recursive: true, force: true });
     }
   }, 30_000);
+  }
 });

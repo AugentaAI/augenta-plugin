@@ -25,6 +25,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  proxy-runtime:
+    name: Node 22.21 proxy runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.21.1"
+      - run: bun install --frozen-lockfile
+      - run: bun test __tests__/proxy-runtime.test.ts
+
   plugin:
     name: typecheck + test
     runs-on: ubuntu-latest
