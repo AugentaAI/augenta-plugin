@@ -675,6 +675,18 @@ export function aggregateStatus(payload: {
  * The marker vouches only for a config recorded against production: a dev
  * config under a production `AUGENTA_CONTROL_URL` still posts to dev's gateway,
  * and a gateway override differs from the marker, so both are still named.
+ *
+ * The marker is TRUSTED, NOT VERIFIED, and only a config connect wrote is
+ * bounded by the paragraph above. Both comparands come from the same file, so a
+ * hand-written or committed `config.json` that names the same arbitrary host as
+ * `endpoint` and `discoveredGateway` under a production `controlUrl` reports
+ * `prod` for a gateway that is not production's. A committed config reaches
+ * checkouts whose users never wrote it, and this label is the only gateway-aware
+ * signal they get. The comparand that would not let a config vouch for itself is
+ * the gateway recorded for the signed-in profile in the owner-only
+ * `~/.augenta/auth.json`; checking the config's `endpoint` against it belongs
+ * with the wider check of that endpoint before the token is sent, which is not
+ * in this release.
  */
 export function recallEnvironment(gateway: string, cfg?: ProjectConfig): string {
   const label = environmentLabel(controlUrl(cfg));

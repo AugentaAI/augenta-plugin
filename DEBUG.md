@@ -59,7 +59,12 @@ why `recallEnvironment` in `capture/recall-client.ts` consults BOTH coordinates 
 control URL alone would report `prod` about a question going to dev. Under a
 production control URL, the gateway counts as production when it is the one
 production's discovery named (`discoveredGateway`, trusted only in a config
-recorded against production) or the built-in default; any other gateway is named.
+recorded against production) or the built-in default; any other gateway a connect-written
+config names is named. That marker is trusted, not verified — both values come from
+the same file, so a hand-edited config naming one arbitrary host as both `endpoint`
+and `discoveredGateway` reports `prod`. Verifying it against the gateway recorded
+for the signed-in profile in `~/.augenta/auth.json` goes with checking the config's
+endpoint against that sign-in before the token is sent.
 
 **Neither skill has an environment flag, on purpose.** `SKILL.md` stays
 environment-agnostic and the variable does the work, for two reasons. A user
