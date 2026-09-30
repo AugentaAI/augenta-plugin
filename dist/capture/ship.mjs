@@ -15872,6 +15872,10 @@ function storedProfileUserId(profileId) {
   const userId = storedProfile(profileId)?.userId;
   return typeof userId === "string" && userId ? userId : undefined;
 }
+function storedProfileGateway(profileId) {
+  const gateway = storedProfile(profileId)?.gateway;
+  return typeof gateway === "string" && gateway.trim() ? gateway.trim().replace(/\/+$/, "") : undefined;
+}
 function storedProfile(profileId) {
   try {
     const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
@@ -15882,7 +15886,23 @@ function storedProfile(profileId) {
     return;
   }
 }
+function assertSignInTarget(profileId, url) {
+  const own = storedProfileGateway(profileId);
+  const origin = (value) => {
+    try {
+      const parsed = new URL(value).origin;
+      return parsed === "null" ? undefined : parsed;
+    } catch {
+      return;
+    }
+  };
+  const target = origin(url);
+  if (!own || !target || target !== origin(own)) {
+    throw new Error(`refusing to send this Augenta sign-in to ${target ?? "an address that is not a valid URL"}: it was made for ${own ?? "a gateway this machine does not record"}`);
+  }
+}
 async function fetchWithProfile(profileId, url, init = {}) {
+  assertSignInTarget(profileId, url);
   const send = async (forceRefresh) => {
     const accessToken = await accessTokenForProfile(profileId, forceRefresh);
     return fetch(url, {
@@ -16153,7 +16173,10 @@ function loadProjectConfig(projectRoot) {
       const workspaces = parseWorkspaces(value.workspaces);
       if (!profileId || !projectKey || !workspaces)
         return;
-      const routes = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      const joined = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      const own = joined.join === "joined" ? storedProfileGateway(profileId) : undefined;
+      const gatewayMismatch = joined.join !== "joined" || own && routesOnlyTo(own, settings) ? undefined : { sendsTo: own ? routeOutside(own, settings) : displayOrigin(gatewayBase(settings)), ...own ? { signedInFor: own } : {} };
+      const routes = gatewayMismatch ? { join: "gateway" } : joined;
       return {
         ...settings,
         authMode: "oauth",
@@ -16161,6 +16184,7 @@ function loadProjectConfig(projectRoot) {
         projectKey,
         workspaces,
         join: routes.join,
+        ...gatewayMismatch ? { gatewayMismatch } : {},
         ...routes.destinations ? {
           destinations: routes.destinations,
           connectorIds: routes.destinations.map((destination) => destination.connectorId),
@@ -16185,6 +16209,7 @@ function loadProjectConfig(projectRoot) {
         authMode: "api-key",
         ...captureSince ? { captureSince } : {},
         apiKey,
+        ...isTrackedByGit(projectRoot, ".augenta/config.json") ? { keyTracked: true } : {},
         projectRoot
       };
     }
@@ -16206,6 +16231,31 @@ function gatewayBase(cfg, flag) {
 function experiencesUrl(cfg) {
   return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
 }
+function routesOnlyTo(gateway, cfg) {
+  return gatewayBase(cfg) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg), gateway);
+}
+function sameOrigin(a, b) {
+  try {
+    const origin = new URL(a).origin;
+    return origin !== "null" && origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+function routeOutside(gateway, cfg) {
+  if (routesOnlyTo(gateway, cfg))
+    return;
+  const base = gatewayBase(cfg);
+  return displayOrigin(base !== gateway.replace(/\/+$/, "") ? base : experiencesUrl(cfg));
+}
+function displayOrigin(value) {
+  try {
+    const origin = new URL(value).origin;
+    if (origin !== "null")
+      return origin;
+  } catch {}
+  return "an address that is not a valid Augenta URL";
+}
 function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
   return value === "0" || value === "false";
@@ -16214,7 +16264,7 @@ function captureGate(cfg) {
   if (captureKilled())
     return "killed";
   if (cfg.authMode !== "oauth")
-    return cfg.apiKey ? "live" : "signed_out";
+    return !cfg.apiKey ? "signed_out" : cfg.keyTracked ? "key_tracked" : "live";
   if (!cfg.profileId || !hasStoredProfile(cfg.profileId))
     return "signed_out";
   if (!cfg.connectorIds?.length)
@@ -16586,7 +16636,7 @@ function captureHealth(projectRoot) {
 }
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.11.1";
+var PLUGIN_VERSION = "0.12.0";
 
 // capture/ship.ts
 import { join as join8, dirname as dirname2 } from "node:path";
@@ -17205,6 +17255,10 @@ if (isMain(import.meta.url)) {
   if (cfg && live && acquireLock(cfg.projectRoot)) {
     let telemetry;
     try {
+      if (cfg.authMode === "oauth") {
+        assertSignInTarget(cfg.profileId, experiencesUrl(cfg));
+        assertSignInTarget(cfg.profileId, gatewayBase(cfg));
+      }
       let token = cfg.authMode === "oauth" ? await accessTokenForProfile(cfg.profileId) : cfg.apiKey;
       try {
         telemetry = createPluginTelemetry({

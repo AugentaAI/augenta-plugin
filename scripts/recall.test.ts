@@ -1310,11 +1310,37 @@ describe("recorded destinations and live recall", () => {
     process.env.AUGENTA_CONTROL_URL = "https://override.example.com";
     expect((await runRecall({ projectRoot: project }, args())).environment).toBe("https://override.example.com");
     process.env.AUGENTA_CONTROL_URL = "https://augenta.ai";
+    // Not a lever that moves the token: the sign-in was made for GATEWAY, so a
+    // gateway override leaves this checkout unjoined and sends nothing at all.
     process.env.AUGENTA_API_URL = "https://other-gateway.example.com";
-    route({ ["GET https://other-gateway.example.com/v1/connectors/connector_a"]: () => typedError(404, "not_found", "wrong environment") });
+    requests = [];
     const overridden = await runRecall({ projectRoot: project }, args());
     expect(overridden.environment).toBe("https://other-gateway.example.com");
-    expect(overridden.unresolvedConnectorIds).toEqual(["connector_a"]);
+    expect(overridden).toMatchObject({ status: "not_joined", code: "not_joined" });
+    expect(overridden.message).toContain(`go to https://other-gateway.example.com, not ${GATEWAY}, the gateway this checkout's sign-in was made for`);
+    expect(requests).toEqual([]);
+  });
+
+  test("a config that points away from the sign-in's gateway sends neither the question nor the token", async () => {
+    // A pulled commit rewrote the endpoint and vouches for it with the marker.
+    await configure(["connector_a"], { endpoint: "https://evil.example.com", discoveredGateway: "https://evil.example.com" });
+    route();
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload).toMatchObject({ status: "not_joined" });
+    expect(payload.message).toContain("https://evil.example.com");
+    // The marker vouches for a gateway the sign-in check refused: not prod.
+    expect(payload.environment).toBe("https://evil.example.com");
+    expect(requests).toEqual([]);
+  });
+
+  test("a capture URL on another origin is refused the same way", async () => {
+    await configure(["connector_a"], { ingestUrl: "https://evil.example.com/v1/experiences" });
+    route();
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload).toMatchObject({ status: "not_joined" });
+    // Named by origin only: the rest is text a commit chose.
+    expect(payload.message).toContain("go to https://evil.example.com, not");
+    expect(requests).toEqual([]);
   });
 
   test("a project connected to production reports prod", async () => {
@@ -1328,6 +1354,19 @@ describe("recorded destinations and live recall", () => {
 });
 
 describe("platform-key projects", () => {
+  test("a key config git tracks sends nothing", async () => {
+    // `git add -f` defeats the writer's refusal; a pulled key would otherwise ask
+    // its owner's Workspace on behalf of everyone who pulls it.
+    writeConfig({ authMode: "api-key", apiKey: "sk-aug-live.secret", endpoint: GATEWAY });
+    spawnSync("git", ["init", "-q"], { cwd: project });
+    spawnSync("git", ["add", "-f", ".augenta/config.json"], { cwd: project });
+    route();
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload).toMatchObject({ status: "error", code: "key_tracked" });
+    expect(JSON.stringify(payload)).not.toContain("sk-aug-live");
+    expect(requests).toEqual([]);
+  });
+
   test("send the key, no Workspace, and no bearer", async () => {
     // The key's Connector assignment IS the route, exactly as the shipper treats
     // it — so the body is the question alone.

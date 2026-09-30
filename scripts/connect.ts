@@ -38,6 +38,8 @@ import {
   controlUrl,
   gatewayBase,
   loadProjectConfig,
+  routeOutside,
+  sameOrigin,
   type Destination,
   type Organization,
   type ProjectConfig,
@@ -80,6 +82,7 @@ import {
   reusableProfiles,
   savePendingLogin,
   saveDeviceProfile,
+  storedProfileGateway,
   storedProfileUserId,
   type OAuthConfig,
 } from "../capture/auth";
@@ -920,19 +923,33 @@ async function linkForWorkspace(
   return { connector, action: "created" };
 }
 
+/**
+ * The environment and gateway this run connects with. The gateway is the one the
+ * environment's discovery names, unless this run's `--endpoint` or
+ * `AUGENTA_API_URL` says otherwise — never the config file's `endpoint`. The
+ * file can arrive in a commit, and reading a gateway from it would let whoever
+ * wrote it choose where this person signs in to and sends their token; an
+ * override that is not discovery's is stated before the user answers
+ * ({@link gatewayOverride}). `discovered` is what discovery named, for that
+ * statement; `discoveredGateway` is set only when nothing overrode it.
+ */
 async function resolveOAuth(
   args: Args,
   projectRoot = args.project ?? process.cwd(),
-): Promise<{ oauth: OAuthConfig; gateway: string; control: string; discoveredGateway?: string }> {
+): Promise<{ oauth: OAuthConfig; gateway: string; control: string; discovered: string; discoveredGateway?: string }> {
   const prior = loadProjectConfig(projectRoot);
   const control = controlUrl(prior, args.controlUrl);
   const discovered = await augentaOAuthConfig(control);
-  const savedEndpoint = control === (prior?.controlUrl ?? DEFAULT_CONTROL_URL) && prior?.endpoint !== prior?.discoveredGateway
-    ? prior?.endpoint : undefined;
-  const gateway = gatewayBase({ endpoint: savedEndpoint || discovered.gateway }, args.endpoint);
-  const discoveredGateway = args.endpoint?.trim() || process.env.AUGENTA_API_URL?.trim() || savedEndpoint
-    ? undefined : discovered.gateway;
-  return { oauth: { ...discovered, gateway }, gateway, control, discoveredGateway };
+  const gateway = gatewayBase({ endpoint: discovered.gateway }, args.endpoint);
+  const discoveredGateway = gatewayOverride(args) ? undefined : discovered.gateway;
+  return { oauth: { ...discovered, gateway }, gateway, control, discovered: discovered.gateway, discoveredGateway };
+}
+
+/** This run's explicit gateway override, when there is one. Written without the
+ *  `discoveredGateway` marker even when it equals discovery (DEBUG.md). */
+function gatewayOverride(args: Args): string | undefined {
+  const override = args.endpoint?.trim() || process.env.AUGENTA_API_URL?.trim();
+  return override ? override.replace(/\/+$/, "") : undefined;
 }
 
 /**
@@ -1102,7 +1119,10 @@ async function establishConnectors(
     // The answer given now, else the project's previous explicit answer. A
     // config that never recorded one gets the question's default, off.
     autoRecall: args.autoRecall ?? previous?.autoRecall ?? false,
-    ingestUrl: previous?.ingestUrl,
+    // A hand-set capture path is kept only on this gateway's own origin: the
+    // previous file may be a pulled commit, and capture carries the token.
+    // Compared as written: the environment's own override is not what is kept.
+    ingestUrl: previous?.ingestUrl && sameOrigin(previous.ingestUrl, gateway) ? previous.ingestUrl : undefined,
   });
   // Stamp the outbox's destination map here, while we still know which links
   // are new to this checkout. A newly added Workspace must not inherit the
@@ -1180,7 +1200,7 @@ export async function connectProject(
   projectRoot: string,
   args: Args,
 ): Promise<void> {
-  const { oauth, gateway, control, discoveredGateway } = await resolveOAuth(args, projectRoot);
+  const { oauth, gateway, control, discovered, discoveredGateway } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
   const selected = await selectOrCreateProfile(oauth, prior?.profileId);
   console.log(
@@ -1204,6 +1224,11 @@ export async function connectProject(
   );
   if (environment !== "prod") {
     console.log(`This is the ${environment} environment, not production.`);
+  }
+  // Like a non-production environment, a gateway override is stated before the
+  // answer: it is where this sign-in and everything captured are sent.
+  if (gateway !== discovered) {
+    console.log(`This connection uses the gateway ${gateway} instead of ${discovered}, the one this environment's sign-in names.`);
   }
   if (prior?.controlUrl && prior.controlUrl !== control) {
     console.log(`This project is moving from ${environmentLabel(prior.controlUrl)} to ${environment}.`);
@@ -1782,6 +1807,9 @@ export async function runJsonVerb(
   const metadata = {
     environment: environmentLabel(args.repairHarness ? cfg?.controlUrl : controlUrl(cfg, args.controlUrl)),
     ...(args.repairHarness ? {} : environmentChange(cfg, args)),
+    // Stated before the answer like a non-production environment: this run
+    // signs in for, and sends to, that gateway instead of discovery's.
+    ...(!args.repairHarness && gatewayOverride(args) ? { gatewayOverride: gatewayOverride(args) } : {}),
     ...(args.probe && cfg ? { current: savedConnection(cfg) } : {}),
     // Always on a probe: a sign-in made in a throwaway session lasts only as
     // long as that session, and the user should hear it before signing in.
@@ -1819,14 +1847,16 @@ async function repairHarness(projectRoot: string, args: Args): Promise<JsonPaylo
   if (!args.harness) return { status: "error", code: "harness_required", message: "--repair-harness requires an explicit --harness codex or --harness claude-code" };
   const cfg = loadProjectConfig(projectRoot);
   if (cfg?.authMode !== "oauth") return { status: "error", code: "oauth_connection_required", message: "repair requires a readable browser-connected project config" };
+  // The sign-in's own gateway: neither the file nor an ambient override chooses
+  // where this token goes. A checkout counts as joined only while both resolve
+  // to it, so one that points elsewhere is refused rather than repaired.
+  const gateway = storedProfileGateway(cfg.profileId!);
+  if (cfg.gatewayMismatch) {
+    return { status: "error", code: "gateway_mismatch", message: `this project's Augenta requests would go to ${cfg.gatewayMismatch.sendsTo}, not ${cfg.gatewayMismatch.signedInFor ? `${cfg.gatewayMismatch.signedInFor}, the gateway` : "the gateway"} this checkout's sign-in was made for; nothing was changed. Unset AUGENTA_API_URL and AUGENTA_INGEST_URL, or connect again here` };
+  }
   // Only this person's own links, which exist only once this checkout joined.
   const owner = cfg.destinations?.length ? storedProfileUserId(cfg.profileId!) : undefined;
-  if (!owner) return { status: "error", code: "not_joined", message: "this checkout has not joined its project's connection; join it with connect first" };
-  // Use the saved endpoint only: ambient overrides must not select another
-  // environment while repairing ids taken from this configuration.
-  const savedGateway = cfg.endpoint || cfg.discoveredGateway;
-  if (!savedGateway) return { status: "error", code: "endpoint_required", message: "repair requires a saved project endpoint" };
-  const gateway = savedGateway.replace(/\/+$/, "");
+  if (!owner || !gateway) return { status: "error", code: "not_joined", message: "this checkout has not joined its project's connection; join it with connect first" };
   const repaired: string[] = [];
   const failed: Array<{ connectorId: string; message: string }> = [];
   for (const destination of cfg.destinations!) {
@@ -1886,8 +1916,22 @@ async function adoptProject(resolved: ResolvedProject, args: Args): Promise<Json
     };
   }
   const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
-  const usable = await usableProfiles(oauth, cfg.profileId);
   const organization = cfg.org?.name ?? cfg.org?.id;
+  // Before any sign-in or link: a config that sends elsewhere than the gateway
+  // this sign-in uses would never route once joined, and joining is the answer
+  // that starts capture, so it must not be given to a file that points away.
+  // Choosing the Workspaces again rewrites the config with this gateway.
+  const elsewhere = routeOutside(gateway, cfg);
+  if (elsewhere) {
+    return {
+      status: "error",
+      code: "gateway_mismatch",
+      organization,
+      configTracked: isTrackedByGit(resolved.projectRoot, ".augenta/config.json"),
+      message: `this project's config sends Augenta requests to ${elsewhere}, not ${gateway}, the gateway this sign-in uses; nothing was joined, and capture stays off in this checkout. Choose its Workspaces again to point it at ${gateway}`,
+    };
+  }
+  const usable = await usableProfiles(oauth, cfg.profileId);
   if (usable.length === 0) {
     return { status: "need_login", message: "sign in to Augenta, then join again", organization };
   }

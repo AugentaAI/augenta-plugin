@@ -585,6 +585,10 @@ function storedProfileUserId(profileId) {
   const userId = storedProfile(profileId)?.userId;
   return typeof userId === "string" && userId ? userId : undefined;
 }
+function storedProfileGateway(profileId) {
+  const gateway = storedProfile(profileId)?.gateway;
+  return typeof gateway === "string" && gateway.trim() ? gateway.trim().replace(/\/+$/, "") : undefined;
+}
 function storedProfile(profileId) {
   try {
     const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
@@ -595,7 +599,23 @@ function storedProfile(profileId) {
     return;
   }
 }
+function assertSignInTarget(profileId, url) {
+  const own = storedProfileGateway(profileId);
+  const origin = (value) => {
+    try {
+      const parsed = new URL(value).origin;
+      return parsed === "null" ? undefined : parsed;
+    } catch {
+      return;
+    }
+  };
+  const target = origin(url);
+  if (!own || !target || target !== origin(own)) {
+    throw new Error(`refusing to send this Augenta sign-in to ${target ?? "an address that is not a valid URL"}: it was made for ${own ?? "a gateway this machine does not record"}`);
+  }
+}
 async function fetchWithProfile(profileId, url, init = {}) {
+  assertSignInTarget(profileId, url);
   const send = async (forceRefresh) => {
     const accessToken = await accessTokenForProfile(profileId, forceRefresh);
     return fetch(url, {
@@ -866,7 +886,10 @@ function loadProjectConfig(projectRoot) {
       const workspaces = parseWorkspaces(value.workspaces);
       if (!profileId || !projectKey || !workspaces)
         return;
-      const routes = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      const joined = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      const own = joined.join === "joined" ? storedProfileGateway(profileId) : undefined;
+      const gatewayMismatch = joined.join !== "joined" || own && routesOnlyTo(own, settings) ? undefined : { sendsTo: own ? routeOutside(own, settings) : displayOrigin(gatewayBase(settings)), ...own ? { signedInFor: own } : {} };
+      const routes = gatewayMismatch ? { join: "gateway" } : joined;
       return {
         ...settings,
         authMode: "oauth",
@@ -874,6 +897,7 @@ function loadProjectConfig(projectRoot) {
         projectKey,
         workspaces,
         join: routes.join,
+        ...gatewayMismatch ? { gatewayMismatch } : {},
         ...routes.destinations ? {
           destinations: routes.destinations,
           connectorIds: routes.destinations.map((destination) => destination.connectorId),
@@ -898,6 +922,7 @@ function loadProjectConfig(projectRoot) {
         authMode: "api-key",
         ...captureSince ? { captureSince } : {},
         apiKey,
+        ...isTrackedByGit(projectRoot, ".augenta/config.json") ? { keyTracked: true } : {},
         projectRoot
       };
     }
@@ -919,6 +944,31 @@ function gatewayBase(cfg, flag) {
 function experiencesUrl(cfg) {
   return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
 }
+function routesOnlyTo(gateway, cfg) {
+  return gatewayBase(cfg) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg), gateway);
+}
+function sameOrigin(a, b) {
+  try {
+    const origin = new URL(a).origin;
+    return origin !== "null" && origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+function routeOutside(gateway, cfg) {
+  if (routesOnlyTo(gateway, cfg))
+    return;
+  const base = gatewayBase(cfg);
+  return displayOrigin(base !== gateway.replace(/\/+$/, "") ? base : experiencesUrl(cfg));
+}
+function displayOrigin(value) {
+  try {
+    const origin = new URL(value).origin;
+    if (origin !== "null")
+      return origin;
+  } catch {}
+  return "an address that is not a valid Augenta URL";
+}
 function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
   return value === "0" || value === "false";
@@ -927,7 +977,7 @@ function captureGate(cfg) {
   if (captureKilled())
     return "killed";
   if (cfg.authMode !== "oauth")
-    return cfg.apiKey ? "live" : "signed_out";
+    return !cfg.apiKey ? "signed_out" : cfg.keyTracked ? "key_tracked" : "live";
   if (!cfg.profileId || !hasStoredProfile(cfg.profileId))
     return "signed_out";
   if (!cfg.connectorIds?.length)
@@ -2053,19 +2103,28 @@ if (connectedRoot) {
       spawnShipper(connectedRoot);
   } else {
     const gate = captureGate(cfg);
-    if (gate === "signed_out" || gate === "not_adopted") {
+    if (gate === "key_tracked") {
+      if (firstTime(`key-tracked:${connectedRoot}`)) {
+        const fact = "this project's .augenta/config.json holds a platform key and git tracks it, so Augenta capture and recall are off in this checkout: " + "a committed key would send everyone's capture to that key's Workspace.";
+        const additionalContext = codex ? `Augenta: ${fact} If the key is yours, untrack the file with git rm --cached .augenta/config.json; if it is not, remove it.` : `[Augenta] ${fact[0].toUpperCase()}${fact.slice(1)} Tell the user. If the key is theirs, the fix is ` + "`git rm --cached .augenta/config.json`; if they do not recognize it, it should be removed. Do not run the " + "connect skill to fix this, and never ask for the key in the chat.";
+        process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }));
+      }
+    } else if (gate === "signed_out" || gate === "not_adopted") {
+      const elsewhere = cfg.gatewayMismatch?.sendsTo;
+      const own = cfg.gatewayMismatch?.signedInFor ?? "the address";
       const identity = createHash3("sha256").update([
         cfg.profileId ?? "",
         cfg.projectKey ?? "",
         ...(cfg.workspaces ?? []).map((workspace) => workspace.workspaceId).sort(),
-        cfg.profileId && storedProfileUserId(cfg.profileId) || ""
+        cfg.profileId && storedProfileUserId(cfg.profileId) || "",
+        ...elsewhere ? [`gateway:${elsewhere}`] : []
       ].join("\x00")).digest("hex").slice(0, 16);
       if (firstTime(`join:${connectedRoot}:${identity}`)) {
         const names = (cfg.workspaces ?? cfg.destinations ?? []).map((workspace) => workspace.workspaceName || workspace.workspaceId).join(", ");
         const environment = environmentLabel(controlUrl(cfg));
         const where = [cfg.org?.name, environment === "prod" ? undefined : `the ${environment} environment`].filter(Boolean).join(", ");
-        const reason = gate === "signed_out" ? "this machine is not signed in to Augenta for it" : cfg.join === "signin" ? "this checkout joined it under a different sign-in" : cfg.join === "workspaces" ? "its Workspaces changed since this checkout joined" : "this checkout has not joined it";
-        const additionalContext = codex ? `Augenta: this project is set up to send capture to ${names}${where ? ` (${where})` : ""}, but capture is off in this checkout because ${reason}. Run ${connectAction} to join it.` : `[Augenta] This project's .augenta/config.json sends Augenta capture to ${names}${where ? ` (${where})` : ""}, ` + `but capture is off in this checkout because ${reason}. Tell the user, and offer to run the augenta ` + "connect skill (/augenta:connect): it signs in if needed and asks them to confirm those Workspaces " + "before capture starts. Do not start a sign-in without their go-ahead. Tokens and API keys must " + "never be pasted into the chat.";
+        const reason = gate === "signed_out" ? "this machine is not signed in to Augenta for it" : elsewhere ? `it now points Augenta at ${elsewhere}, not ${own}${own === "the address" ? "" : ", the address"} this machine's sign-in was made for` : cfg.join === "signin" ? "this checkout joined it under a different sign-in" : cfg.join === "workspaces" ? "its Workspaces changed since this checkout joined" : "this checkout has not joined it";
+        const additionalContext = elsewhere ? codex ? `Augenta: capture and recall are off in this checkout because ${reason}. If nobody on your team changed that, check the history of .augenta/config.json and of any AUGENTA_API_URL or AUGENTA_INGEST_URL setting first; running ${connectAction} and choosing the Workspaces points it back.` : `[Augenta] Capture and recall are off in this checkout because ${reason}. Nothing was sent there. Tell the ` + "user. If nobody on their team made that change, suggest checking `git log -p .augenta/config.json` and any " + "AUGENTA_API_URL or AUGENTA_INGEST_URL setting (including a committed .claude/settings.json) before anything " + "else. Running the augenta connect skill (/augenta:connect) and choosing the Workspaces points the project " + "back at the environment's own address. Do not start it without their go-ahead." : codex ? `Augenta: this project is set up to send capture to ${names}${where ? ` (${where})` : ""}, but capture is off in this checkout because ${reason}. Run ${connectAction} to join it.` : `[Augenta] This project's .augenta/config.json sends Augenta capture to ${names}${where ? ` (${where})` : ""}, ` + `but capture is off in this checkout because ${reason}. Tell the user, and offer to run the augenta ` + "connect skill (/augenta:connect): it signs in if needed and asks them to confirm those Workspaces " + "before capture starts. Do not start a sign-in without their go-ahead. Tokens and API keys must " + "never be pasted into the chat.";
         process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }));
       }
     }

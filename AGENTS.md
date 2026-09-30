@@ -398,8 +398,28 @@ it belongs to, so a pulled change to the Workspaces — an addition or a removal
 or another person signing in here stops capture until someone in that checkout
 confirms the set. Codex eligibility starts when the checkout joined. An API-key
 config holds its key and is never committable: its writer keeps the local form
-and refuses a config git already tracks, and the capture hook resets a shared
-form back.
+and refuses a config git already tracks, the capture hook resets a shared form
+back, and a config git tracks anyway (`git add -f`) is `keyTracked` — it neither
+captures nor recalls, because a pulled key would route every teammate's capture
+to its owner's Workspace with nobody asked.
+
+**A browser sign-in's token goes only to the gateway it was made for.** The file
+can name a gateway, and so can the environment — Claude Code applies a committed
+`.claude/settings.json` `env` block to hooks — so neither decides where a token
+goes. A checkout counts as joined only while the gateway it resolves is the one
+its stored profile in `~/.augenta/auth.json` records, and its capture URL is on
+that gateway's origin (`routesOnlyTo` in `capture/config.ts`). Otherwise `join`
+is `gateway`: capture and automatic recall are silent, explicit recall answers
+`not_joined`, nothing is sent, and session start names where the config points.
+**No override is exempt**; a contributor sets it when connecting, which signs in
+for that gateway. Connect never reads a gateway from the file: it takes the one
+discovery names or this run's `--endpoint`/`AUGENTA_API_URL`, states an override
+before the user answers (`gatewayOverride`), keeps a hand-set `ingestUrl` only on
+the gateway's origin, and `--adopt` refuses a config that routes elsewhere rather
+than joining it. Every config connect writes passes, because it writes `endpoint`
+from the gateway the sign-in was made for; a mismatch always means an edit. A new
+request that carries a browser token must go to `storedProfileGateway` or through
+a config that passes this check — never to a URL read from the file alone.
 
 **A Connector belongs to one person, so each person links their own.** The
 platform accepts records through a Connector only from its owner or an

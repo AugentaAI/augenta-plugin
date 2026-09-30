@@ -34,13 +34,29 @@ does the same for one invocation and wins over the variable.
 
 Connect records `controlUrl` in `<project>/.augenta/config.json`. Reconnecting
 without a flag or variable defaults to that recorded URL. Every URL follows
-**CLI flag > environment variable > config.json > default**. The file's
-`endpoint` can override the discovered gateway within its recorded environment.
-Connect marks an automatically selected endpoint with `discoveredGateway`; if
-those values still match, the next connect refreshes the endpoint from discovery.
-A hand-edited endpoint differs from the marker and remains an override. Explicit
-flag or environment overrides are written without the marker, even when their
-value happens to equal discovery.
+**CLI flag > environment variable > config.json > default**.
+
+The gateway is the exception for a browser connection: **connect never takes it
+from the file.** It is the one the environment's discovery names, unless this
+run's `--endpoint` or `AUGENTA_API_URL` overrides it, and an override is stated
+before the destination question (`gatewayOverride` in `--json` payloads). Connect
+writes it as `endpoint`, marked with `discoveredGateway` when discovery chose it;
+explicit overrides are written without the marker, even when their value happens
+to equal discovery. A hand-edited `endpoint` no longer survives a reconnect, and
+until one, it stops capture (below). A hand-set `ingestUrl` survives only on the
+gateway's own origin.
+
+**A browser sign-in's token goes only to the gateway it was made for.** A
+checkout counts as joined only while the gateway it resolves — file and
+environment together — is the one its stored sign-in in `~/.augenta/auth.json`
+records, and its capture URL is on that gateway's origin (`routesOnlyTo` in
+`capture/config.ts`). Otherwise capture and automatic recall are off, recall
+answers `not_joined` with nothing sent, and session start says where the config
+points. No override is exempt, because Claude Code applies a committed
+`.claude/settings.json` `env` block to hooks. So to use another gateway, set
+`AUGENTA_API_URL` (or pass `--endpoint`) **when connecting**: the sign-in is then
+made for that gateway, and the variable must stay set, or be unset everywhere, to
+match it.
 When the control URL changes, connect uses the new environment's discovered
 gateway unless `--endpoint` or `AUGENTA_API_URL` explicitly overrides it. The payload's
 `environmentChange` names the old and new environments when the control URL moves.
@@ -53,18 +69,18 @@ later as an unexplained 401 rather than at the point of the mistake.
 touches the control plane: it posts to the GATEWAY in the project's own
 `.augenta/config.json`, which connect wrote when the project was connected to
 that environment. So a project connected against dev asks dev, whatever
-`AUGENTA_CONTROL_URL` says. To aim recall somewhere else, either reconnect the
-project or set `AUGENTA_API_URL`, which `gatewayBase` reads first. This is also
+`AUGENTA_CONTROL_URL` says. To aim recall somewhere else, reconnect the project:
+setting `AUGENTA_API_URL` alone points the checkout away from its sign-in's
+gateway, and recall then sends nothing (above). This is also
 why `recallEnvironment` in `capture/recall-client.ts` consults BOTH coordinates — the
 control URL alone would report `prod` about a question going to dev. Under a
 production control URL, the gateway counts as production when it is the one
 production's discovery named (`discoveredGateway`, trusted only in a config
 recorded against production) or the built-in default; any other gateway a connect-written
 config names is named. That marker is trusted, not verified — both values come from
-the same file, so a hand-edited config naming one arbitrary host as both `endpoint`
-and `discoveredGateway` reports `prod`. Verifying it against the gateway recorded
-for the signed-in profile in `~/.augenta/auth.json` goes with checking the config's
-endpoint against that sign-in before the token is sent.
+the same file — but what bounds it is the sign-in check above, not the label: a
+config naming one arbitrary host as both `endpoint` and `discoveredGateway` gets
+`not_joined` and sends nothing, whatever the label says.
 
 **Neither skill has an environment flag, on purpose.** `SKILL.md` stays
 environment-agnostic and the variable does the work, for two reasons. A user
@@ -194,8 +210,11 @@ a bug in whichever half you were not watching.
 `AUGENTA_CONTROL_URL`/`controlUrl` selects discovery,
 `AUGENTA_API_URL`/`endpoint` overrides the gateway base, and
 `AUGENTA_INGEST_URL`/`ingestUrl` redirects the experiences endpoint. Environment
-variables win over file values; explicit CLI flags win over both. Connect keeps
-a hand-set `ingestUrl` on reconnect. None opts a project into capture — capture still
+variables win over file values; explicit CLI flags win over both. For a browser
+connection the resolved gateway must be the sign-in's and the experiences URL must
+stay on its origin, or capture stops (see above); a local fixture receiver needs a
+platform-key config. Connect keeps a hand-set `ingestUrl` on reconnect only on the
+gateway's own origin. None opts a project into capture — capture still
 requires `.augenta/config.json`. `AUGENTA_CAPTURE_ENABLED=0` is the global kill
 switch, and it also stops automatic recall. `AUGENTA_AUTO_RECALL=0` stops only
 automatic recall.

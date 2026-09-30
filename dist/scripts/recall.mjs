@@ -576,6 +576,10 @@ function storedProfileUserId(profileId) {
   const userId = storedProfile(profileId)?.userId;
   return typeof userId === "string" && userId ? userId : undefined;
 }
+function storedProfileGateway(profileId) {
+  const gateway = storedProfile(profileId)?.gateway;
+  return typeof gateway === "string" && gateway.trim() ? gateway.trim().replace(/\/+$/, "") : undefined;
+}
 function storedProfile(profileId) {
   try {
     const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
@@ -586,7 +590,23 @@ function storedProfile(profileId) {
     return;
   }
 }
+function assertSignInTarget(profileId, url) {
+  const own = storedProfileGateway(profileId);
+  const origin = (value) => {
+    try {
+      const parsed = new URL(value).origin;
+      return parsed === "null" ? undefined : parsed;
+    } catch {
+      return;
+    }
+  };
+  const target = origin(url);
+  if (!own || !target || target !== origin(own)) {
+    throw new Error(`refusing to send this Augenta sign-in to ${target ?? "an address that is not a valid URL"}: it was made for ${own ?? "a gateway this machine does not record"}`);
+  }
+}
 async function fetchWithProfile(profileId, url, init = {}) {
+  assertSignInTarget(profileId, url);
   const send = async (forceRefresh) => {
     const accessToken = await accessTokenForProfile(profileId, forceRefresh);
     return fetch(url, {
@@ -861,7 +881,10 @@ function loadProjectConfig(projectRoot) {
       const workspaces = parseWorkspaces(value.workspaces);
       if (!profileId || !projectKey || !workspaces)
         return;
-      const routes = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      const joined = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      const own = joined.join === "joined" ? storedProfileGateway(profileId) : undefined;
+      const gatewayMismatch = joined.join !== "joined" || own && routesOnlyTo(own, settings) ? undefined : { sendsTo: own ? routeOutside(own, settings) : displayOrigin(gatewayBase(settings)), ...own ? { signedInFor: own } : {} };
+      const routes = gatewayMismatch ? { join: "gateway" } : joined;
       return {
         ...settings,
         authMode: "oauth",
@@ -869,6 +892,7 @@ function loadProjectConfig(projectRoot) {
         projectKey,
         workspaces,
         join: routes.join,
+        ...gatewayMismatch ? { gatewayMismatch } : {},
         ...routes.destinations ? {
           destinations: routes.destinations,
           connectorIds: routes.destinations.map((destination) => destination.connectorId),
@@ -893,6 +917,7 @@ function loadProjectConfig(projectRoot) {
         authMode: "api-key",
         ...captureSince ? { captureSince } : {},
         apiKey,
+        ...isTrackedByGit(projectRoot, ".augenta/config.json") ? { keyTracked: true } : {},
         projectRoot
       };
     }
@@ -914,6 +939,31 @@ function gatewayBase(cfg, flag) {
 function experiencesUrl(cfg) {
   return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
 }
+function routesOnlyTo(gateway, cfg) {
+  return gatewayBase(cfg) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg), gateway);
+}
+function sameOrigin(a, b) {
+  try {
+    const origin = new URL(a).origin;
+    return origin !== "null" && origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+function routeOutside(gateway, cfg) {
+  if (routesOnlyTo(gateway, cfg))
+    return;
+  const base = gatewayBase(cfg);
+  return displayOrigin(base !== gateway.replace(/\/+$/, "") ? base : experiencesUrl(cfg));
+}
+function displayOrigin(value) {
+  try {
+    const origin = new URL(value).origin;
+    if (origin !== "null")
+      return origin;
+  } catch {}
+  return "an address that is not a valid Augenta URL";
+}
 function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
   return value === "0" || value === "false";
@@ -922,7 +972,7 @@ function captureGate(cfg) {
   if (captureKilled())
     return "killed";
   if (cfg.authMode !== "oauth")
-    return cfg.apiKey ? "live" : "signed_out";
+    return !cfg.apiKey ? "signed_out" : cfg.keyTracked ? "key_tracked" : "live";
   if (!cfg.profileId || !hasStoredProfile(cfg.profileId))
     return "signed_out";
   if (!cfg.connectorIds?.length)
@@ -1304,7 +1354,7 @@ function recallEnvironment(gateway, cfg) {
   const label = environmentLabel(controlUrl(cfg));
   if (label !== "prod")
     return label;
-  const discovered = environmentLabel(cfg?.controlUrl) === "prod" ? cfg?.discoveredGateway : undefined;
+  const discovered = environmentLabel(cfg?.controlUrl) === "prod" && cfg?.join !== "gateway" ? cfg?.discoveredGateway : undefined;
   return gateway === DEFAULT_GATEWAY || gateway === discovered ? "prod" : gateway;
 }
 async function askWorkspaces(searchRoot, request) {
@@ -1362,13 +1412,14 @@ async function askWorkspaces(searchRoot, request) {
       return bail("need_login", "need_login", "this project's Augenta sign-in is missing; sign in again with the connect skill");
     }
     if (!cfg.destinations?.length) {
-      return bail("not_joined", "not_joined", "this checkout has not joined its project's Augenta connection; run the connect skill here to confirm its Workspaces first");
+      const mismatch = cfg.gatewayMismatch;
+      return bail("not_joined", "not_joined", mismatch ? `this project's Augenta requests would go to ${mismatch.sendsTo}, not ${mismatch.signedInFor ? `${mismatch.signedInFor}, the gateway` : "the gateway"} this checkout's sign-in was made for, so nothing was sent; run the connect skill here to point it back` : "this checkout has not joined its project's Augenta connection; run the connect skill here to confirm its Workspaces first");
     }
-    fetcher = bearer !== undefined ? (target, init) => fetch(target, {
+    fetcher = bearer !== undefined ? (target, init) => (assertSignInTarget(profileId, target), fetch(target, {
       ...init,
       signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: { ...init.headers, authorization: `Bearer ${bearer}` }
-    }) : (target, init) => fetchWithProfile(profileId, target, init);
+    })) : (target, init) => fetchWithProfile(profileId, target, init);
     destinations = (cfg.destinations ?? []).map((destination) => ({ ...destination }));
     if (request.workspaces?.length) {
       const requested = new Set(request.workspaces);
@@ -1405,6 +1456,9 @@ async function askWorkspaces(searchRoot, request) {
       names = fetchAllWorkspaces(profileId, gateway).catch(() => []);
     }
   } else {
+    if (cfg.keyTracked) {
+      return bail("error", "key_tracked", "this project's .augenta/config.json holds a platform key and git tracks it, so recall sends nothing from it; if the key is yours, untrack the file with git rm --cached .augenta/config.json");
+    }
     if (request.workspaces?.length) {
       return bail("error", "workspace_not_selectable", "this project uses a platform key, whose Connector fixes the Workspace; --workspace selects nothing");
     }

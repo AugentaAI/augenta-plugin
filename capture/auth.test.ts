@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   accessTokenForProfile,
+  assertSignInTarget,
   beginDeviceLogin,
   clearPendingLogin,
   fetchWithProfile,
@@ -195,6 +196,34 @@ describe("global WorkOS profiles", () => {
     expect(response.status).toBe(204);
     expect(apiCalls).toBe(2);
     expect(refreshes).toBe(1);
+  });
+});
+
+describe("a sign-in's token goes only to the gateway it was made for", () => {
+  test("fetchWithProfile refuses any other origin before reading or refreshing a token", async () => {
+    const { profileId } = await saveDeviceProfile(
+      config,
+      { accessToken: "access-live", refreshToken: "refresh-live", expiresAt: Date.now() - 1 },
+      { userId: "user_1", orgId: "org_1" },
+    );
+    const sent: string[] = [];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      sent.push(String(url));
+      return Response.json({});
+    }) as typeof fetch;
+    for (const target of [
+      "https://evil.example.com/v1/me",
+      "http://api.example.com/v1/me", // another scheme is another origin
+      "https://api.example.com.evil.example.com/v1/me",
+      "https://api.example.com@evil.example.com/v1/me",
+      "not a url",
+    ]) {
+      await expect(fetchWithProfile(profileId, target)).rejects.toThrow("refusing to send this Augenta sign-in");
+    }
+    // Expired, yet never refreshed: the refusal comes before any token is read.
+    expect(sent).toEqual([]);
+    expect(() => assertSignInTarget(profileId, "https://api.example.com/v1/recall")).not.toThrow();
+    expect(() => assertSignInTarget("profile_unknown", "https://api.example.com/v1/recall")).toThrow();
   });
 });
 

@@ -209,17 +209,37 @@ if (connectedRoot) {
     // Connected, but capture is off HERE for a reason connect fixes: this machine
     // has no sign-in for the config's profile, or this checkout has not joined a
     // (typically committed) config, or joined it as someone else, or its
-    // Workspaces changed since it did. Said once per exact connection and person,
-    // so a pulled change to the Workspaces, or a different sign-in, is raised
-    // again. The kill switch stays silent, as above.
+    // Workspaces changed since it did, or it now points away from the gateway its
+    // sign-in was made for. Said once per exact connection and person, so a
+    // pulled change to the Workspaces, a different sign-in, or a new gateway is
+    // raised again. The kill switch stays silent, as above.
     const gate = captureGate(cfg!);
-    if (gate === "signed_out" || gate === "not_adopted") {
+    if (gate === "key_tracked") {
+      // Not connect's to fix: its --api-key path refuses a tracked file, and the
+      // browser path would replace the key. Said once per project.
+      if (firstTime(`key-tracked:${connectedRoot}`)) {
+        const fact = "this project's .augenta/config.json holds a platform key and git tracks it, so Augenta capture and recall are off in this checkout: " +
+          "a committed key would send everyone's capture to that key's Workspace.";
+        const additionalContext = codex
+          ? `Augenta: ${fact} If the key is yours, untrack the file with git rm --cached .augenta/config.json; if it is not, remove it.`
+          : `[Augenta] ${fact[0]!.toUpperCase()}${fact.slice(1)} Tell the user. If the key is theirs, the fix is ` +
+            "`git rm --cached .augenta/config.json`; if they do not recognize it, it should be removed. Do not run the " +
+            "connect skill to fix this, and never ask for the key in the chat.";
+        process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }));
+      }
+    } else if (gate === "signed_out" || gate === "not_adopted") {
+      // Where this checkout would send its sign-in instead of that sign-in's own
+      // gateway, when that is why capture is off (an origin; see routeOutside).
+      const elsewhere = cfg!.gatewayMismatch?.sendsTo;
+      const own = cfg!.gatewayMismatch?.signedInFor ?? "the address";
       const identity = createHash("sha256")
         .update([
           cfg!.profileId ?? "",
           cfg!.projectKey ?? "",
           ...(cfg!.workspaces ?? []).map((workspace) => workspace.workspaceId).sort(),
           (cfg!.profileId && storedProfileUserId(cfg!.profileId)) || "",
+          // Appended only in this state, so every earlier notice keeps its key.
+          ...(elsewhere ? [`gateway:${elsewhere}`] : []),
         ].join("\0"))
         .digest("hex")
         .slice(0, 16);
@@ -231,18 +251,31 @@ if (connectedRoot) {
           .join(", ");
         const reason = gate === "signed_out"
           ? "this machine is not signed in to Augenta for it"
-          : cfg!.join === "signin"
-            ? "this checkout joined it under a different sign-in"
-            : cfg!.join === "workspaces"
-              ? "its Workspaces changed since this checkout joined"
-              : "this checkout has not joined it";
-        const additionalContext = codex
-          ? `Augenta: this project is set up to send capture to ${names}${where ? ` (${where})` : ""}, but capture is off in this checkout because ${reason}. Run ${connectAction} to join it.`
-          : `[Augenta] This project's .augenta/config.json sends Augenta capture to ${names}${where ? ` (${where})` : ""}, ` +
-            `but capture is off in this checkout because ${reason}. Tell the user, and offer to run the augenta ` +
-            "connect skill (/augenta:connect): it signs in if needed and asks them to confirm those Workspaces " +
-            "before capture starts. Do not start a sign-in without their go-ahead. Tokens and API keys must " +
-            "never be pasted into the chat.";
+          : elsewhere
+            ? `it now points Augenta at ${elsewhere}, not ${own}${own === "the address" ? "" : ", the address"} this machine's sign-in was made for`
+            : cfg!.join === "signin"
+              ? "this checkout joined it under a different sign-in"
+              : cfg!.join === "workspaces"
+                ? "its Workspaces changed since this checkout joined"
+                : "this checkout has not joined it";
+        const additionalContext = elsewhere
+          // A pulled commit (or a committed .claude/settings.json variable) may
+          // have made this change, and the next step connect offers is where the
+          // sign-in would go, so the history comes first.
+          ? codex
+            ? `Augenta: capture and recall are off in this checkout because ${reason}. If nobody on your team changed that, check the history of .augenta/config.json and of any AUGENTA_API_URL or AUGENTA_INGEST_URL setting first; running ${connectAction} and choosing the Workspaces points it back.`
+            : `[Augenta] Capture and recall are off in this checkout because ${reason}. Nothing was sent there. Tell the ` +
+              "user. If nobody on their team made that change, suggest checking `git log -p .augenta/config.json` and any " +
+              "AUGENTA_API_URL or AUGENTA_INGEST_URL setting (including a committed .claude/settings.json) before anything " +
+              "else. Running the augenta connect skill (/augenta:connect) and choosing the Workspaces points the project " +
+              "back at the environment's own address. Do not start it without their go-ahead."
+          : codex
+            ? `Augenta: this project is set up to send capture to ${names}${where ? ` (${where})` : ""}, but capture is off in this checkout because ${reason}. Run ${connectAction} to join it.`
+            : `[Augenta] This project's .augenta/config.json sends Augenta capture to ${names}${where ? ` (${where})` : ""}, ` +
+              `but capture is off in this checkout because ${reason}. Tell the user, and offer to run the augenta ` +
+              "connect skill (/augenta:connect): it signs in if needed and asks them to confirm those Workspaces " +
+              "before capture starts. Do not start a sign-in without their go-ahead. Tokens and API keys must " +
+              "never be pasted into the chat.";
         process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }));
       }
     }

@@ -105,6 +105,11 @@ project to a dev or staging Workspace by accident is silent otherwise.
 When `environmentChange` is present, say the project is moving from `from` to
 `to` before the destination question and in the confirmation.
 
+When `gatewayOverride` is present, this run signs in for and sends to that
+gateway instead of the one the environment names, because `--endpoint` or
+`AUGENTA_API_URL` said so. Say so in the question and the confirmation, the same
+way as a non-production environment.
+
 A Git worktree is a separate project consent boundary. Connect writes to the
 current worktree, not the main checkout or its siblings. Name `projectRoot`
 before the destination question; a worktree must be connected explicitly even
@@ -183,7 +188,14 @@ checkout's consent, so do not ask a second yes/no.
   and capture stays off in this checkout until every recorded Workspace is
   reachable. On `join_failed`, report `message` and each `failed` entry; capture
   stays off, and joining again retries. On `environment_mismatch`, report
-  `message`.
+  `message`. On `gateway_mismatch`, report `message`: the project's config, or
+  this environment, points Augenta somewhere other than the gateway this sign-in
+  uses, so nothing was joined and nothing was sent. Do not retry the join. If the
+  user did not expect it, suggest they look at the history of
+  `.augenta/config.json` (and any `AUGENTA_API_URL` or `AUGENTA_INGEST_URL`
+  setting) first; choosing the Workspaces again points the config back at this
+  environment's own gateway, which changes it for everyone who pulls it when
+  `configTracked` is `true`.
 - **Choose different Workspaces**: continue with steps 2 and 3. When
   `configTracked` is `true`, say first that git tracks the config, so the new
   selection changes the destinations for everyone who pulls it.

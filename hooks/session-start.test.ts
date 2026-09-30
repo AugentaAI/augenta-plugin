@@ -18,11 +18,12 @@
  */
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDocumentRecord, Outbox } from "../capture/outbox";
 import { joinCheckout, writeSharedConfig, TEST_USER_ID } from "../__tests__/fixtures";
-import type { Destination } from "../capture/config";
+import { DEFAULT_GATEWAY, type Destination } from "../capture/config";
 import type { CaptureEvent } from "../capture/event";
 
 const HOOK = join(import.meta.dir, "session-start.ts");
@@ -49,13 +50,14 @@ function writeMarkers(file: string, markers: Record<string, string>): void {
   writeFileSync(join(stateDir, file), JSON.stringify(markers));
 }
 
-/** This machine signed in to `profileId` as `userId`. */
+/** This machine signed in to `profileId` as `userId`, for the gateway a config
+ *  with no `endpoint` resolves to — as connect pairs them. */
 function signIn(profileId: string, userId = TEST_USER_ID): void {
   const authDir = join(home, ".augenta");
   mkdirSync(authDir, { recursive: true });
   writeFileSync(join(authDir, "auth.json"), JSON.stringify({
     version: 1,
-    profiles: { [profileId]: { userId, orgId: "org_1", accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, updatedAt: new Date().toISOString() } },
+    profiles: { [profileId]: { userId, orgId: "org_1", gateway: DEFAULT_GATEWAY, accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, updatedAt: new Date().toISOString() } },
   }));
 }
 
@@ -227,6 +229,46 @@ describe("connected, but capture is off in this checkout — the join notice", (
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
     // Back to the set this checkout joined: live again, and quiet.
     committed(["connector_one", "connector_two"]);
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+  });
+
+  test("a pulled endpoint that points away from this sign-in's gateway is named, once, with its history first", () => {
+    committed();
+    signInAndJoin("profile_one", recorded(["connector_one"]));
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+    writeSharedConfig(project, {
+      profileId: "profile_one",
+      destinations: recorded(["connector_one"]),
+      extra: { org: { id: "org_1", name: "Example Org" }, endpoint: "https://evil.example.com", discoveredGateway: "https://evil.example.com" },
+    });
+    const out = fire({ transcript_path: CLAUDE_TP, cwd: project });
+    const context = JSON.parse(out).hookSpecificOutput.additionalContext as string;
+    expect(context).toContain(`it now points Augenta at https://evil.example.com, not ${DEFAULT_GATEWAY}`);
+    expect(context).toContain("git log -p .augenta/config.json");
+    expect(context).toContain("Nothing was sent there");
+    expect(existsSync(join(project, ".augenta", "outbox"))).toBe(false);
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+    // Another destination is another change, raised again.
+    writeSharedConfig(project, {
+      profileId: "profile_one",
+      destinations: recorded(["connector_one"]),
+      extra: { org: { id: "org_1", name: "Example Org" }, endpoint: "https://elsewhere.example.com" },
+    });
+    expect(JSON.parse(fire({ transcript_path: CODEX_TP, cwd: project })).hookSpecificOutput.additionalContext)
+      .toContain("check the history of .augenta/config.json");
+  });
+
+  test("a platform-key config git tracks is off, said once, and never names connect as the fix", () => {
+    mkdirSync(join(project, ".augenta"), { recursive: true });
+    writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({ authMode: "api-key", apiKey: "platform-test-key" }));
+    spawnSync("git", ["init", "-q"], { cwd: project });
+    spawnSync("git", ["add", "-f", ".augenta/config.json"], { cwd: project });
+    const out = fire({ transcript_path: CLAUDE_TP, cwd: project });
+    const context = JSON.parse(out).hookSpecificOutput.additionalContext as string;
+    expect(context).toContain("git rm --cached .augenta/config.json");
+    expect(context).toContain("Do not run the connect skill");
+    expect(context).not.toContain("platform-test-key");
+    expect(existsSync(join(project, ".augenta", "outbox"))).toBe(false);
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
   });
 

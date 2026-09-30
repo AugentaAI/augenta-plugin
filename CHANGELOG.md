@@ -12,9 +12,34 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
-## [0.11.1] — 2026-09-29
+## [0.12.0] — 2026-09-30
 
-No reconnect is required.
+### Upgrading
+
+- **A project connected normally needs nothing.** No reconnect is required, and
+  Codex does not ask to approve the hooks again.
+- **A browser-connected project stops capturing if it is pointed somewhere its
+  sign-in was not made for,** until you run connect in it again. That covers a
+  hand-edited `endpoint` in `.augenta/config.json`, an `ingestUrl` on another
+  host, and `AUGENTA_API_URL` or `AUGENTA_INGEST_URL` set to another address. To
+  use another gateway, set the variable when you connect.
+- **A platform-key `.augenta/config.json` that git tracks stops capturing and
+  recalling.** Untrack it with `git rm --cached .augenta/config.json`.
+
+### Security
+
+- **Your Augenta sign-in is sent only to the address it was made for.** Before
+  this, a change to a committed `.augenta/config.json`, or an `AUGENTA_API_URL`
+  set by a committed `.claude/settings.json`, could send each teammate's sign-in,
+  captured transcripts, project memory and recall questions to another server,
+  with no warning. Now a checkout that would send anywhere else sends nothing, and
+  the next session says where the config points. Connect takes the gateway from
+  the environment's own sign-in, or from an override you give when connecting,
+  which it tells you about before you choose Workspaces. Joining a config that
+  points elsewhere is refused.
+- **A committed platform-key config no longer captures.** A key config added to
+  git anyway sent the capture of everyone who pulled it to that key's Workspace.
+  A tracked key config is now off, and the next session says so once.
 
 ### Fixed
 
@@ -454,7 +479,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
-[0.11.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.11.0...v0.11.1
+[0.12.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.0...v0.10.1

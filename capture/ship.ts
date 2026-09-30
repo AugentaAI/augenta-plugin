@@ -64,6 +64,7 @@ import {
 } from "./config";
 import {
   accessTokenForProfile,
+  assertSignInTarget,
   markAuthNotice,
   ReLoginRequiredError,
 } from "./auth";
@@ -880,6 +881,13 @@ if (isMain(import.meta.url)) {
       // its own process (a hook killed mid-rotation would strand the user signed
       // out), so for a stale token it spawns this shipper and waits for the
       // renewed one (hooks/auto-recall.ts).
+      // A live browser config already routes only to its sign-in's gateway
+      // (config.ts); asserted here too, before any token is read, because this
+      // process sends the token and the full transcript.
+      if (cfg.authMode === "oauth") {
+        assertSignInTarget(cfg.profileId!, experiencesUrl(cfg));
+        assertSignInTarget(cfg.profileId!, gatewayBase(cfg));
+      }
       let token = cfg.authMode === "oauth"
         ? await accessTokenForProfile(cfg.profileId!)
         : cfg.apiKey;

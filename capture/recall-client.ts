@@ -45,7 +45,7 @@ import {
   resolveProjectRoot,
   type ProjectConfig,
 } from "./config";
-import { REQUEST_TIMEOUT_MS, fetchWithProfile, getAuthProfile, ReLoginRequiredError } from "./auth";
+import { REQUEST_TIMEOUT_MS, assertSignInTarget, fetchWithProfile, getAuthProfile, ReLoginRequiredError } from "./auth";
 import {
   AugentaRequestError,
   describeError,
@@ -676,22 +676,20 @@ export function aggregateStatus(payload: {
  * config under a production `AUGENTA_CONTROL_URL` still posts to dev's gateway,
  * and a gateway override differs from the marker, so both are still named.
  *
- * The marker is TRUSTED, NOT VERIFIED, and only a config connect wrote is
- * bounded by the paragraph above. Both comparands come from the same file, so a
- * hand-written or committed `config.json` that names the same arbitrary host as
- * `endpoint` and `discoveredGateway` under a production `controlUrl` reports
- * `prod` for a gateway that is not production's. A committed config reaches
- * checkouts whose users never wrote it, and this label is the only gateway-aware
- * signal they get. The comparand that would not let a config vouch for itself is
- * the gateway recorded for the signed-in profile in the owner-only
- * `~/.augenta/auth.json`; checking the config's `endpoint` against it belongs
- * with the wider check of that endpoint before the token is sent, which is not
- * in this release.
+ * The marker is trusted, not verified: both comparands come from the same file.
+ * What bounds that is the sign-in check in config.ts (`routesOnlyTo`): a browser
+ * checkout sends nothing unless its resolved gateway is the one its stored
+ * sign-in was made for. When that check has rejected the config (`join` is
+ * `gateway`), the marker is vouching for a gateway already refused, so it is not
+ * trusted and the refusal names the host. For a checkout that is joined the
+ * gateway already IS the sign-in's, so checking the marker against the
+ * owner-only `~/.augenta/auth.json` would add nothing: at worst a hand-set
+ * marker calls a gateway this person signed in for themselves production.
  */
 export function recallEnvironment(gateway: string, cfg?: ProjectConfig): string {
   const label = environmentLabel(controlUrl(cfg));
   if (label !== "prod") return label;
-  const discovered = environmentLabel(cfg?.controlUrl) === "prod" ? cfg?.discoveredGateway : undefined;
+  const discovered = environmentLabel(cfg?.controlUrl) === "prod" && cfg?.join !== "gateway" ? cfg?.discoveredGateway : undefined;
   return gateway === DEFAULT_GATEWAY || gateway === discovered ? "prod" : gateway;
 }
 
@@ -804,19 +802,24 @@ export async function askWorkspaces(searchRoot: string, request: RecallRequest):
     // config carries destinations only while this checkout's own links name
     // exactly the recorded Workspaces under the sign-in stored here (config.ts).
     if (!cfg.destinations?.length) {
+      // Joined, but pointed away from the sign-in's own gateway: the question,
+      // and the token with it, would go wherever the file or environment says.
+      const mismatch = cfg.gatewayMismatch;
       return bail(
         "not_joined",
         "not_joined",
-        "this checkout has not joined its project's Augenta connection; run the connect skill here to confirm its Workspaces first",
+        mismatch
+          ? `this project's Augenta requests would go to ${mismatch.sendsTo}, not ${mismatch.signedInFor ? `${mismatch.signedInFor}, the gateway` : "the gateway"} this checkout's sign-in was made for, so nothing was sent; run the connect skill here to point it back`
+          : "this checkout has not joined its project's Augenta connection; run the connect skill here to confirm its Workspaces first",
       );
     }
     /* Looked up at call time, never captured: tests swap `globalThis.fetch`. */
     fetcher = bearer !== undefined
-      ? (target, init) => fetch(target, {
+      ? (target, init) => (assertSignInTarget(profileId, target), fetch(target, {
           ...init,
           signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
           headers: { ...(init.headers as Record<string, string> | undefined), authorization: `Bearer ${bearer}` },
-        })
+        }))
       : (target, init) => fetchWithProfile(profileId, target, init);
     destinations = (cfg.destinations ?? []).map((destination) => ({ ...destination }));
     if (request.workspaces?.length) {
@@ -876,6 +879,15 @@ export async function askWorkspaces(searchRoot: string, request: RecallRequest):
       names = fetchAllWorkspaces(profileId, gateway).catch(() => [] as Workspace[]);
     }
   } else {
+    if (cfg.keyTracked) {
+      // A committed key would ask whatever Workspace its owner assigned it to,
+      // on behalf of everyone who pulls it (config.ts).
+      return bail(
+        "error",
+        "key_tracked",
+        "this project's .augenta/config.json holds a platform key and git tracks it, so recall sends nothing from it; if the key is yours, untrack the file with git rm --cached .augenta/config.json",
+      );
+    }
     if (request.workspaces?.length) {
       // A platform key is assigned to exactly one Connector, which is anchored to
       // exactly one Workspace: the key's assignment IS the route, so there is no

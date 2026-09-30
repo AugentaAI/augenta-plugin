@@ -606,6 +606,17 @@ export function storedProfileUserId(profileId: string): string | undefined {
   return typeof userId === "string" && userId ? userId : undefined;
 }
 
+/**
+ * The gateway the stored sign-in for `profileId` was made for, read the same
+ * side-effect-free way. It is the one place that sign-in's token may be sent:
+ * this file is the owner's alone, while a project's `endpoint` can arrive in a
+ * commit (capture/config.ts `routesOnlyTo`).
+ */
+export function storedProfileGateway(profileId: string): string | undefined {
+  const gateway = storedProfile(profileId)?.gateway;
+  return typeof gateway === "string" && gateway.trim() ? gateway.trim().replace(/\/+$/, "") : undefined;
+}
+
 /** One profile off auth.json, lock-free and with no side effects (see above). */
 function storedProfile(profileId: string): Partial<AuthProfile> | undefined {
   try {
@@ -617,12 +628,38 @@ function storedProfile(profileId: string): Partial<AuthProfile> | undefined {
   }
 }
 
+/**
+ * Refuse to attach `profileId`'s token to a request for any origin but the
+ * gateway that sign-in was made for. capture/config.ts already keeps a pulled
+ * config from counting as joined when it points elsewhere; this makes the same
+ * rule hold at the request itself, whoever built the URL. Throws before any
+ * token is read, so nothing is refreshed on a refused request either.
+ */
+export function assertSignInTarget(profileId: string, url: string): void {
+  const own = storedProfileGateway(profileId);
+  const origin = (value: string) => {
+    try {
+      const parsed = new URL(value).origin;
+      return parsed === "null" ? undefined : parsed;
+    } catch {
+      return undefined;
+    }
+  };
+  const target = origin(url);
+  if (!own || !target || target !== origin(own)) {
+    throw new Error(
+      `refusing to send this Augenta sign-in to ${target ?? "an address that is not a valid URL"}: it was made for ${own ?? "a gateway this machine does not record"}`,
+    );
+  }
+}
+
 /** One bearer request with exactly one locked refresh/retry on a 401. */
 export async function fetchWithProfile(
   profileId: string,
   url: string,
   init: RequestInit = {},
 ): Promise<Response> {
+  assertSignInTarget(profileId, url);
   const send = async (forceRefresh: boolean) => {
     const accessToken = await accessTokenForProfile(profileId, forceRefresh);
     return fetch(url, {

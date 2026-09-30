@@ -585,6 +585,10 @@ function storedProfileUserId(profileId) {
   const userId = storedProfile(profileId)?.userId;
   return typeof userId === "string" && userId ? userId : undefined;
 }
+function storedProfileGateway(profileId) {
+  const gateway = storedProfile(profileId)?.gateway;
+  return typeof gateway === "string" && gateway.trim() ? gateway.trim().replace(/\/+$/, "") : undefined;
+}
 function storedProfile(profileId) {
   try {
     const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
@@ -595,7 +599,23 @@ function storedProfile(profileId) {
     return;
   }
 }
+function assertSignInTarget(profileId, url) {
+  const own = storedProfileGateway(profileId);
+  const origin = (value) => {
+    try {
+      const parsed = new URL(value).origin;
+      return parsed === "null" ? undefined : parsed;
+    } catch {
+      return;
+    }
+  };
+  const target = origin(url);
+  if (!own || !target || target !== origin(own)) {
+    throw new Error(`refusing to send this Augenta sign-in to ${target ?? "an address that is not a valid URL"}: it was made for ${own ?? "a gateway this machine does not record"}`);
+  }
+}
 async function fetchWithProfile(profileId, url, init = {}) {
+  assertSignInTarget(profileId, url);
   const send = async (forceRefresh) => {
     const accessToken = await accessTokenForProfile(profileId, forceRefresh);
     return fetch(url, {
@@ -866,7 +886,10 @@ function loadProjectConfig(projectRoot) {
       const workspaces = parseWorkspaces(value.workspaces);
       if (!profileId || !projectKey || !workspaces)
         return;
-      const routes = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      const joined = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      const own = joined.join === "joined" ? storedProfileGateway(profileId) : undefined;
+      const gatewayMismatch = joined.join !== "joined" || own && routesOnlyTo(own, settings) ? undefined : { sendsTo: own ? routeOutside(own, settings) : displayOrigin(gatewayBase(settings)), ...own ? { signedInFor: own } : {} };
+      const routes = gatewayMismatch ? { join: "gateway" } : joined;
       return {
         ...settings,
         authMode: "oauth",
@@ -874,6 +897,7 @@ function loadProjectConfig(projectRoot) {
         projectKey,
         workspaces,
         join: routes.join,
+        ...gatewayMismatch ? { gatewayMismatch } : {},
         ...routes.destinations ? {
           destinations: routes.destinations,
           connectorIds: routes.destinations.map((destination) => destination.connectorId),
@@ -898,6 +922,7 @@ function loadProjectConfig(projectRoot) {
         authMode: "api-key",
         ...captureSince ? { captureSince } : {},
         apiKey,
+        ...isTrackedByGit(projectRoot, ".augenta/config.json") ? { keyTracked: true } : {},
         projectRoot
       };
     }
@@ -919,6 +944,31 @@ function gatewayBase(cfg, flag) {
 function experiencesUrl(cfg) {
   return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
 }
+function routesOnlyTo(gateway, cfg) {
+  return gatewayBase(cfg) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg), gateway);
+}
+function sameOrigin(a, b) {
+  try {
+    const origin = new URL(a).origin;
+    return origin !== "null" && origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+function routeOutside(gateway, cfg) {
+  if (routesOnlyTo(gateway, cfg))
+    return;
+  const base = gatewayBase(cfg);
+  return displayOrigin(base !== gateway.replace(/\/+$/, "") ? base : experiencesUrl(cfg));
+}
+function displayOrigin(value) {
+  try {
+    const origin = new URL(value).origin;
+    if (origin !== "null")
+      return origin;
+  } catch {}
+  return "an address that is not a valid Augenta URL";
+}
 function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
   return value === "0" || value === "false";
@@ -927,7 +977,7 @@ function captureGate(cfg) {
   if (captureKilled())
     return "killed";
   if (cfg.authMode !== "oauth")
-    return cfg.apiKey ? "live" : "signed_out";
+    return !cfg.apiKey ? "signed_out" : cfg.keyTracked ? "key_tracked" : "live";
   if (!cfg.profileId || !hasStoredProfile(cfg.profileId))
     return "signed_out";
   if (!cfg.connectorIds?.length)
@@ -1317,7 +1367,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.11.1";
+var PLUGIN_VERSION = "0.12.0";
 
 // capture/environment.ts
 import { existsSync as existsSync6 } from "node:fs";
@@ -1854,10 +1904,13 @@ async function resolveOAuth(args, projectRoot = args.project ?? process.cwd()) {
   const prior = loadProjectConfig(projectRoot);
   const control = controlUrl(prior, args.controlUrl);
   const discovered = await augentaOAuthConfig(control);
-  const savedEndpoint = control === (prior?.controlUrl ?? DEFAULT_CONTROL_URL) && prior?.endpoint !== prior?.discoveredGateway ? prior?.endpoint : undefined;
-  const gateway = gatewayBase({ endpoint: savedEndpoint || discovered.gateway }, args.endpoint);
-  const discoveredGateway = args.endpoint?.trim() || process.env.AUGENTA_API_URL?.trim() || savedEndpoint ? undefined : discovered.gateway;
-  return { oauth: { ...discovered, gateway }, gateway, control, discoveredGateway };
+  const gateway = gatewayBase({ endpoint: discovered.gateway }, args.endpoint);
+  const discoveredGateway = gatewayOverride(args) ? undefined : discovered.gateway;
+  return { oauth: { ...discovered, gateway }, gateway, control, discovered: discovered.gateway, discoveredGateway };
+}
+function gatewayOverride(args) {
+  const override = args.endpoint?.trim() || process.env.AUGENTA_API_URL?.trim();
+  return override ? override.replace(/\/+$/, "") : undefined;
 }
 function priorConnection(projectRoot) {
   if (!existsSync7(join9(projectRoot, ".augenta", "config.json")))
@@ -1912,7 +1965,7 @@ async function establishConnectors(projectRoot, args, profileId, gateway, connec
     endpoint: gateway,
     destinations: results.filter((result) => Boolean(result.connectorId)).map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
     autoRecall: args.autoRecall ?? previous?.autoRecall ?? false,
-    ingestUrl: previous?.ingestUrl
+    ingestUrl: previous?.ingestUrl && sameOrigin(previous.ingestUrl, gateway) ? previous.ingestUrl : undefined
   });
   try {
     const freshKeys = results.filter((result) => result.connectorId && (result.action === "created" || !priorConnectorIds.includes(result.connectorId))).map((result) => result.connectorId);
@@ -1949,7 +2002,7 @@ async function linkWorkspaces(projectRoot, args, profileId, gateway, owner, work
   return results;
 }
 async function connectProject(projectRoot, args) {
-  const { oauth, gateway, control, discoveredGateway } = await resolveOAuth(args, projectRoot);
+  const { oauth, gateway, control, discovered, discoveredGateway } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
   const selected = await selectOrCreateProfile(oauth, prior?.profileId);
   console.log(`Signed in as ${selected.me.user.name || selected.me.user.email} to ${selected.me.org.name} (${selected.me.org.id}).`);
@@ -1962,6 +2015,9 @@ async function connectProject(projectRoot, args) {
   console.log("So anyone with access to ANY Workspace you select can read this project's captured activity: the audience is the union of all of them.");
   if (environment !== "prod") {
     console.log(`This is the ${environment} environment, not production.`);
+  }
+  if (gateway !== discovered) {
+    console.log(`This connection uses the gateway ${gateway} instead of ${discovered}, the one this environment's sign-in names.`);
   }
   if (prior?.controlUrl && prior.controlUrl !== control) {
     console.log(`This project is moving from ${environmentLabel(prior.controlUrl)} to ${environment}.`);
@@ -2322,6 +2378,7 @@ async function runJsonVerb(resolved, args) {
   const metadata = {
     environment: environmentLabel(args.repairHarness ? cfg?.controlUrl : controlUrl(cfg, args.controlUrl)),
     ...args.repairHarness ? {} : environmentChange(cfg, args),
+    ...!args.repairHarness && gatewayOverride(args) ? { gatewayOverride: gatewayOverride(args) } : {},
     ...args.probe && cfg ? { current: savedConnection(cfg) } : {},
     ...args.probe ? { session: sessionEnvironment() } : {}
   };
@@ -2350,13 +2407,13 @@ async function repairHarness(projectRoot, args) {
   const cfg = loadProjectConfig(projectRoot);
   if (cfg?.authMode !== "oauth")
     return { status: "error", code: "oauth_connection_required", message: "repair requires a readable browser-connected project config" };
+  const gateway = storedProfileGateway(cfg.profileId);
+  if (cfg.gatewayMismatch) {
+    return { status: "error", code: "gateway_mismatch", message: `this project's Augenta requests would go to ${cfg.gatewayMismatch.sendsTo}, not ${cfg.gatewayMismatch.signedInFor ? `${cfg.gatewayMismatch.signedInFor}, the gateway` : "the gateway"} this checkout's sign-in was made for; nothing was changed. Unset AUGENTA_API_URL and AUGENTA_INGEST_URL, or connect again here` };
+  }
   const owner = cfg.destinations?.length ? storedProfileUserId(cfg.profileId) : undefined;
-  if (!owner)
+  if (!owner || !gateway)
     return { status: "error", code: "not_joined", message: "this checkout has not joined its project's connection; join it with connect first" };
-  const savedGateway = cfg.endpoint || cfg.discoveredGateway;
-  if (!savedGateway)
-    return { status: "error", code: "endpoint_required", message: "repair requires a saved project endpoint" };
-  const gateway = savedGateway.replace(/\/+$/, "");
   const repaired = [];
   const failed = [];
   for (const destination of cfg.destinations) {
@@ -2405,8 +2462,18 @@ async function adoptProject(resolved, args) {
     };
   }
   const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
-  const usable = await usableProfiles(oauth, cfg.profileId);
   const organization = cfg.org?.name ?? cfg.org?.id;
+  const elsewhere = routeOutside(gateway, cfg);
+  if (elsewhere) {
+    return {
+      status: "error",
+      code: "gateway_mismatch",
+      organization,
+      configTracked: isTrackedByGit(resolved.projectRoot, ".augenta/config.json"),
+      message: `this project's config sends Augenta requests to ${elsewhere}, not ${gateway}, the gateway this sign-in uses; nothing was joined, and capture stays off in this checkout. Choose its Workspaces again to point it at ${gateway}`
+    };
+  }
+  const usable = await usableProfiles(oauth, cfg.profileId);
   if (usable.length === 0) {
     return { status: "need_login", message: "sign in to Augenta, then join again", organization };
   }

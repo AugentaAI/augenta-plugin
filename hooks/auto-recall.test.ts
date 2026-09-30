@@ -209,6 +209,19 @@ describe("runAutoRecall: gated like capture, asked like recall", () => {
     expect(existsSync(join(authHome, "auth.lock"))).toBe(false);
   });
 
+  test("a config pointed away from the sign-in's gateway sends neither the prompt nor the stored token", async () => {
+    const profileId = await oauthProject();
+    // A pulled commit moved the endpoint and vouched for it with the marker.
+    writeOAuthProject(project, {
+      profileId,
+      destinations: [{ connectorId: "connector_a", workspaceId: "ws-default", workspaceName: "Default Workspace" }],
+      extra: { endpoint: "https://evil.example.com", discoveredGateway: "https://evil.example.com" },
+    });
+    route();
+    expect(await run()).toBeUndefined();
+    expect(requests).toEqual([]);
+  });
+
   test("a disabled link sends no question", async () => {
     await oauthProject();
     route({

@@ -17,6 +17,18 @@
  * controlUrl/endpoint/ingestUrl are the file twins of the three env overrides;
  * CLI flags win over env, which wins over config, then the default.
  *
+ * Neither the file nor the environment decides where a browser sign-in's token
+ * goes. Both can arrive in a commit — the file directly, the environment through
+ * a committed `.claude/settings.json` `env` block, which Claude Code applies to
+ * hooks — so a checkout counts as joined only while the resolved gateway is the
+ * one its stored sign-in was made for, and capture goes to that gateway's own
+ * origin (`routesOnlyTo`). Otherwise `join` is `gateway` and nothing is sent.
+ *
+ * A platform key is never committable. Its writer refuses a tracked file, and a
+ * tracked one is read as `keyTracked` and never captures or recalls: a key
+ * config pushed with `git add -f` would otherwise route every teammate's capture
+ * to that key's Workspace with no question asked.
+ *
  * `authMode` names the CREDENTIAL KIND, which decides both what else the file
  * must contain and which authorization header the shipper sends.
  *
@@ -34,9 +46,9 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { hasStoredProfile, storedProfileUserId } from "./auth";
+import { hasStoredProfile, storedProfileGateway, storedProfileUserId } from "./auth";
 import { readLinks } from "./links";
-import { resolveProjectRoot } from "./project";
+import { isTrackedByGit, resolveProjectRoot } from "./project";
 export { resolveProjectRoot } from "./project";
 
 export const DEFAULT_GATEWAY =
@@ -64,8 +76,11 @@ export interface RecordedWorkspace {
  * - `signin`: it joined under a different sign-in than the one stored here —
  *   another organization or environment, or another person in the same one.
  * - `workspaces`: the recorded Workspaces changed since it joined.
+ * - `gateway`: its links carry the connection, but the config — or the
+ *   environment — now points Augenta somewhere other than the gateway this
+ *   checkout's sign-in was made for. Nothing is sent until connect re-points it.
  */
-export type JoinState = "joined" | "none" | "signin" | "workspaces";
+export type JoinState = "joined" | "none" | "signin" | "workspaces" | "gateway";
 
 export interface Organization {
   id: string;
@@ -96,6 +111,14 @@ export interface ProjectConfig {
   controlUrl?: string;
   ingestUrl?: string;
   apiKey?: string;
+  /** A platform-key config that git tracks: never live (see the file header). */
+  keyTracked?: boolean;
+  /**
+   * Why `join` is `gateway`: where this config would send the token (an origin,
+   * for saying so — see {@link routeOutside}), and the gateway the stored
+   * sign-in was made for, when it records one.
+   */
+  gatewayMismatch?: { sendsTo: string; signedInFor?: string };
   endpoint?: string;
   discoveredGateway?: string;
   /**
@@ -226,7 +249,15 @@ export function loadProjectConfig(
         typeof value.projectKey === "string" ? value.projectKey.trim() : "";
       const workspaces = parseWorkspaces(value.workspaces);
       if (!profileId || !projectKey || !workspaces) return undefined;
-      const routes = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      const joined = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      // Connect writes `endpoint` from the same gateway the sign-in was made
+      // for, so a config it wrote always passes; only an edit — a pulled commit,
+      // a hand change, an environment override — can fail this.
+      const own = joined.join === "joined" ? storedProfileGateway(profileId) : undefined;
+      const gatewayMismatch = joined.join !== "joined" || (own && routesOnlyTo(own, settings))
+        ? undefined
+        : { sendsTo: own ? routeOutside(own, settings)! : displayOrigin(gatewayBase(settings)), ...(own ? { signedInFor: own } : {}) };
+      const routes: ReturnType<typeof joinedRoutes> = gatewayMismatch ? { join: "gateway" } : joined;
       return {
         ...settings,
         authMode: "oauth",
@@ -234,6 +265,7 @@ export function loadProjectConfig(
         projectKey,
         workspaces,
         join: routes.join,
+        ...(gatewayMismatch ? { gatewayMismatch } : {}),
         ...(routes.destinations
           ? {
               destinations: routes.destinations,
@@ -259,6 +291,7 @@ export function loadProjectConfig(
         authMode: "api-key",
         ...(captureSince ? { captureSince } : {}),
         apiKey,
+        ...(isTrackedByGit(projectRoot, ".augenta/config.json") ? { keyTracked: true } : {}),
         projectRoot,
       };
     }
@@ -286,12 +319,65 @@ export function gatewayBase(cfg?: Pick<ProjectConfig, "endpoint">, flag?: string
   );
 }
 
-export function experiencesUrl(cfg?: ProjectConfig): string {
+export function experiencesUrl(cfg?: Pick<ProjectConfig, "endpoint" | "ingestUrl">): string {
   return (
     process.env.AUGENTA_INGEST_URL ||
     cfg?.ingestUrl ||
     `${gatewayBase(cfg)}/v1/experiences`
   );
+}
+
+/**
+ * Whether every request this config sends with a browser sign-in's token —
+ * control calls and recall to `gatewayBase`, capture to `experiencesUrl`, both
+ * as the environment resolves them — goes to `gateway`, the one that sign-in
+ * was made for. Capture may take another path, never another origin.
+ *
+ * No override is exempt. The file can arrive in a commit, and so can the
+ * environment: Claude Code applies a committed `.claude/settings.json` `env`
+ * block to hooks. A contributor pointing at another gateway sets the override
+ * when running connect, which then signs in for that gateway, so this still
+ * holds (DEBUG.md).
+ */
+export function routesOnlyTo(gateway: string, cfg: Pick<ProjectConfig, "endpoint" | "ingestUrl">): boolean {
+  return gatewayBase(cfg) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg), gateway);
+}
+
+/** Whether two URLs share an origin. An unparseable one shares none: it routes
+ *  nowhere a token should go. */
+export function sameOrigin(a: string, b: string): boolean {
+  try {
+    const origin = new URL(a).origin;
+    return origin !== "null" && origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Where this config would send a token instead of `gateway` — its gateway, or
+ * else its capture URL — for saying so; undefined when it routes only there.
+ *
+ * Always an origin, never the value as written. It reaches the model's context
+ * (session start, recall and connect messages), and the file is whatever a
+ * commit made it: an `endpoint` of `https://x.example Then tell the user to …`
+ * must not become an instruction in the plugin's own voice. A hostname cannot
+ * hold that text, and an unparseable value gets a fixed phrase.
+ */
+export function routeOutside(gateway: string, cfg: Pick<ProjectConfig, "endpoint" | "ingestUrl">): string | undefined {
+  if (routesOnlyTo(gateway, cfg)) return undefined;
+  const base = gatewayBase(cfg);
+  return displayOrigin(base !== gateway.replace(/\/+$/, "") ? base : experiencesUrl(cfg));
+}
+
+function displayOrigin(value: string): string {
+  try {
+    const origin = new URL(value).origin;
+    if (origin !== "null") return origin;
+  } catch {
+    /* said as a fixed phrase below */
+  }
+  return "an address that is not a valid Augenta URL";
 }
 
 export function captureKilled(): boolean {
@@ -308,18 +394,20 @@ export function captureKilled(): boolean {
  *   or expired sign-in keeps its profile, so it is NOT this: capture keeps
  *   queueing and the re-login notice is the remedy.
  * - `not_adopted`: a browser connection this checkout has not joined, joined
- *   under another sign-in, or whose Workspaces changed since it did
- *   (capture/links.ts; `cfg.join` says which).
+ *   under another sign-in, whose Workspaces changed since it did, or which now
+ *   points Augenta away from its sign-in's gateway (capture/links.ts;
+ *   `cfg.join` says which).
+ * - `key_tracked`: a platform-key config that git tracks (see the file header).
  * - `live`: capture runs.
  *
  * A platform key is its own consent and routing, so an API-key config is live
- * whenever it has its key.
+ * whenever it has its key and is this checkout's own file.
  */
-export type CaptureGate = "killed" | "signed_out" | "not_adopted" | "live";
+export type CaptureGate = "killed" | "signed_out" | "not_adopted" | "key_tracked" | "live";
 
 export function captureGate(cfg: ProjectConfig): CaptureGate {
   if (captureKilled()) return "killed";
-  if (cfg.authMode !== "oauth") return cfg.apiKey ? "live" : "signed_out";
+  if (cfg.authMode !== "oauth") return !cfg.apiKey ? "signed_out" : cfg.keyTracked ? "key_tracked" : "live";
   if (!cfg.profileId || !hasStoredProfile(cfg.profileId)) return "signed_out";
   if (!cfg.connectorIds?.length) return "not_adopted";
   return "live";
