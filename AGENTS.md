@@ -429,8 +429,14 @@ since teammates' sign-ins were made for discovery's gateway. Connect keeps a
 hand-set `ingestUrl` only on the gateway's origin, and `--adopt` refuses a config
 that routes elsewhere rather than joining it. Every config connect writes passes,
 because it writes `endpoint` from the gateway the sign-in was made for; a mismatch
-always means an edit. Every request that carries a browser token asserts its
-target is that sign-in's gateway (`assertSignInTarget`); a new one must too.
+always means an edit. Every request that carries a stored browser token asserts
+its target is that sign-in's gateway (`assertSignInTarget`); a new one must too.
+The one request that carries a token before it is stored — `verifyFreshLogin`'s
+`/v1/me` as a sign-in completes — goes to the gateway `resolveOAuth` vetted, and
+a pending sign-in is redeemed only for the gateway it was started for
+(`grantMismatch`), so the gateway named when a sign-in began is the one it goes
+to. `discoveredGateway` marks a gateway that is discovery's, however it was
+chosen; the production label is its only reader.
 
 **A Connector belongs to one person, so each person links their own.** The
 platform accepts records through a Connector only from its owner or an

@@ -73,7 +73,11 @@ function fire(payload: object, overrides: Record<string, string> = {}): string {
   // must never read the developer's real ~/.augenta/auth.json.
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
+    // DEBUG.md's levers, which a contributor may have exported: a gateway
+    // variable points every joined checkout away from its sign-in's gateway.
     AUGENTA_CONTROL_URL: "",
+    AUGENTA_API_URL: "",
+    AUGENTA_INGEST_URL: "",
     AUGENTA_HOME: home,
     AUGENTA_AUTH_HOME: join(home, ".augenta"),
     // Lasting unless a test says otherwise, even when the suite runs in a cloud session.

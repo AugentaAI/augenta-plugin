@@ -408,6 +408,17 @@ describe("project config writers", () => {
     expect(readFileSync(join(project, ".augenta", "config.json"), "utf8")).not.toContain("sk-aug-test");
   });
 
+  test("the API-key writer fails closed when git cannot answer inside a checkout", () => {
+    // A container or CI checkout git refuses over safe.directory, or a harness
+    // with a smaller PATH: no answer is the same verdict as "tracked", because a
+    // missing git must not open the guard that keeps the key out of a commit.
+    writeFileSync(join(project, ".git"), "gitdir: /nonexistent/augenta-test\n");
+    expect(() => writeApiKeyConfig(project, "sk-aug-test.secret")).toThrow("git gave no answer");
+    // Names both causes, not only a missing git: here git runs and refuses.
+    expect(() => writeApiKeyConfig(project, "sk-aug-test.secret")).toThrow("safe.directory");
+    expect(existsSync(join(project, ".augenta", "config.json"))).toBe(false);
+  });
+
   test("a user-authored .augenta/.gitignore is left exactly as it is", () => {
     mkdirSync(join(project, ".augenta"), { recursive: true });
     writeFileSync(join(project, ".augenta", ".gitignore"), "outbox/\n");
@@ -1081,6 +1092,9 @@ describe("JSON verbs", () => {
       const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, ...verb });
       expect(payload).toMatchObject({ status: "error", code: "gateway_override_unconfirmed" });
       expect(String(payload.message)).toContain("https://evil.example.com");
+      // Not in effect, so not disclosed as the gateway this run uses; the
+      // message names what was refused.
+      expect(payload).not.toHaveProperty("gatewayOverride");
     }
     // Discovery only: no token, no sign-in, nothing to the override.
     expect(requests.filter((request) => !request.includes("/.well-known/"))).toEqual([]);
@@ -1187,13 +1201,48 @@ describe("JSON verbs", () => {
     expect(existsSync(join(project, ".augenta", "state", "links.json"))).toBe(false);
   });
 
-  test("new connections mark discovery-derived endpoints but explicit overrides remain pinned", async () => {
+  test("a gateway that is discovery's is marked, however it was chosen", async () => {
+    // The marker's one reader is the production label: an unmarked production
+    // gateway reads as "not production" there.
     await signIn();
     route();
     expect((await runJsonVerb({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] })).status).toBe("connected");
     expect(loadProjectConfig(project)?.discoveredGateway).toBe(GATEWAY);
+    // An --endpoint, or AUGENTA_API_URL, that happens to equal discovery is not
+    // an override: marked, and not disclosed as one.
+    const flag = await runJsonVerb({ projectRoot: project }, { ...baseArgs, endpoint: GATEWAY, workspaces: ["ws-default"] });
+    expect(flag.status).toBe("connected");
+    expect(flag).not.toHaveProperty("gatewayOverride");
+    expect(loadProjectConfig(project)?.discoveredGateway).toBe(GATEWAY);
+    process.env.AUGENTA_API_URL = GATEWAY;
+    expect((await runJsonVerb({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] })).status).toBe("connected");
+    expect(loadProjectConfig(project)?.discoveredGateway).toBe(GATEWAY);
+    // The other half: a gateway that is NOT discovery's is written unmarked, so
+    // the production label cannot be minted for a dev or attacker-chosen one.
+    delete process.env.AUGENTA_API_URL;
+    route({ [`GET ${CONTROL}/.well-known/augenta.json`]: () =>
+      Response.json({ issuer: ISSUER, clientId: "client_public", gateway: "https://discovered.example.com" }) });
     expect((await runJsonVerb({ projectRoot: project }, { ...baseArgs, endpoint: GATEWAY, workspaces: ["ws-default"] })).status).toBe("connected");
     expect(loadProjectConfig(project)?.discoveredGateway).toBeUndefined();
+  });
+
+  test("an AUGENTA_INGEST_URL off the gateway's origin is refused, with or without --endpoint", async () => {
+    // It never chooses the gateway, but it wins over the file's ingestUrl in
+    // every hook, so the checkout this run connects would never route: the same
+    // never-captures outcome AUGENTA_API_URL is refused for.
+    await signIn();
+    route();
+    process.env.AUGENTA_INGEST_URL = "https://evil.example.com/v1/experiences";
+    const bare = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true });
+    expect(bare).toMatchObject({ status: "error", code: "gateway_override_conflict" });
+    expect(String(bare.message)).toContain("AUGENTA_INGEST_URL");
+    expect(String(bare.message)).toContain("https://evil.example.com");
+    const flagged = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true, endpoint: GATEWAY });
+    expect(flagged).toMatchObject({ status: "error", code: "gateway_override_conflict" });
+    expect(requests.filter((request) => !request.includes("/.well-known/"))).toEqual([]);
+    // Another path on the gateway's own origin is the documented lever, and stays allowed.
+    process.env.AUGENTA_INGEST_URL = `${GATEWAY}/v3/experiences`;
+    expect((await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true })).status).toBe("need_workspace");
   });
 
   test("probe identifies a platform-key connection without exposing or replacing its key", async () => {
@@ -1207,23 +1256,86 @@ describe("JSON verbs", () => {
     expect(readFileSync(path, "utf8")).toBe(saved);
   });
 
-  test("an explicit --endpoint still wins during an environment switch; the variable alone is refused", async () => {
+  test("an explicit --endpoint still wins during an environment switch; the variable alone, or against it, is refused", async () => {
     await signIn();
     writeOAuthConfig(project, {
       ...connectionRecord("saved", ["connector_new"], "https://old-gateway.example.com"),
       controlUrl: "https://old-control.example.com",
     });
-    process.env.AUGENTA_API_URL = "https://ignored.example.com";
     route({ [`GET ${CONTROL}/.well-known/augenta.json`]: () =>
       Response.json({ issuer: ISSUER, clientId: "client_public", gateway: "https://discovered.example.com" }) });
     const flag = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true, endpoint: GATEWAY });
-    expect(flag.status).toBe("need_workspace");
+    expect(flag).toMatchObject({ status: "need_workspace", gatewayOverride: GATEWAY });
     expect(requests).toContain(`GET ${GATEWAY}/v1/me`);
     requests.length = 0;
+    // The variable alone.
     process.env.AUGENTA_API_URL = GATEWAY;
-    const env = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true });
-    expect(env).toMatchObject({ status: "error", code: "gateway_override_unconfirmed" });
-    expect(requests.some((request) => request.includes(GATEWAY))).toBe(false);
+    expect(await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true }))
+      .toMatchObject({ status: "error", code: "gateway_override_unconfirmed" });
+    // The flag, with the variable left set to something else: every hook would
+    // resolve the variable, so the checkout would never route.
+    process.env.AUGENTA_API_URL = "https://leftover.example.com";
+    const conflict = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true, endpoint: GATEWAY });
+    expect(conflict).toMatchObject({ status: "error", code: "gateway_override_conflict" });
+    expect(String(conflict.message)).toContain("https://leftover.example.com");
+    expect(requests.filter((request) => !request.includes("/.well-known/"))).toEqual([]);
+    // The same gateway in both is fine.
+    process.env.AUGENTA_API_URL = GATEWAY;
+    expect((await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true, endpoint: GATEWAY })).status).toBe("need_workspace");
+  });
+
+  test("a network failure under --endpoint still names that gateway, and diagnoses it rather than discovery's", async () => {
+    const DOWN = "https://down.example.com";
+    // A sign-in made for the override, so connect reaches for it at /v1/me.
+    await saveDeviceProfile(
+      { issuer: ISSUER, clientId: "client_public", gateway: DOWN },
+      { accessToken: "access-live", refreshToken: "refresh-live", expiresAt: Date.now() + 3_600_000 },
+      { userId: TEST_USER_ID, orgId: "org_1" },
+    );
+    const refused = () => {
+      throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+    };
+    route({ [`GET ${DOWN}/v1/me`]: refused, [`GET ${ISSUER}/.well-known/openid-configuration`]: () => Response.json({ issuer: ISSUER }) });
+    const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, endpoint: DOWN, probe: true });
+    expect(payload).toMatchObject({ status: "error", code: "network_blocked", gatewayOverride: DOWN });
+    const hosts = (payload.hosts as Array<{ host: string; ok: boolean }>);
+    expect(hosts.find((host) => host.host === "down.example.com")).toMatchObject({ ok: false });
+    // Discovery's own gateway is not what was being reached, so not what is checked.
+    expect(hosts.some((host) => host.host === new URL(GATEWAY).host)).toBe(false);
+  });
+
+  test("a pending sign-in is redeemed only for the gateway it was started for", async () => {
+    // Redeeming it sends the new token to the gateway at once, so a grant begun
+    // with one gateway named must never finish at another.
+    const pending = {
+      deviceCode: "device-secret", userCode: "ABCD-EFGH", verificationUri: `${ISSUER}/device`,
+      issuer: ISSUER, clientId: "client_public", intervalMs: 1_000, expiresAt: Date.now() + 600_000,
+    };
+    route({ [`GET ${CONTROL}/.well-known/augenta.json`]: () =>
+      Response.json({ issuer: ISSUER, clientId: "client_public", gateway: "https://discovered.example.com" }) });
+    for (const [started, finish] of [
+      ["https://discovered.example.com", { endpoint: GATEWAY }],
+      [GATEWAY, {}],
+    ] as const) {
+      savePendingLogin({ ...pending, gateway: started });
+      requests.length = 0;
+      const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, awaitLogin: true, ...finish });
+      expect(payload).toMatchObject({ status: "error", code: "no_pending_login" });
+      expect(String(payload.message)).toContain("different Augenta gateway");
+      // Cancelled, and no token was polled for or sent anywhere.
+      expect(readPendingLogin()).toBeUndefined();
+      expect(requests.filter((request) => !request.includes("/.well-known/"))).toEqual([]);
+    }
+  });
+
+  test("the tracked-config check for an --endpoint connection fails closed when git cannot answer", async () => {
+    await signIn();
+    writeFileSync(join(project, ".git"), "gitdir: /nonexistent/augenta-test\n");
+    route({ [`GET ${CONTROL}/.well-known/augenta.json`]: () =>
+      Response.json({ issuer: ISSUER, clientId: "client_public", gateway: "https://discovered.example.com" }) });
+    const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, endpoint: GATEWAY, probe: true });
+    expect(payload).toMatchObject({ status: "error", code: "override_config_tracked" });
+    expect(requests.filter((request) => !request.includes("/.well-known/"))).toEqual([]);
   });
 
   test("reconnect keeps a hand-set ingest path only on the gateway's origin", async () => {

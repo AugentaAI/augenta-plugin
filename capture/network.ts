@@ -115,11 +115,13 @@ async function check(
  * document, the issuer's OpenID configuration, and the gateway's own JSON 401
  * for a request with no token. A proxy's refusal, or its 403 page, fails the
  * check. Hosts come from discovery; the production set stands in only when
- * discovery is unreachable and the control URL is production's.
+ * discovery is unreachable and the control URL is production's. `gateway`
+ * replaces discovery's when the run was reaching another one (`--endpoint`):
+ * the host to diagnose is the one that failed, not the one it would have used.
  */
 export async function diagnoseHosts(
   controlUrl: string,
-  options: { timeoutMs?: number; fetcher?: Fetch } = {},
+  options: { timeoutMs?: number; fetcher?: Fetch; gateway?: string } = {},
 ): Promise<HostCheck[]> {
   const timeoutMs = options.timeoutMs ?? 3_000;
   const fetcher = options.fetcher ?? ((url, init) => fetch(url, { ...init, signal: init.signal }));
@@ -137,6 +139,7 @@ export async function diagnoseHosts(
     issuer = PRODUCTION.issuer;
     gateway = PRODUCTION.gateway;
   }
+  if (options.gateway) gateway = options.gateway;
   const rest = await Promise.all([
     issuer
       ? check(fetcher, `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`, timeoutMs, (response, body) =>

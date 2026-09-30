@@ -12,6 +12,37 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.12.1] — 2026-09-30
+
+No reconnect is required, except for the one case in the first item.
+
+### Fixed
+
+- **Recall could again call production "not production"** for a project
+  connected while `AUGENTA_API_URL` or `--endpoint` named production's own
+  gateway. Connect now records that a gateway is the environment's own however it
+  was chosen. A project connected that way in 0.12.0 needs one reconnect to
+  correct the label.
+- **A sign-in now finishes only at the gateway it was started for.** A browser
+  sign-in begun for one gateway and completed under another `--endpoint`, or
+  without it, sent the new sign-in to the second one. It is now cancelled, with
+  nothing sent, and you start again.
+- **`--endpoint` is refused while `AUGENTA_API_URL` is set to a different
+  gateway.** The variable wins in every hook, so that checkout would never have
+  captured. Connecting with a browser sign-in is likewise refused while
+  `AUGENTA_INGEST_URL` points off the gateway's own origin, which left the same
+  checkout connected but silent.
+- **An `--endpoint` connection, or a platform-key config, is refused for a
+  `config.json` that git may be tracking** when git gives no answer, rather than
+  written anyway. The messages now name both causes: `git` missing from the
+  coding app's PATH, or git refusing the repository, usually a checkout owned by
+  another user (git's `safe.directory`).
+- **The gateway-override warning before sign-in is shown only when the gateway
+  really differs** from the environment's own, and never on a refusal.
+- **When connect cannot reach an `--endpoint` gateway, it says which one**, and
+  checks that gateway rather than the environment's, instead of reporting Augenta
+  itself as unreachable.
+
 ## [0.12.0] — 2026-09-30
 
 ### Upgrading
@@ -487,6 +518,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.12.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.1...v0.10.2

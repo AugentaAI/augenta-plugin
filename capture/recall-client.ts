@@ -896,7 +896,7 @@ export async function askWorkspaces(searchRoot: string, request: RecallRequest):
         "key_tracked",
         cfg.keyTracked === "tracked"
           ? "this project's .augenta/config.json holds a platform key and git tracks it, so recall sends nothing from it; if the key is yours, untrack the file with git rm --cached .augenta/config.json"
-          : "this project's .augenta/config.json holds a platform key, and git could not be run here to confirm the repository does not track it, so recall sends nothing from it; make git available to the coding app",
+          : "this project's .augenta/config.json holds a platform key, and git gave no answer here on whether the repository tracks it, so recall sends nothing from it; either git is not on the coding app's PATH or it refuses this repository (see git's safe.directory for a checkout owned by another user) — `git status` there shows which",
       );
     }
     if (request.workspaces?.length) {
