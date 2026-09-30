@@ -342,8 +342,8 @@ describe("boundExperienceSize", () => {
     const exp = doc("oversized", "😊".repeat(MAX_EXPERIENCE_BYTES));
     const out = boundExperienceSize(exp);
     expect(out).toHaveLength(1);
-    expect(out[0]!.data.text.endsWith(DOCUMENT_TRUNCATION_MARKER)).toBe(true);
-    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(out[0]!.data.text)).toBe(false);
+    expect(out[0]!.data.text!.endsWith(DOCUMENT_TRUNCATION_MARKER)).toBe(true);
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(out[0]!.data.text!)).toBe(false);
     expect(Buffer.byteLength(JSON.stringify(out[0]), "utf8")).toBeLessThanOrEqual(MAX_EXPERIENCE_BYTES);
   });
 

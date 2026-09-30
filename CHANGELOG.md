@@ -12,6 +12,34 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.13.0] — 2026-09-30
+
+**Upgrade every installed harness before enabling attachments.** An older plugin
+sharing a project's queue can silently skip attachment records. Codex asks you to
+trust the changed hooks again.
+
+Existing connections keep activity and memory capture with attachments disabled.
+Reconnect or join again in each checkout to enable documents after the updated
+disclosure. No earlier transcript history is rescanned. PDF bytes are not
+secret-scrubbed and every selected Workspace receives them.
+
+### Added
+
+- Supplied text documents and PDFs supplied or referenced in supported file-tool
+  records are saved as separate documents, including generated/temporary PDFs
+  and page-range Read references. Images stay placeholders.
+- Text is scrubbed and split below 512 KiB. Oversized PDFs are skipped whole;
+  missing, changing or unreadable files are skipped. Attachment health is shown
+  separately. Set `AUGENTA_CAPTURE_ATTACHMENTS=0` to pause new documents.
+- Duplicate documents are omitted and older conflicting revisions are refused,
+  using the originating transcript time. Local attachment state is capped at
+  4 MiB and advances only after the queue accepts the documents.
+
+### Fixed
+
+- Queue draining handles document kinds safely and bounds each pending slice to
+  2 MiB, allowing one larger legacy record alone so delivery keeps progressing.
+
 ## [0.12.2] — 2026-09-30
 
 No reconnect or renewed hook approval is required.
@@ -530,6 +558,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.13.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.12.2...v0.13.0
 [0.12.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.11.0...v0.12.0

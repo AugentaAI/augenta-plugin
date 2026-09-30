@@ -241,6 +241,25 @@ change in words instead — "pairs with the platform change that pages
 
 ## Privacy invariants
 
+**Attachment capture requires this checkout's own consent.** Successful connect
+or adopt discloses supplied text documents and PDFs supplied or referenced in
+supported file-tool records (including generated and temporary PDFs), then
+records `attachmentsConsentedAt` in OAuth checkout links or the untracked API-key
+config. A committed browser config never grants it. Old connections keep their
+current activity/memory capture with attachments off. The originating transcript
+timestamp and, for a mention, initiating prompt must follow consent; never use
+now or rescan earlier history for attachments. Text is scrubbed, whole PDFs are
+not secret-scrubbed, and every selected Workspace receives them. Images stay
+placeholders, including with `AUGENTA_CAPTURE_ATTACHMENTS=all`. The main capture
+kill switch and `AUGENTA_CAPTURE_ATTACHMENTS=0|off|false` stop new attachments.
+Read only supported-record paths as bounded, stable regular-file snapshots; no
+network request or directory scan. Compaction restoration is not a fresh supply.
+Documents append with trajectory under the capture lock; attachment state changes
+only after that append is accepted. Bound the validated atomic index to 4 MiB
+by evicting oldest observations. Upgrade every installed harness before enabling
+attachments: older shippers can silently skip attachment records. Batch hook
+manifest changes once and document Codex's renewed trust prompt.
+
 Augenta remains opt-in per project. Do not change telemetry APIs, payloads,
 consent semantics, or capture behavior without an explicit product decision.
 OAuth tokens stay in the owner-only global `~/.augenta/auth.json`; a connected
@@ -475,7 +494,7 @@ and `--workspace` are separate calls and are refused together.
 **More than one destination is a stronger disclosure, not the same one repeated.**
 Before the user answers, and again when confirming, they are told that every
 selected Workspace receives the **full record** — the same activity, raw
-transcript lines, and memory documents, complete, in each — so the effective
+transcript lines, memory documents and consented attachments, complete, in each — so the effective
 audience is the **union** of everyone with access to any of them. When more than
 one is selected, the confirmation also restates that raw transcript records are
 structurally sanitized but not secret-scrubbed. Destinations dropped from the set

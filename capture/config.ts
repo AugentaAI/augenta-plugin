@@ -50,6 +50,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { hasStoredProfile, storedProfileGateway, storedProfileUserId } from "./auth";
 import { readLinks } from "./links";
+import { documentTimestamp } from "./documents";
 import { gitTracking, resolveProjectRoot } from "./project";
 import { displayOrigin, sameOrigin } from "./url";
 export { resolveProjectRoot } from "./project";
@@ -108,6 +109,8 @@ export interface ProjectConfig {
   authMode: AuthMode;
   /** When capture began here. For a browser connection, when this checkout joined. */
   captureSince?: string;
+  /** This checkout's attachment consent, never taken from a shared browser config. */
+  attachmentsConsentedAt?: string;
   profileId?: string;
   /** A browser project's identity, shared by every checkout of it. Each person's
    *  Connectors carry it, which is how a fresh checkout finds its user's own. */
@@ -198,7 +201,7 @@ function joinedRoutes(
   profileId: string,
   projectKey: string,
   workspaces: readonly RecordedWorkspace[],
-): { join: JoinState; destinations?: Destination[]; joinedAt?: string } {
+): { join: JoinState; destinations?: Destination[]; joinedAt?: string; attachmentsConsentedAt?: string } {
   const links = readLinks(projectRoot);
   if (!links || links.projectKey !== projectKey) return { join: "none" };
   if (links.profileId !== profileId || storedProfileUserId(profileId) !== links.userId) return { join: "signin" };
@@ -209,7 +212,7 @@ function joinedRoutes(
     destinations.push({ connectorId: link.connectorId, ...workspace });
   }
   if (links.links.length !== workspaces.length) return { join: "workspaces" };
-  return { join: "joined", destinations, joinedAt: links.joinedAt };
+  return { join: "joined", destinations, joinedAt: links.joinedAt, attachmentsConsentedAt: links.attachmentsConsentedAt };
 }
 
 export function configPath(projectRoot: string): string {
@@ -223,6 +226,7 @@ export function loadProjectConfig(
     const value = JSON.parse(readFileSync(configPath(projectRoot), "utf8")) as {
       authMode?: unknown;
       captureSince?: unknown;
+      attachmentsConsentedAt?: unknown;
       profileId?: unknown;
       projectKey?: unknown;
       workspaces?: unknown;
@@ -291,6 +295,7 @@ export function loadProjectConfig(
               destinations: routes.destinations,
               connectorIds: routes.destinations.map((destination) => destination.connectorId),
               captureSince: routes.joinedAt,
+              ...(routes.attachmentsConsentedAt ? { attachmentsConsentedAt: routes.attachmentsConsentedAt } : {}),
             }
           : {}),
         projectRoot,
@@ -310,6 +315,7 @@ export function loadProjectConfig(
         ...settings,
         authMode: "api-key",
         ...(captureSince ? { captureSince } : {}),
+        ...(documentTimestamp(value.attachmentsConsentedAt) ? { attachmentsConsentedAt: documentTimestamp(value.attachmentsConsentedAt) } : {}),
         apiKey,
         ...keyTracking(projectRoot),
         projectRoot,
@@ -447,4 +453,9 @@ export function captureEnabled(cfg: ProjectConfig | undefined): boolean {
  */
 export function effectiveCaptureSince(cfg: ProjectConfig): string | undefined {
   return cfg.captureSince;
+}
+
+/** Documents only, including when a caller sets the reserved value `all`. */
+export function attachmentCaptureMode(env: NodeJS.ProcessEnv = process.env): "off" | "documents" {
+  return ["0", "off", "false"].includes((env.AUGENTA_CAPTURE_ATTACHMENTS ?? "").trim().toLowerCase()) ? "off" : "documents";
 }

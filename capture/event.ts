@@ -149,13 +149,33 @@ export interface AgentMemoryDocument {
   chunkCount: number;
 }
 
+interface AttachmentMetadata {
+  kind: "agent-attachment";
+  documentId: string;
+  sourcePath: string;
+  title: string;
+  format: "text/plain" | "text/markdown" | "application/pdf";
+  origin: "mention" | "prompt" | "read";
+  revision: string;
+  capturedAt: string;
+  deleted: false;
+  chunkIndex: number;
+  chunkCount: number;
+}
+
+/** Supplied text or an observed PDF; PDF bytes are not secret-scrubbed. */
+export type AgentAttachmentDocument = AttachmentMetadata & (
+  { text: string; encoding?: never; content?: never; mediaType?: never } |
+  { encoding: "base64"; content: string; mediaType: "application/pdf"; text?: never }
+);
+
 /** A standalone document experience. Documents deliberately have no `events` field. */
 export interface DocumentExperience {
   src: EventSource;
   sid: string;
   proj: string;
   type: "doc";
-  data: AgentMemoryDocument;
+  data: AgentMemoryDocument | AgentAttachmentDocument;
 }
 
 /** Any experience accepted by the `/v1/experiences` endpoint. */

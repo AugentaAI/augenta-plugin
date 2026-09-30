@@ -112,7 +112,7 @@ describe("Claude Code memory discovery", () => {
     expect(captured.every((doc) => Buffer.byteLength(JSON.stringify(doc), "utf8") < MAX_DOCUMENT_EXPERIENCE_BYTES)).toBe(true);
     expect(captured.map((doc) => doc.data.chunkIndex)).toEqual(captured.map((_doc, index) => index));
     expect(new Set(captured.map((doc) => doc.data.chunkCount))).toEqual(new Set([captured.length]));
-    expect(captured.every((doc) => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(doc.data.text))).toBe(true);
+    expect(captured.every((doc) => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(doc.data.text!))).toBe(true);
     expect(captured.map((doc) => doc.data.text).join("")).toBe(source);
   });
 
