@@ -89,7 +89,8 @@ async function oauthProject(expiresAt = Date.now() + 3_600_000) {
   writeOAuthProject(project, {
     profileId,
     destinations: [{ connectorId: "connector_a", workspaceId: "ws-default", workspaceName: "Default Workspace" }],
-    extra: { endpoint: GATEWAY },
+    // As connect writes a production project: the endpoint is discovery's.
+    extra: { endpoint: GATEWAY, discoveredGateway: GATEWAY },
   });
   return profileId;
 }
@@ -197,6 +198,8 @@ describe("runAutoRecall: gated like capture, asked like recall", () => {
     route({ [`POST ${GATEWAY}/v1/recall`]: () => memory("remembered") });
     const context = await run();
     expect(context).toContain("## Default Workspace: remembered notes");
+    // Production's discovered gateway is production, not a named environment.
+    expect(context).not.toContain("not production");
     expect(requests.map((r) => `${r.method} ${r.url.split("?")[0]}`)).toEqual([
       `GET ${GATEWAY}/v1/connectors/connector_a`,
       `POST ${GATEWAY}/v1/recall`,
@@ -204,6 +207,19 @@ describe("runAutoRecall: gated like capture, asked like recall", () => {
     for (const request of requests) expect(request.headers.get("authorization")).toBe("Bearer access-live");
     expect(JSON.parse(recallCalls()[0]!.body!)).toEqual({ query: PROMPT, workspace: "ws-default" });
     expect(existsSync(join(authHome, "auth.lock"))).toBe(false);
+  });
+
+  test("a config pointed away from the sign-in's gateway sends neither the prompt nor the stored token", async () => {
+    const profileId = await oauthProject();
+    // A pulled commit moved the endpoint and vouched for it with the marker.
+    writeOAuthProject(project, {
+      profileId,
+      destinations: [{ connectorId: "connector_a", workspaceId: "ws-default", workspaceName: "Default Workspace" }],
+      extra: { endpoint: "https://evil.example.com", discoveredGateway: "https://evil.example.com" },
+    });
+    route();
+    expect(await run()).toBeUndefined();
+    expect(requests).toEqual([]);
   });
 
   test("a disabled link sends no question", async () => {

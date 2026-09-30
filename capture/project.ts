@@ -39,14 +39,26 @@ function gitRevParse(cwd: string, arg: string): string | undefined {
  *  when git is absent, the directory is not a checkout, or the file is
  *  untracked. Never throws. */
 export function isTrackedByGit(projectRoot: string, relativePath: string): boolean {
+  return gitTracks(projectRoot, relativePath) === true;
+}
+
+/**
+ * Whether git tracks `relativePath`: true or false when git answered, and
+ * undefined when it could not — not on this process's PATH (a desktop harness
+ * can hand hooks a smaller one), or refusing the repository (`safe.directory`).
+ * `ls-files --error-unmatch` exits 1 for an untracked path; anything else is
+ * no answer. A caller guarding something git would reveal decides what an
+ * unanswered question means. Never throws.
+ */
+export function gitTracks(projectRoot: string, relativePath: string): boolean | undefined {
   try {
     execFileSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
       cwd: projectRoot,
       stdio: "ignore",
     });
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return (error as { status?: unknown }).status === 1 ? false : undefined;
   }
 }
 

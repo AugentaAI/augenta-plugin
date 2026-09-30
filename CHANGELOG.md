@@ -12,6 +12,53 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.12.0] — 2026-09-30
+
+### Upgrading
+
+- **A project connected normally needs nothing.** No reconnect is required, and
+  Codex does not ask to approve the hooks again.
+- **A browser-connected project stops capturing if it is pointed somewhere its
+  sign-in was not made for.** That covers a hand-edited `endpoint` in
+  `.augenta/config.json` or an `ingestUrl` on another host (run connect in it
+  again), and `AUGENTA_API_URL` or `AUGENTA_INGEST_URL` set to another address
+  (unset it).
+- **`AUGENTA_API_URL` alone no longer chooses a gateway for connect.** When it
+  names a different gateway than the environment's, connect stops with nothing
+  sent. To use another gateway, pass `--endpoint` when you connect; that
+  project's `config.json` then stays out of git.
+- **A platform-key `.augenta/config.json` that git tracks stops capturing and
+  recalling.** Untrack it with `git rm --cached .augenta/config.json`. Inside a
+  repository, a platform-key project also needs `git` on the coding app's PATH,
+  able to read that repository (for example, not refused as a `safe.directory`),
+  so the plugin can check; otherwise capture stays off and the session says why.
+
+### Security
+
+- **Your Augenta sign-in is sent only to the address it was made for.** Before
+  this, a change to a committed `.augenta/config.json`, or an `AUGENTA_API_URL`
+  set by a committed `.claude/settings.json`, could send each teammate's sign-in,
+  captured transcripts, project memory and recall questions to another server,
+  with no warning. Now a checkout that would send anywhere else sends nothing,
+  and the next session says where it points and what to undo. Connect takes the
+  gateway from the environment's own sign-in, or from `--endpoint` given when
+  connecting, and says so — and names a non-production environment — before you
+  sign in, since signing in sends your new sign-in there straight away. Joining a
+  config that points elsewhere is refused.
+- **A committed platform-key config no longer captures.** A key config added to
+  git anyway sent the capture of everyone who pulled it to that key's Workspace.
+  A tracked key config is now off, and the next session says so once.
+
+### Fixed
+
+- Recall no longer says a production project's Workspaces are "not production".
+  Recall compared the project's gateway against an old production address
+  instead of the one production's sign-in names, so every browser-connected
+  production project was labelled `https://api.augenta.ai`, both in the automatic
+  recall block and in `/augenta:recall` answers. A project really pointed at
+  another Augenta environment, or at another gateway with `AUGENTA_API_URL`, is
+  still named.
+
 ## [0.11.0] — 2026-09-29
 
 ### Upgrading
@@ -440,6 +487,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.12.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.0...v0.10.1

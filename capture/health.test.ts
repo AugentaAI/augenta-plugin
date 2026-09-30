@@ -1,10 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { captureHealth, recordHealth } from "./health";
 import { drain } from "./ship";
 import { Outbox } from "./outbox";
+import { TEST_USER_ID, writeOAuthProject } from "../__tests__/fixtures";
 const dirs: string[] = [];
 const project = () => { const p = mkdtempSync(join(tmpdir(), "aug-health-")); dirs.push(p); return p; };
 afterEach(() => { for (const p of dirs.splice(0)) rmSync(p, { recursive: true, force: true }); });
@@ -23,6 +25,45 @@ test("configuration is not proof of dispatch; health excludes secrets and identi
   expect(value).toMatchObject({ configuration: "valid", capture: { outcome: "missing_transcript" }, nextStep: "check_host_transcript_payload", hostDispatch: "unverified" });
   expect(JSON.stringify(value)).not.toContain("secret-canary");
   expect(JSON.stringify(value)).not.toContain(p);
+});
+
+test("a tracked platform key is diagnosed as itself, not as a missing host hook", () => {
+  const p = project(); mkdirSync(join(p, ".augenta"));
+  writeFileSync(join(p, ".augenta/config.json"), JSON.stringify({ authMode: "api-key", apiKey: "k" }));
+  execFileSync("git", ["init", "-q"], { cwd: p });
+  execFileSync("git", ["add", "-f", ".augenta/config.json"], { cwd: p });
+  // Capture never ran, so dispatch is absent — the host-approval advice must not win.
+  expect(captureHealth(p)).toMatchObject({ enabled: false, gate: "key_tracked", dispatch: null, nextStep: "untrack_config" });
+});
+
+test("a checkout pointed away from its sign-in's gateway is not told to adopt, which would be refused", () => {
+  const p = project();
+  const auth = project();
+  const previous = { home: process.env.AUGENTA_AUTH_HOME, ingest: process.env.AUGENTA_INGEST_URL };
+  process.env.AUGENTA_AUTH_HOME = auth;
+  try {
+    writeFileSync(join(auth, "auth.json"), JSON.stringify({ version: 1, profiles: { profile_1: {
+      gateway: "https://gw.example.com", userId: TEST_USER_ID, orgId: "org_1", accessToken: "a", refreshToken: "r",
+      expiresAt: Date.now() + 3_600_000, updatedAt: new Date().toISOString() } } }));
+    const joined = (endpoint: string) => writeOAuthProject(p, {
+      profileId: "profile_1", destinations: [{ connectorId: "c1", workspaceId: "ws-1" }], extra: { endpoint } });
+    joined("https://evil.example.com");
+    expect(captureHealth(p)).toMatchObject({ enabled: false, gate: "not_adopted", destinations: 0, nextStep: "review_config_gateway" });
+    joined("https://gw.example.com");
+    process.env.AUGENTA_INGEST_URL = "https://evil.example.com/v1/experiences";
+    expect(captureHealth(p)).toMatchObject({ enabled: false, nextStep: "unset_gateway_override" });
+  } finally {
+    for (const [key, value] of [["AUGENTA_AUTH_HOME", previous.home], ["AUGENTA_INGEST_URL", previous.ingest]] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+test("a platform key git cannot vouch for is diagnosed as that, and routes nowhere", () => {
+  const p = project(); mkdirSync(join(p, ".augenta"));
+  writeFileSync(join(p, ".augenta/config.json"), JSON.stringify({ authMode: "api-key", apiKey: "k" }));
+  writeFileSync(join(p, ".git"), "gitdir: /nonexistent/augenta-test\n");
+  expect(captureHealth(p)).toMatchObject({ enabled: false, gate: "key_tracked", destinations: 0, nextStep: "make_git_available" });
 });
 
 test("invalid configuration does not masquerade as an unconnected or enabled project", () => {

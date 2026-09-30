@@ -34,8 +34,8 @@ var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, 
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // capture/capture.ts
-import { existsSync as existsSync10, openSync as openSync2, fstatSync, readSync, closeSync as closeSync2 } from "node:fs";
-import { basename as basename2, dirname as dirname6, join as join13 } from "node:path";
+import { existsSync as existsSync11, openSync as openSync2, fstatSync, readSync, closeSync as closeSync2 } from "node:fs";
+import { basename as basename2, dirname as dirname7, join as join14 } from "node:path";
 
 // capture/auto-recall-marker.ts
 var AUTO_RECALL_SENTINEL = "[augenta-recall:v1]";
@@ -1064,13 +1064,13 @@ function captureLock(projectRoot) {
 }
 
 // capture/health.ts
-import { existsSync as existsSync6, mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join9 } from "node:path";
+import { existsSync as existsSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "node:fs";
+import { join as join10 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 
 // capture/config.ts
 import { readFileSync as readFileSync7 } from "node:fs";
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 
 // capture/auth.ts
 import {
@@ -1168,6 +1168,23 @@ async function diagnoseHosts(controlUrl, options = {}) {
     gateway ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) => response.status === 401 && typeof body?.error === "string") : undefined
   ]);
   return [discovery, ...rest.filter((item) => Boolean(item))];
+}
+
+// capture/url.ts
+function urlOrigin(value) {
+  try {
+    const origin = new URL(value).origin;
+    return origin === "null" ? undefined : origin;
+  } catch {
+    return;
+  }
+}
+function sameOrigin(a, b) {
+  const origin = urlOrigin(a);
+  return origin !== undefined && origin === urlOrigin(b);
+}
+function displayOrigin(value) {
+  return urlOrigin(value) ?? "an address that is not a valid Augenta URL";
 }
 
 // runtime/node.ts
@@ -1539,13 +1556,15 @@ function getAuthProfile(profileId) {
 function reusableProfiles(config) {
   return Object.entries(readAuthStore().profiles).filter(([, profile]) => profile.issuer.replace(/\/+$/, "") === config.issuer.replace(/\/+$/, "") && profile.clientId === config.clientId && profile.gateway.replace(/\/+$/, "") === config.gateway.replace(/\/+$/, "")).map(([profileId, profile]) => ({ profileId, profile })).sort((a, b) => b.profile.updatedAt.localeCompare(a.profile.updatedAt));
 }
-async function accessTokenForProfile(profileId, forceRefresh = false) {
+async function accessTokenForProfile(profileId, forceRefresh = false, target) {
   return withAuthLock(async () => {
     const store = readAuthStore();
     const profile = store.profiles[profileId];
     if (!profile) {
       throw new ReLoginRequiredError("the Augenta sign-in is missing; run augenta:connect again");
     }
+    if (target !== undefined)
+      assertSignInTarget(profileId, target, profile.gateway);
     if (!forceRefresh && profile.expiresAt > Date.now() + 60000) {
       return profile.accessToken;
     }
@@ -1582,6 +1601,10 @@ function storedProfileUserId(profileId) {
   const userId = storedProfile(profileId)?.userId;
   return typeof userId === "string" && userId ? userId : undefined;
 }
+function storedProfileGateway(profileId) {
+  const gateway = storedProfile(profileId)?.gateway;
+  return typeof gateway === "string" && gateway.trim() ? gateway.trim().replace(/\/+$/, "") : undefined;
+}
 function storedProfile(profileId) {
   try {
     const parsed = JSON.parse(readFileSync5(authPath(), "utf8"));
@@ -1592,9 +1615,15 @@ function storedProfile(profileId) {
     return;
   }
 }
+function assertSignInTarget(profileId, url, gateway = storedProfileGateway(profileId)) {
+  const own = gateway?.trim().replace(/\/+$/, "") || undefined;
+  if (!own || !sameOrigin(url, own)) {
+    throw new Error(`refusing to send this Augenta sign-in to ${displayOrigin(url)}: it was made for ${own ? displayOrigin(own) : "a gateway this machine does not record"}`);
+  }
+}
 async function fetchWithProfile(profileId, url, init = {}) {
   const send = async (forceRefresh) => {
-    const accessToken = await accessTokenForProfile(profileId, forceRefresh);
+    const accessToken = await accessTokenForProfile(profileId, forceRefresh, url);
     return fetch(url, {
       ...init,
       signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -1642,15 +1671,53 @@ function takeAuthNotice(projectRoot) {
   return found;
 }
 
+// capture/environment.ts
+import { existsSync as existsSync5 } from "node:fs";
+import { dirname as dirname2, join as join6, resolve as resolve2 } from "node:path";
+function sessionEnvironment(env = process.env) {
+  const declared = env.AUGENTA_EPHEMERAL?.trim().toLowerCase();
+  if (declared === "0" || declared === "false")
+    return { ephemeral: false, signals: ["AUGENTA_EPHEMERAL=0"] };
+  const signals = [];
+  let kind;
+  if (env.CLAUDE_CODE_REMOTE === "true") {
+    signals.push("CLAUDE_CODE_REMOTE");
+    kind ??= "claude-cloud";
+  }
+  if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {
+    signals.push("CODEX_HOME=/opt/codex (heuristic)");
+    kind ??= "codex-cloud";
+  }
+  if (declared === "1" || declared === "true") {
+    signals.push("AUGENTA_EPHEMERAL=1");
+    kind ??= "declared";
+  }
+  return { ephemeral: signals.length > 0, ...kind ? { kind } : {}, signals };
+}
+function insideGitCheckout(dir) {
+  let current = resolve2(dir);
+  while (true) {
+    if (existsSync5(join6(current, ".git")))
+      return true;
+    const parent = dirname2(current);
+    if (parent === current)
+      return false;
+    current = parent;
+  }
+}
+function ephemeralProject(projectRoot, env = process.env) {
+  return sessionEnvironment(env).ephemeral && !insideGitCheckout(projectRoot);
+}
+
 // capture/links.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { mkdirSync as mkdirSync6, readFileSync as readFileSync6, renameSync as renameSync4, rmSync, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 function linksPath(projectRoot) {
-  return join6(projectRoot, ".augenta", "state", "links.json");
+  return join7(projectRoot, ".augenta", "state", "links.json");
 }
 function legacyAdoptionPath(projectRoot) {
-  return join6(projectRoot, ".augenta", "state", "adopted.json");
+  return join7(projectRoot, ".augenta", "state", "adopted.json");
 }
 var nonEmpty = (value) => typeof value === "string" && value.length > 0;
 function readLinks(projectRoot) {
@@ -1686,9 +1753,9 @@ function readLinks(projectRoot) {
   }
 }
 function writeLinks(projectRoot, links) {
-  const dir = join6(ensureAugentaDir(projectRoot), "state");
+  const dir = join7(ensureAugentaDir(projectRoot), "state");
   mkdirSync6(dir, { recursive: true });
-  const path = join6(dir, "links.json");
+  const path = join7(dir, "links.json");
   const tmp = `${path}.${randomUUID2()}.tmp`;
   try {
     writeFileSync6(tmp, JSON.stringify({
@@ -1708,8 +1775,8 @@ function writeLinks(projectRoot, links) {
 
 // capture/project.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync5, realpathSync as realpathSync2 } from "node:fs";
-import { dirname as dirname2, join as join7, resolve as resolve2 } from "node:path";
+import { existsSync as existsSync6, realpathSync as realpathSync2 } from "node:fs";
+import { dirname as dirname3, join as join8, resolve as resolve3 } from "node:path";
 function gitRevParse(cwd, arg) {
   try {
     const value = execFileSync("git", ["rev-parse", arg], {
@@ -1722,14 +1789,17 @@ function gitRevParse(cwd, arg) {
   }
 }
 function isTrackedByGit(projectRoot, relativePath) {
+  return gitTracks(projectRoot, relativePath) === true;
+}
+function gitTracks(projectRoot, relativePath) {
   try {
     execFileSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
       cwd: projectRoot,
       stdio: "ignore"
     });
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return error.status === 1 ? false : undefined;
   }
 }
 function resolveProjectRoot(cwd) {
@@ -1742,11 +1812,11 @@ function resolveProjectRoot(cwd) {
     return;
   }
   while (true) {
-    if (existsSync5(join7(dir, ".augenta", "config.json")))
+    if (existsSync6(join8(dir, ".augenta", "config.json")))
       return dir;
-    if (existsSync5(join7(dir, ".git")))
+    if (existsSync6(join8(dir, ".git")))
       return;
-    const parent = dirname2(dir);
+    const parent = dirname3(dir);
     if (parent === dir)
       return;
     dir = parent;
@@ -1754,7 +1824,7 @@ function resolveProjectRoot(cwd) {
 }
 function resolveProject(args, cwd) {
   if (args.project)
-    return { projectRoot: resolve2(cwd, args.project) };
+    return { projectRoot: resolve3(cwd, args.project) };
   const configured = resolveProjectRoot(cwd);
   if (configured)
     return { projectRoot: configured };
@@ -1827,7 +1897,7 @@ function joinedRoutes(projectRoot, profileId, projectKey, workspaces) {
   return { join: "joined", destinations, joinedAt: links.joinedAt };
 }
 function configPath(projectRoot) {
-  return join8(projectRoot, ".augenta", "config.json");
+  return join9(projectRoot, ".augenta", "config.json");
 }
 function loadProjectConfig(projectRoot) {
   try {
@@ -1863,7 +1933,14 @@ function loadProjectConfig(projectRoot) {
       const workspaces = parseWorkspaces(value.workspaces);
       if (!profileId || !projectKey || !workspaces)
         return;
-      const routes = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      const joined = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      const own = joined.join === "joined" ? storedProfileGateway(profileId) : undefined;
+      const gatewayMismatch = joined.join !== "joined" || own && routesOnlyTo(own, settings) ? undefined : {
+        sendsTo: own ? routeOutside(own, settings) : displayOrigin(gatewayBase(settings)),
+        ...own ? { signedInFor: own } : {},
+        cause: own && fileRoutesOnlyTo(own, settings) ? "environment" : "file"
+      };
+      const routes = gatewayMismatch ? { join: "gateway" } : joined;
       return {
         ...settings,
         authMode: "oauth",
@@ -1871,6 +1948,7 @@ function loadProjectConfig(projectRoot) {
         projectKey,
         workspaces,
         join: routes.join,
+        ...gatewayMismatch ? { gatewayMismatch } : {},
         ...routes.destinations ? {
           destinations: routes.destinations,
           connectorIds: routes.destinations.map((destination) => destination.connectorId),
@@ -1895,6 +1973,7 @@ function loadProjectConfig(projectRoot) {
         authMode: "api-key",
         ...captureSince ? { captureSince } : {},
         apiKey,
+        ...keyTracking(projectRoot),
         projectRoot
       };
     }
@@ -1916,6 +1995,31 @@ function gatewayBase(cfg, flag) {
 function experiencesUrl(cfg) {
   return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
 }
+function routesOnlyTo(gateway, cfg) {
+  return gatewayBase(cfg) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg), gateway);
+}
+function fileRoutesOnlyTo(gateway, cfg) {
+  const base = (cfg.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+  return base === gateway.replace(/\/+$/, "") && sameOrigin(cfg.ingestUrl || `${base}/v1/experiences`, gateway);
+}
+function routeOutside(gateway, cfg) {
+  if (routesOnlyTo(gateway, cfg))
+    return;
+  const base = gatewayBase(cfg);
+  const elsewhere = base !== gateway.replace(/\/+$/, "") ? base : experiencesUrl(cfg);
+  return sameOrigin(elsewhere, gateway) ? `another path on ${displayOrigin(gateway)}` : displayOrigin(elsewhere);
+}
+function describeGatewayMismatch(mismatch) {
+  return mismatch.signedInFor ? `${mismatch.sendsTo}, not ${displayOrigin(mismatch.signedInFor)}, the gateway this checkout's sign-in was made for` : `${mismatch.sendsTo}, which this checkout's sign-in does not record as its gateway`;
+}
+function keyTracking(projectRoot) {
+  const tracked = gitTracks(projectRoot, ".augenta/config.json");
+  if (tracked === true)
+    return { keyTracked: "tracked" };
+  if (tracked === undefined && insideGitCheckout(projectRoot))
+    return { keyTracked: "unverified" };
+  return {};
+}
 function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
   return value === "0" || value === "false";
@@ -1924,7 +2028,7 @@ function captureGate(cfg) {
   if (captureKilled())
     return "killed";
   if (cfg.authMode !== "oauth")
-    return cfg.apiKey ? "live" : "signed_out";
+    return !cfg.apiKey ? "signed_out" : cfg.keyTracked ? "key_tracked" : "live";
   if (!cfg.profileId || !hasStoredProfile(cfg.profileId))
     return "signed_out";
   if (!cfg.connectorIds?.length)
@@ -1943,7 +2047,7 @@ var STAGES = ["dispatch", "capture", "delivery"];
 var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
 function read(projectRoot, stage) {
   try {
-    const s = JSON.parse(readFileSync8(join9(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    const s = JSON.parse(readFileSync8(join10(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
     if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
       return;
     return {
@@ -1959,7 +2063,7 @@ function read(projectRoot, stage) {
 }
 function recordHealth(projectRoot, stage, outcome, count = 0) {
   try {
-    const dir = join9(ensureAugentaDir(projectRoot), "state");
+    const dir = join10(ensureAugentaDir(projectRoot), "state");
     mkdirSync7(dir, { recursive: true });
     const old = read(projectRoot, stage);
     const at = new Date().toISOString();
@@ -1971,7 +2075,7 @@ function recordHealth(projectRoot, stage, outcome, count = 0) {
       successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
       ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
     };
-    const file = join9(dir, `health-${stage}.json`);
+    const file = join10(dir, `health-${stage}.json`);
     const tmp = `${file}.${randomUUID3()}.tmp`;
     writeFileSync7(tmp, JSON.stringify(value), { mode: 384 });
     renameSync5(tmp, file);
@@ -1985,30 +2089,30 @@ function captureHealth(projectRoot) {
     configured: !!cfg,
     enabled: gate === "live",
     ...gate ? { gate } : {},
-    configuration: cfg ? "valid" : existsSync6(join9(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    configuration: cfg ? "valid" : existsSync7(join10(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
     activityScope: "project",
     hostDispatch: "unverified",
-    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg ? 1 : 0,
+    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg && !cfg.keyTracked ? 1 : 0,
     pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
     ...activity,
     hostApproval: "unknown",
     ingestion: "unverified",
-    nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in" : gate === "not_adopted" ? "adopt" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
+    nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in" : cfg.gatewayMismatch ? cfg.gatewayMismatch.cause === "environment" ? "unset_gateway_override" : "review_config_gateway" : gate === "not_adopted" ? "adopt" : gate === "key_tracked" ? cfg.keyTracked === "tracked" ? "untrack_config" : "make_git_available" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
   };
 }
 
 // capture/turn-cursor.ts
-import { join as join10, dirname as dirname3 } from "node:path";
-import { mkdirSync as mkdirSync8, existsSync as existsSync7, readFileSync as readFileSync9, writeFileSync as writeFileSync8, renameSync as renameSync6 } from "node:fs";
+import { join as join11, dirname as dirname4 } from "node:path";
+import { mkdirSync as mkdirSync8, existsSync as existsSync8, readFileSync as readFileSync9, writeFileSync as writeFileSync8, renameSync as renameSync6 } from "node:fs";
 class TurnState {
   path;
   projectRoot;
   constructor(projectRoot) {
     this.projectRoot = projectRoot;
-    this.path = join10(projectRoot, ".augenta", "state", "turn.json");
+    this.path = join11(projectRoot, ".augenta", "state", "turn.json");
   }
   readAll() {
-    if (!existsSync7(this.path))
+    if (!existsSync8(this.path))
       return {};
     try {
       const parsed = JSON.parse(readFileSync9(this.path, "utf8"));
@@ -2019,7 +2123,7 @@ class TurnState {
   }
   writeAll(all) {
     ensureAugentaDir(this.projectRoot);
-    mkdirSync8(dirname3(this.path), { recursive: true });
+    mkdirSync8(dirname4(this.path), { recursive: true });
     const tmp = this.path + ".tmp";
     writeFileSync8(tmp, JSON.stringify(all));
     renameSync6(tmp, this.path);
@@ -2040,7 +2144,7 @@ class TurnState {
 // capture/memory.ts
 import { createHash as createHash2 } from "node:crypto";
 import {
-  existsSync as existsSync8,
+  existsSync as existsSync9,
   lstatSync,
   mkdirSync as mkdirSync9,
   readFileSync as readFileSync10,
@@ -2052,7 +2156,7 @@ import {
   writeFileSync as writeFileSync9
 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { basename, dirname as dirname4, extname, isAbsolute, join as join11, relative, resolve as resolve3, sep } from "node:path";
+import { basename, dirname as dirname5, extname, isAbsolute, join as join12, relative, resolve as resolve4, sep } from "node:path";
 var MAX_DOCUMENT_EXPERIENCE_BYTES = 512 * 1024;
 function sameSnapshot(before, after) {
   return before.dev === after.dev && before.ino === after.ino && before.mode === after.mode && before.size === after.size && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs;
@@ -2061,7 +2165,7 @@ function sha256(input) {
   return createHash2("sha256").update(input).digest("hex");
 }
 function memoryStatePath(projectRoot) {
-  return join11(projectRoot, ".augenta", "state", "memory.json");
+  return join12(projectRoot, ".augenta", "state", "memory.json");
 }
 function validEntry(value) {
   const e = value;
@@ -2085,8 +2189,8 @@ function readMemoryIndex(projectRoot) {
   }
 }
 function writeMemoryIndex(projectRoot, index) {
-  const stateDir = join11(ensureAugentaDir(projectRoot), "state");
-  const path = join11(stateDir, "memory.json");
+  const stateDir = join12(ensureAugentaDir(projectRoot), "state");
+  const path = join12(stateDir, "memory.json");
   const tmp = path + ".tmp";
   try {
     mkdirSync9(stateDir, { recursive: true });
@@ -2110,9 +2214,9 @@ function normalizeLogicalPath(path) {
 function scanClaudeMemory(transcriptPath) {
   if (!transcriptPath)
     return { complete: false, documents: [] };
-  const root = join11(dirname4(transcriptPath), "memory");
+  const root = join12(dirname5(transcriptPath), "memory");
   try {
-    if (!existsSync8(root) || !lstatSync(root).isDirectory())
+    if (!existsSync9(root) || !lstatSync(root).isDirectory())
       return { complete: false, documents: [] };
   } catch {
     return { complete: false, documents: [] };
@@ -2134,7 +2238,7 @@ function scanClaudeMemory(transcriptPath) {
       return;
     }
     for (const entry of entries) {
-      const path = join11(dir, entry.name);
+      const path = join12(dir, entry.name);
       if (entry.isSymbolicLink())
         continue;
       if (entry.isDirectory()) {
@@ -2180,18 +2284,18 @@ function scanClaudeMemory(transcriptPath) {
 var MAX_SYMLINK_HOPS = 40;
 function symlinkTarget(path) {
   try {
-    return lstatSync(path).isSymbolicLink() ? resolve3(dirname4(path), readlinkSync(path)) : undefined;
+    return lstatSync(path).isSymbolicLink() ? resolve4(dirname5(path), readlinkSync(path)) : undefined;
   } catch {
     return;
   }
 }
 function physicalPath(path) {
-  let existing = resolve3(path);
+  let existing = resolve4(path);
   const missing = [];
   let hops = 0;
   while (true) {
     try {
-      return join11(realpathSync3(existing), ...missing);
+      return join12(realpathSync3(existing), ...missing);
     } catch {}
     const target = symlinkTarget(existing);
     if (target !== undefined) {
@@ -2200,9 +2304,9 @@ function physicalPath(path) {
       existing = target;
       continue;
     }
-    const parent = dirname4(existing);
+    const parent = dirname5(existing);
     if (parent === existing)
-      return resolve3(path);
+      return resolve4(path);
     missing.unshift(basename(existing));
     existing = parent;
   }
@@ -2283,10 +2387,10 @@ function codexHomeFromRollout(transcriptPath) {
   return match?.[1];
 }
 function scanCodexMemory(projectRoot, codexHome, transcriptPath) {
-  const root = codexHome ?? process.env.CODEX_HOME ?? codexHomeFromRollout(transcriptPath) ?? join11(homedir2(), ".codex");
-  const path = join11(root, "memories", "MEMORY.md");
+  const root = codexHome ?? process.env.CODEX_HOME ?? codexHomeFromRollout(transcriptPath) ?? join12(homedir2(), ".codex");
+  const path = join12(root, "memories", "MEMORY.md");
   try {
-    if (!existsSync8(path))
+    if (!existsSync9(path))
       return { complete: false, documents: [] };
     const linkBefore = lstatSync(path);
     const before = statSync4(path);
@@ -2309,7 +2413,7 @@ function scanCodexMemory(projectRoot, codexHome, transcriptPath) {
 function documentId(source, projectRoot, candidate) {
   const taskGroup = candidate.taskGroup;
   const discriminator = taskGroup ? `\x00${taskGroup.header}\x00${taskGroup.scope}` : "";
-  return sha256(`${source}\x00${resolve3(projectRoot)}\x00${candidate.sourcePath}${discriminator}`);
+  return sha256(`${source}\x00${resolve4(projectRoot)}\x00${candidate.sourcePath}${discriminator}`);
 }
 function revision(text, deleted) {
   return sha256(`${deleted ? "deleted" : "live"}\x00${text}`);
@@ -2476,15 +2580,15 @@ function captureAgentMemory(opts) {
 
 // capture/shipper.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync9 } from "node:fs";
-import { dirname as dirname5, join as join12 } from "node:path";
+import { existsSync as existsSync10 } from "node:fs";
+import { dirname as dirname6, join as join13 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function shipperEntry() {
   const self = fileURLToPath2(import.meta.url);
   const ext = self.endsWith(".ts") ? ".ts" : ".mjs";
-  const here = dirname5(self);
-  const sibling = join12(here, `ship${ext}`);
-  return existsSync9(sibling) ? sibling : join12(here, "..", "capture", `ship${ext}`);
+  const here = dirname6(self);
+  const sibling = join13(here, `ship${ext}`);
+  return existsSync10(sibling) ? sibling : join13(here, "..", "capture", `ship${ext}`);
 }
 function spawnShipper(projectRoot) {
   try {
@@ -2597,12 +2701,12 @@ function resolveCaptureTarget(payload) {
   const agentId = payload.agent_id;
   const agentType = payload.agent_type;
   const supplied = payload.agent_transcript_path;
-  if (supplied && existsSync10(supplied))
+  if (supplied && existsSync11(supplied))
     return { transcriptPath: supplied, agentId, agentType };
   if (!sessionTranscript || !agentId)
     return { transcriptPath: undefined };
-  const derived = join13(dirname6(sessionTranscript), basename2(sessionTranscript, ".jsonl"), "subagents", `agent-${agentId}.jsonl`);
-  return existsSync10(derived) ? { transcriptPath: derived, agentId, agentType } : { transcriptPath: undefined };
+  const derived = join14(dirname7(sessionTranscript), basename2(sessionTranscript, ".jsonl"), "subagents", `agent-${agentId}.jsonl`);
+  return existsSync11(derived) ? { transcriptPath: derived, agentId, agentType } : { transcriptPath: undefined };
 }
 function captureUnderLock(payload, opts = {}) {
   const projectRoot = opts.projectRoot ?? resolveProjectRoot(payload.cwd);
@@ -2630,7 +2734,7 @@ function captureUnderLock(payload, opts = {}) {
       spawnShipper(projectRoot);
     return { appended, flushed: flush };
   };
-  if (!transcriptPath || !existsSync10(transcriptPath)) {
+  if (!transcriptPath || !existsSync11(transcriptPath)) {
     recordHealth(projectRoot, "capture", "missing_transcript");
     return finish(0);
   }

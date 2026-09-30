@@ -44,13 +44,20 @@ export function captureHealth(projectRoot: string) {
   return { configured: !!cfg, enabled: gate === "live", ...(gate ? { gate } : {}),
     configuration: cfg ? "valid" : existsSync(join(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
     activityScope: "project", hostDispatch: "unverified",
-    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg ? 1 : 0,
+    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg && !cfg.keyTracked ? 1 : 0,
     pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
     ...activity,
     // Local plugin state cannot establish host approval or lake persistence.
     hostApproval: "unknown", ingestion: "unverified",
+    // key_tracked is not connect's to fix, so it must not fall through to the
+    // activity checks: a tracked key never captures, so dispatch is always
+    // absent and the host-approval advice would be the wrong diagnosis.
+    // A checkout pointed away from its sign-in's gateway is not one to adopt:
+    // --adopt refuses it, and the fix depends on whether the file or a variable
+    // moved (cfg.gatewayMismatch.cause).
     nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in"
-      : gate === "not_adopted" ? "adopt" : !activity.dispatch
+      : cfg.gatewayMismatch ? (cfg.gatewayMismatch.cause === "environment" ? "unset_gateway_override" : "review_config_gateway")
+      : gate === "not_adopted" ? "adopt" : gate === "key_tracked" ? (cfg.keyTracked === "tracked" ? "untrack_config" : "make_git_available") : !activity.dispatch
       ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript"
       ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity" };
 }

@@ -42,10 +42,11 @@ import {
   controlUrl,
   gatewayBase,
   loadProjectConfig,
+  describeGatewayMismatch,
   resolveProjectRoot,
   type ProjectConfig,
 } from "./config";
-import { REQUEST_TIMEOUT_MS, fetchWithProfile, getAuthProfile, ReLoginRequiredError } from "./auth";
+import { REQUEST_TIMEOUT_MS, assertSignInTarget, fetchWithProfile, getAuthProfile, ReLoginRequiredError, storedProfileGateway } from "./auth";
 import {
   AugentaRequestError,
   describeError,
@@ -666,12 +667,31 @@ export function aggregateStatus(payload: {
  * environment with. Recall never touches the control plane: it posts to the
  * GATEWAY the project config points at. So a project connected to dev, run
  * without an override, uses its recorded control URL. Either coordinate being
- * non-default is enough to say so.
+ * non-production is enough to say so.
+ *
+ * Production's gateway is whatever production's discovery names, which connect
+ * records as `discoveredGateway` — not `DEFAULT_GATEWAY`, which only stands in
+ * where there was no discovery (a platform key). Comparing against the default
+ * alone called every browser-connected production project "not production".
+ * The marker vouches only for a config recorded against production: a dev
+ * config under a production `AUGENTA_CONTROL_URL` still posts to dev's gateway,
+ * and a gateway override differs from the marker, so both are still named.
+ *
+ * The marker is trusted, not verified: both comparands come from the same file.
+ * What bounds that is the sign-in check in config.ts (`routesOnlyTo`): a browser
+ * checkout sends nothing unless its resolved gateway is the one its stored
+ * sign-in was made for. When that check has rejected the config (`join` is
+ * `gateway`), the marker is vouching for a gateway already refused, so it is not
+ * trusted and the refusal names the host. For a checkout that is joined the
+ * gateway already IS the sign-in's, so checking the marker against the
+ * owner-only `~/.augenta/auth.json` would add nothing: at worst a hand-set
+ * marker calls a gateway this person signed in for themselves production.
  */
 export function recallEnvironment(gateway: string, cfg?: ProjectConfig): string {
   const label = environmentLabel(controlUrl(cfg));
   if (label !== "prod") return label;
-  return gateway === DEFAULT_GATEWAY ? "prod" : gateway;
+  const discovered = environmentLabel(cfg?.controlUrl) === "prod" && cfg?.join !== "gateway" ? cfg?.discoveredGateway : undefined;
+  return gateway === DEFAULT_GATEWAY || gateway === discovered ? "prod" : gateway;
 }
 
 /**
@@ -783,19 +803,32 @@ export async function askWorkspaces(searchRoot: string, request: RecallRequest):
     // config carries destinations only while this checkout's own links name
     // exactly the recorded Workspaces under the sign-in stored here (config.ts).
     if (!cfg.destinations?.length) {
+      // Joined, but pointed away from the sign-in's own gateway: the question,
+      // and the token with it, would go wherever the file or environment says.
+      const mismatch = cfg.gatewayMismatch;
       return bail(
         "not_joined",
         "not_joined",
-        "this checkout has not joined its project's Augenta connection; run the connect skill here to confirm its Workspaces first",
+        mismatch
+          ? `this project's Augenta requests would go to ${describeGatewayMismatch(mismatch)}, so nothing was sent; ${
+              mismatch.cause === "environment"
+                ? "AUGENTA_API_URL or AUGENTA_INGEST_URL is doing that, and reconnecting will not change it: unset it (check any committed .claude/settings.json)"
+                : "run the connect skill here to point it back"
+            }`
+          : "this checkout has not joined its project's Augenta connection; run the connect skill here to confirm its Workspaces first",
       );
     }
-    /* Looked up at call time, never captured: tests swap `globalThis.fetch`. */
+    /* Looked up at call time, never captured: tests swap `globalThis.fetch`.
+       The stored-token path checks each target against the sign-in's gateway,
+       read once here rather than on every request (fetchWithProfile checks on
+       the profile it reads anyway). */
+    const signedInFor = bearer !== undefined ? storedProfileGateway(profileId) : undefined;
     fetcher = bearer !== undefined
-      ? (target, init) => fetch(target, {
+      ? (target, init) => (assertSignInTarget(profileId, target, signedInFor), fetch(target, {
           ...init,
           signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
           headers: { ...(init.headers as Record<string, string> | undefined), authorization: `Bearer ${bearer}` },
-        })
+        }))
       : (target, init) => fetchWithProfile(profileId, target, init);
     destinations = (cfg.destinations ?? []).map((destination) => ({ ...destination }));
     if (request.workspaces?.length) {
@@ -855,6 +888,17 @@ export async function askWorkspaces(searchRoot: string, request: RecallRequest):
       names = fetchAllWorkspaces(profileId, gateway).catch(() => [] as Workspace[]);
     }
   } else {
+    if (cfg.keyTracked) {
+      // A committed key would ask whatever Workspace its owner assigned it to,
+      // on behalf of everyone who pulls it (config.ts).
+      return bail(
+        "error",
+        "key_tracked",
+        cfg.keyTracked === "tracked"
+          ? "this project's .augenta/config.json holds a platform key and git tracks it, so recall sends nothing from it; if the key is yours, untrack the file with git rm --cached .augenta/config.json"
+          : "this project's .augenta/config.json holds a platform key, and git could not be run here to confirm the repository does not track it, so recall sends nothing from it; make git available to the coding app",
+      );
+    }
     if (request.workspaces?.length) {
       // A platform key is assigned to exactly one Connector, which is anchored to
       // exactly one Workspace: the key's assignment IS the route, so there is no

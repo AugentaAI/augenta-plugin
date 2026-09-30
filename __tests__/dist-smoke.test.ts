@@ -23,6 +23,8 @@ import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Outbox } from "../capture/outbox";
+import { TEST_USER_ID, writeOAuthProject } from "./fixtures";
 
 const DIST = join(import.meta.dir, "..", "dist");
 const CLAUDE_TP = "C:/Users/x/.claude/projects/enc/sess-1.jsonl";
@@ -215,6 +217,56 @@ describe("user-prompt", () => {
 });
 
 describe("ship", () => {
+  /** A joined browser checkout whose sign-in was made for `signedInFor`, and
+   *  whose config sends to `endpoint`, with one captured line queued. Runs the
+   *  shipped shipper under Node and returns what reached `endpoint`'s server. */
+  async function shipOnce(pointAway: boolean): Promise<string[]> {
+    const seen: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (request) => {
+        const body = await request.text();
+        seen.push(`${request.method} ${new URL(request.url).pathname} ${request.headers.get("authorization")?.split(" ")[0] ?? "none"}${body.includes("PRIVATE LINE") ? " +transcript" : ""}`);
+        return Response.json({ accepted: 1 });
+      },
+    });
+    try {
+      const listener = `http://127.0.0.1:${server.port}`;
+      const auth = join(home, "auth");
+      mkdirSync(auth, { recursive: true });
+      writeFileSync(join(auth, "auth.json"), JSON.stringify({ version: 1, profiles: { profile_1: {
+        issuer: "https://auth.example.com", clientId: "client_public",
+        // The sign-in's own gateway: the listener only in the control run.
+        gateway: pointAway ? "https://gw.example.com" : listener,
+        userId: TEST_USER_ID, orgId: "org_1", accessToken: "access-live", refreshToken: "refresh-live",
+        expiresAt: Date.now() + 3_600_000, updatedAt: new Date().toISOString(),
+      } } }));
+      writeOAuthProject(project, {
+        profileId: "profile_1",
+        destinations: [{ connectorId: "connector_a", workspaceId: "ws-default" }],
+        // As a pulled commit would leave it: endpoint moved, marker vouching.
+        extra: { endpoint: listener, discoveredGateway: listener },
+      });
+      new Outbox(project).append([{ src: "claude-code", sid: "s1", proj: project, ts: new Date().toISOString(), seq: 0, kind: "msg", role: "user", text: "PRIVATE LINE" }]);
+      const env: Record<string, string> = { ...(process.env as Record<string, string>), AUGENTA_HOME: home, AUGENTA_AUTH_HOME: auth };
+      for (const key of ["AUGENTA_API_URL", "AUGENTA_INGEST_URL", "AUGENTA_CONTROL_URL", "AUGENTA_CAPTURE_ENABLED"]) delete env[key];
+      // Async: the listener answers on this process's event loop.
+      const proc = Bun.spawn(["node", join(DIST, "capture/ship.mjs"), project], { env, stdout: "pipe", stderr: "pipe" });
+      expect(await proc.exited).toBe(0);
+      return seen;
+    } finally {
+      server.stop(true);
+    }
+  }
+
+  test("a joined checkout whose config points away from its sign-in's gateway sends nothing", async () => {
+    // Control: the same checkout pointed at its own gateway delivers, with the
+    // token and the transcript line — so an empty list below means refused.
+    expect(await shipOnce(false)).toContain("POST /v1/experiences Bearer +transcript");
+    rmSync(join(project, ".augenta"), { recursive: true, force: true });
+    expect(await shipOnce(true)).toEqual([]);
+  });
+
   test("no argv and no config: exits 0 without shipping anything", () => {
     const r = run("capture/ship.mjs", []);
     expect(r.exitCode).toBe(0);

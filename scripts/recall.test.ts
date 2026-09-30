@@ -27,6 +27,7 @@ import {
   type RecallArgs,
 } from "./recall";
 import { saveDeviceProfile } from "../capture/auth";
+import { gatewayBase, type ProjectConfig } from "../capture/config";
 
 const RECALL = join(import.meta.dir, "recall.ts");
 const realFetch = globalThis.fetch;
@@ -1309,15 +1310,65 @@ describe("recorded destinations and live recall", () => {
     process.env.AUGENTA_CONTROL_URL = "https://override.example.com";
     expect((await runRecall({ projectRoot: project }, args())).environment).toBe("https://override.example.com");
     process.env.AUGENTA_CONTROL_URL = "https://augenta.ai";
+    // Not a lever that moves the token: the sign-in was made for GATEWAY, so a
+    // gateway override leaves this checkout unjoined and sends nothing at all.
     process.env.AUGENTA_API_URL = "https://other-gateway.example.com";
-    route({ ["GET https://other-gateway.example.com/v1/connectors/connector_a"]: () => typedError(404, "not_found", "wrong environment") });
+    requests = [];
     const overridden = await runRecall({ projectRoot: project }, args());
     expect(overridden.environment).toBe("https://other-gateway.example.com");
-    expect(overridden.unresolvedConnectorIds).toEqual(["connector_a"]);
+    expect(overridden).toMatchObject({ status: "not_joined", code: "not_joined" });
+    expect(overridden.message).toContain(`go to https://other-gateway.example.com, not ${GATEWAY}, the gateway this checkout's sign-in was made for`);
+    // Only the variable points away, so the remedy is unsetting it.
+    expect(overridden.message).toContain("reconnecting will not change it");
+    expect(requests).toEqual([]);
+  });
+
+  test("a config that points away from the sign-in's gateway sends neither the question nor the token", async () => {
+    // A pulled commit rewrote the endpoint and vouches for it with the marker.
+    await configure(["connector_a"], { endpoint: "https://evil.example.com", discoveredGateway: "https://evil.example.com" });
+    route();
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload).toMatchObject({ status: "not_joined" });
+    expect(payload.message).toContain("https://evil.example.com");
+    // The marker vouches for a gateway the sign-in check refused: not prod.
+    expect(payload.environment).toBe("https://evil.example.com");
+    expect(requests).toEqual([]);
+  });
+
+  test("a capture URL on another origin is refused the same way", async () => {
+    await configure(["connector_a"], { ingestUrl: "https://evil.example.com/v1/experiences" });
+    route();
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload).toMatchObject({ status: "not_joined" });
+    // Named by origin only: the rest is text a commit chose.
+    expect(payload.message).toContain("go to https://evil.example.com, not");
+    expect(requests).toEqual([]);
+  });
+
+  test("a project connected to production reports prod", async () => {
+    // As connect writes it: the endpoint is discovery's gateway, marked so.
+    await configure(["connector_a"], { discoveredGateway: GATEWAY });
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => memoryResponse("a") });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload.status).toBe("answered");
+    expect(payload.environment).toBe("prod");
   });
 });
 
 describe("platform-key projects", () => {
+  test("a key config git tracks sends nothing", async () => {
+    // `git add -f` defeats the writer's refusal; a pulled key would otherwise ask
+    // its owner's Workspace on behalf of everyone who pulls it.
+    writeConfig({ authMode: "api-key", apiKey: "sk-aug-live.secret", endpoint: GATEWAY });
+    spawnSync("git", ["init", "-q"], { cwd: project });
+    spawnSync("git", ["add", "-f", ".augenta/config.json"], { cwd: project });
+    route();
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload).toMatchObject({ status: "error", code: "key_tracked" });
+    expect(JSON.stringify(payload)).not.toContain("sk-aug-live");
+    expect(requests).toEqual([]);
+  });
+
   test("send the key, no Workspace, and no bearer", async () => {
     // The key's Connector assignment IS the route, exactly as the shipper treats
     // it — so the body is the question alone.
@@ -1380,6 +1431,42 @@ describe("recallEnvironment", () => {
     // Restored by afterEach along with the caller's own value.
     process.env.AUGENTA_CONTROL_URL = "https://control.example.com";
     expect(recallEnvironment("https://anything")).toBe("https://control.example.com");
+  });
+
+  /** What connect writes for production: discovery's gateway, marked as such. */
+  const production = (extra: Partial<ProjectConfig> = {}): ProjectConfig => ({
+    authMode: "oauth",
+    projectRoot: "/p",
+    controlUrl: "https://augenta.ai",
+    endpoint: "https://api.augenta.ai",
+    discoveredGateway: "https://api.augenta.ai",
+    ...extra,
+  });
+
+  test("the gateway production's discovery named is production", () => {
+    // The reported bug: discovery names api.augenta.ai, which is not the
+    // built-in default, and recall called production "not production".
+    expect(recallEnvironment("https://api.augenta.ai", production())).toBe("prod");
+    // A config written with the default control URL left implicit.
+    expect(recallEnvironment("https://api.augenta.ai", production({ controlUrl: undefined }))).toBe("prod");
+  });
+
+  test("a gateway override on a production project is still named", () => {
+    process.env.AUGENTA_API_URL = "https://dev-gateway.example.com";
+    const cfg = production();
+    expect(recallEnvironment(gatewayBase(cfg), cfg)).toBe("https://dev-gateway.example.com");
+  });
+
+  test("a dev project's discovered gateway does not become production under a production override", () => {
+    // Connected to dev, so the marker is DEV's discovery answer; pointing the
+    // control URL at production does not move where recall posts.
+    process.env.AUGENTA_CONTROL_URL = "https://augenta.ai";
+    const cfg = production({
+      controlUrl: "https://control.example.com",
+      endpoint: "https://dev-gateway.example.com",
+      discoveredGateway: "https://dev-gateway.example.com",
+    });
+    expect(recallEnvironment(gatewayBase(cfg), cfg)).toBe("https://dev-gateway.example.com");
   });
 });
 
