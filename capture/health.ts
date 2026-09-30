@@ -49,8 +49,11 @@ export function captureHealth(projectRoot: string) {
     ...activity,
     // Local plugin state cannot establish host approval or lake persistence.
     hostApproval: "unknown", ingestion: "unverified",
+    // key_tracked is not connect's to fix, so it must not fall through to the
+    // activity checks: a tracked key never captures, so dispatch is always
+    // absent and the host-approval advice would be the wrong diagnosis.
     nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in"
-      : gate === "not_adopted" ? "adopt" : !activity.dispatch
+      : gate === "not_adopted" ? "adopt" : gate === "key_tracked" ? "untrack_config" : !activity.dispatch
       ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript"
       ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity" };
 }

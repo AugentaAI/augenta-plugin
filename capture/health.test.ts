@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { captureHealth, recordHealth } from "./health";
 import { drain } from "./ship";
@@ -23,6 +24,15 @@ test("configuration is not proof of dispatch; health excludes secrets and identi
   expect(value).toMatchObject({ configuration: "valid", capture: { outcome: "missing_transcript" }, nextStep: "check_host_transcript_payload", hostDispatch: "unverified" });
   expect(JSON.stringify(value)).not.toContain("secret-canary");
   expect(JSON.stringify(value)).not.toContain(p);
+});
+
+test("a tracked platform key is diagnosed as itself, not as a missing host hook", () => {
+  const p = project(); mkdirSync(join(p, ".augenta"));
+  writeFileSync(join(p, ".augenta/config.json"), JSON.stringify({ authMode: "api-key", apiKey: "k" }));
+  execFileSync("git", ["init", "-q"], { cwd: p });
+  execFileSync("git", ["add", "-f", ".augenta/config.json"], { cwd: p });
+  // Capture never ran, so dispatch is absent — the host-approval advice must not win.
+  expect(captureHealth(p)).toMatchObject({ enabled: false, gate: "key_tracked", dispatch: null, nextStep: "untrack_config" });
 });
 
 test("invalid configuration does not masquerade as an unconnected or enabled project", () => {

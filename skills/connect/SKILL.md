@@ -326,7 +326,10 @@ Creation and connection are separate calls: never pass `--create-workspace` and
 ## 4. Confirm
 
 Connector creation proves configuration only. After the next completed turn,
-run the same installed `dist/scripts/connect.mjs` with `--project <projectRoot> --json --health` to check activity. A `nextStep` of `sign_in` means this machine has no saved sign-in for the project, and `adopt` means this checkout has not joined its connection (see step 1); both are fixed by running connect again here. If dispatch is absent, direct the user to
+run the same installed `dist/scripts/connect.mjs` with `--project <projectRoot> --json --health` to check activity. A `nextStep` of `sign_in` means this machine has no saved sign-in for the project, and `adopt` means this checkout has not joined its connection (see step 1); both are fixed by running connect again here. A `nextStep` of `untrack_config` means
+this project's config holds a platform key that git tracks: connect cannot fix that,
+so tell the user to untrack it with `git rm --cached .augenta/config.json` if the key
+is theirs, and never ask for the key in the chat. If dispatch is absent, direct the user to
 review the plugin hooks in their host and follow its activation/restart guidance.
 Never change host trust records or invoke capture/delivery manually as proof.
 Report API acceptance separately from verified ingestion.
