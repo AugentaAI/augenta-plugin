@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,6 +19,41 @@ afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+describe("hook Node runner: a proxy the environment names reaches Node", () => {
+  /** A fake node that, as the bundle, prints the proxy settings it was started with. */
+  const reporter = () => executable(`#!/bin/sh
+if [ "$1" = "-e" ]; then exit 0; fi
+printf 'USE=%s\\nWARN=%s\\nCA=%s\\n' "\${NODE_USE_ENV_PROXY:-}" "\${NODE_NO_WARNINGS:-}" "\${NODE_EXTRA_CA_CERTS:-}"
+`);
+  const run = (extra: Record<string, string>) => {
+    // Built from nothing, so a proxy in the developer's own shell cannot leak in.
+    const result = Bun.spawnSync(["sh", RUNNER, "/tmp/hook.mjs"], {
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: "/nonexistent", AUGENTA_NODE: reporter(), ...extra },
+    });
+    expect(result.exitCode).toBe(0);
+    return Object.fromEntries(result.stdout.toString().trim().split("\n").map((line) => line.split(/=(.*)/s).slice(0, 2)));
+  };
+
+  test("no proxy: nothing is set", () => {
+    expect(run({})).toEqual({ USE: "", WARN: "", CA: "" });
+  });
+
+  test("a proxy in any spelling turns on Node's env-proxy support and quiets its notice", () => {
+    for (const name of ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]) {
+      const seen = run({ [name]: "http://127.0.0.1:3128" });
+      expect(seen.USE, name).toBe("1");
+      expect(seen.WARN, name).toBe("1");
+      // Only ever a file Node can read, or nothing at all.
+      if (seen.CA) expect(existsSync(seen.CA)).toBe(true);
+    }
+  });
+
+  test("values the environment already chose are left alone", () => {
+    expect(run({ HTTPS_PROXY: "http://p:1", NODE_USE_ENV_PROXY: "0", NODE_NO_WARNINGS: "0", NODE_EXTRA_CA_CERTS: "/mine.pem" }))
+      .toEqual({ USE: "0", WARN: "0", CA: "/mine.pem" });
+  });
 });
 
 describe("hook Node runner", () => {

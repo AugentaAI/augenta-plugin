@@ -17,6 +17,7 @@
  */
 import { fetchWithProfile } from "./auth";
 import { DEFAULT_CONTROL_URL } from "./config";
+import { classifyNetworkError, DiscoveryError } from "./network";
 
 export interface Workspace {
   id: string;
@@ -32,6 +33,15 @@ export interface Connector {
   orgId: string;
   _etag?: string;
   harness?: string;
+  name?: string;
+  projectName?: string;
+  client?: string;
+  description?: string;
+  /** The person the link belongs to. Records through it are accepted only from
+   *  them or an organization manager, so connect adopts only its user's own. */
+  ownerUserId?: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
 }
 
 export class AugentaRequestError extends Error {
@@ -201,19 +211,28 @@ export function environmentLabel(controlUrl?: string): string {
  */
 export function describeError(error: unknown): string {
   const message = (error as Error)?.message ?? String(error);
+  // Its message already names the host and what answered for it.
+  if (error instanceof DiscoveryError) return message;
+  // The whole cause chain, not one level: a proxy's refusal sits two levels
+  // down, beneath a "Request was cancelled." that names nothing (network.ts).
+  const failure = classifyNetworkError(error);
+  switch (failure?.kind) {
+    case "proxy_refused":
+      return `cannot reach Augenta: a proxy refused the connection (${failure.status}). This network's allowlist may block Augenta's hosts.`;
+    case "dns":
+      return "cannot reach Augenta: the host name did not resolve. Check your network or DNS.";
+    case "refused":
+      return "cannot reach Augenta: the connection was refused. Check the URL, and any proxy or firewall.";
+    case "reset":
+      return "cannot reach Augenta: the connection was cut. Check any proxy or firewall.";
+    case "timeout":
+      return "cannot reach Augenta: no answer in time. Check your network, and any proxy or firewall.";
+    case "tls":
+      return "cannot reach Augenta: the TLS certificate could not be verified. Check for a TLS-intercepting proxy.";
+  }
   if (message !== "fetch failed") return message;
   const cause = (error as { cause?: { code?: string; message?: string } }).cause;
-  const code = cause?.code;
-  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
-    return "cannot reach Augenta: the host name did not resolve. Check your network or DNS.";
-  }
-  if (code === "ECONNREFUSED") {
-    return "cannot reach Augenta: the connection was refused. Check the URL, and any proxy or firewall.";
-  }
-  if (code === "CERT_HAS_EXPIRED" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {
-    return "cannot reach Augenta: the TLS certificate could not be verified. Check for a TLS-intercepting proxy.";
-  }
-  const detail = cause?.message ?? code;
+  const detail = cause?.message ?? cause?.code;
   return detail
     ? `cannot reach Augenta: ${detail}`
     : "cannot reach Augenta: the network request failed. Check your connection.";

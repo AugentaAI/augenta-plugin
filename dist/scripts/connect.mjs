@@ -34,565 +34,149 @@ var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, 
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // capture/health.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join5 } from "node:path";
-import { randomUUID } from "node:crypto";
+import { existsSync as existsSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync6, renameSync as renameSync4, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join7 } from "node:path";
+import { randomUUID as randomUUID3 } from "node:crypto";
 
 // capture/config.ts
-import { readFileSync } from "node:fs";
+import { readFileSync as readFileSync4 } from "node:fs";
+import { join as join5 } from "node:path";
+
+// capture/auth.ts
+import {
+  chmodSync as chmodSync2,
+  existsSync as existsSync2,
+  mkdirSync as mkdirSync2,
+  readFileSync as readFileSync2,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync as writeFileSync2
+} from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { join as join2 } from "node:path";
 
-// capture/project.ts
-import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-function gitRevParse(cwd, arg) {
-  try {
-    const value = execFileSync("git", ["rev-parse", arg], {
-      cwd,
-      stdio: ["ignore", "pipe", "ignore"]
-    }).toString().trim();
-    return value || undefined;
-  } catch {
-    return;
-  }
-}
-function resolveProjectRoot(cwd) {
-  if (!cwd)
-    return;
-  let dir;
-  try {
-    dir = realpathSync(cwd);
-  } catch {
-    return;
-  }
-  while (true) {
-    if (existsSync(join(dir, ".augenta", "config.json")))
-      return dir;
-    if (existsSync(join(dir, ".git")))
-      return;
-    const parent = dirname(dir);
-    if (parent === dir)
-      return;
-    dir = parent;
-  }
-}
-function resolveProject(args, cwd) {
-  if (args.project)
-    return { projectRoot: resolve(cwd, args.project) };
-  const configured = resolveProjectRoot(cwd);
-  if (configured)
-    return { projectRoot: configured };
-  const top = gitRevParse(cwd, "--show-toplevel");
-  if (!top)
-    return { projectRoot: cwd };
-  return { projectRoot: top };
-}
-function resolveTargetProject(args, cwd) {
-  return resolveProject(args, cwd).projectRoot;
-}
-
-// capture/config.ts
-var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
-var DEFAULT_CONTROL_URL = "https://augenta.ai";
-function parseDestinations(raw) {
-  if (!Array.isArray(raw) || raw.length === 0)
-    return;
-  const destinations = [];
-  for (const item of raw) {
-    if (!item || typeof item !== "object")
-      return;
-    const connectorId = typeof item.connectorId === "string" ? item.connectorId.trim() : "";
-    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
-    if (!connectorId || !workspaceId)
-      return;
-    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
-      return;
-    if (destinations.some((destination) => destination.connectorId === connectorId))
-      continue;
-    const workspaceName = item.workspaceName?.trim();
-    destinations.push({ connectorId, workspaceId, ...workspaceName ? { workspaceName } : {} });
-  }
-  return destinations;
-}
-function configPath(projectRoot) {
-  return join2(projectRoot, ".augenta", "config.json");
-}
-function loadProjectConfig(projectRoot) {
-  try {
-    const value = JSON.parse(readFileSync(configPath(projectRoot), "utf8"));
-    if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
-      return;
-    const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
-    const settings = {};
-    for (const key of ["endpoint", "controlUrl", "ingestUrl", "discoveredGateway"]) {
-      const raw = value[key];
-      if (raw !== undefined && typeof raw !== "string")
-        return;
-      if (typeof raw === "string" && raw.trim()) {
-        settings[key] = raw.trim().replace(/\/+$/, "");
-      }
-    }
-    if (value.org !== undefined) {
-      if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
-        return;
-      if (value.org.name !== undefined && typeof value.org.name !== "string")
-        return;
-      settings.org = { id: value.org.id.trim(), ...value.org.name?.trim() ? { name: value.org.name.trim() } : {} };
-    }
-    const destinations = value.destinations === undefined ? undefined : parseDestinations(value.destinations);
-    if (value.destinations !== undefined && !destinations)
-      return;
-    if (destinations) {
-      settings.destinations = destinations;
-      settings.connectorIds = destinations.map((destination) => destination.connectorId);
-    }
-    if (value.authMode === "oauth") {
-      const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
-      if (!profileId || !destinations)
-        return;
-      return {
-        ...settings,
-        authMode: "oauth",
-        ...captureSince ? { captureSince } : {},
-        profileId,
-        projectRoot
-      };
-    }
-    if (value.authMode === "api-key") {
-      const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
-      if (!apiKey || Array.isArray(value.destinations) && value.destinations.length !== 1)
-        return;
-      return {
-        ...settings,
-        authMode: "api-key",
-        ...captureSince ? { captureSince } : {},
-        apiKey,
-        projectRoot
-      };
-    }
-    return;
-  } catch {
-    return;
-  }
-}
-function projectConfig(cwd) {
-  const root = resolveProjectRoot(cwd);
-  return root ? loadProjectConfig(root) : undefined;
-}
-function controlUrl(cfg, flag) {
-  return (flag?.trim() || process.env.AUGENTA_CONTROL_URL?.trim() || cfg?.controlUrl || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
-}
-function gatewayBase(cfg, flag) {
-  return (flag?.trim() || process.env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
-}
-function experiencesUrl(cfg) {
-  return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
-}
-function captureKilled() {
-  const value = process.env.AUGENTA_CAPTURE_ENABLED;
-  return value === "0" || value === "false";
-}
-function captureEnabled(cfg) {
-  if (!cfg || captureKilled())
-    return false;
-  return cfg.authMode === "oauth" ? Boolean(cfg.profileId) && (cfg.connectorIds?.length ?? 0) > 0 : Boolean(cfg.apiKey);
-}
-
 // capture/augenta-dir.ts
-import { join as join3 } from "node:path";
-import { chmodSync, mkdirSync, existsSync as existsSync2, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { chmodSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+var LOCAL_IGNORE = `*
+`;
+var SHARED_IGNORE = `*
+!/.gitignore
+!/config.json
+`;
 function ensureAugentaDir(projectRoot) {
-  const dir = join3(projectRoot, ".augenta");
+  const dir = join(projectRoot, ".augenta");
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
     try {
       chmodSync(dir, 448);
     } catch {}
-    const ignore = join3(dir, ".gitignore");
-    if (!existsSync2(ignore))
-      writeFileSync(ignore, `*
-`);
+    const ignore = join(dir, ".gitignore");
+    if (!existsSync(ignore))
+      writeFileSync(ignore, LOCAL_IGNORE);
   } catch {}
   return dir;
 }
-
-// capture/outbox.ts
-import { join as join4 } from "node:path";
-import { mkdirSync as mkdirSync2, existsSync as existsSync3, readFileSync as readFileSync2, writeFileSync as writeFileSync2, appendFileSync, renameSync, statSync, unlinkSync } from "node:fs";
-var NEWLINE = 10;
-var MAX_SPOOL_BYTES = 50 * 1024 * 1024;
-var MAX_DEST_LAG_BYTES = 16 * 1024 * 1024;
-var LAG_STRIKES = 3;
-function isCaptureEvent(o) {
-  const e = o;
-  return !!e && typeof e.sid === "string" && typeof e.text === "string" && Number.isInteger(e.seq);
-}
-function isRawRecord(o) {
-  const e = o;
-  return !!e && typeof e.raw === "string" && typeof e.sid === "string";
-}
-function isDocumentRecord(o) {
-  const e = o;
-  if (!e || e.type !== "doc" || e.src !== "claude-code" && e.src !== "codex" || typeof e.sid !== "string" || typeof e.proj !== "string" || e.proj.length === 0)
-    return false;
-  const data = e.data;
-  if (!data || data.kind !== "agent-memory" || typeof data.documentId !== "string" || data.documentId.length === 0 || typeof data.sourcePath !== "string" || typeof data.title !== "string" || data.format !== "text/markdown" || typeof data.text !== "string" || typeof data.sourceUpdatedAt !== "string" || typeof data.capturedAt !== "string" || typeof data.revision !== "string" || data.revision.length === 0 || typeof data.deleted !== "boolean" || typeof data.chunkIndex !== "number" || !Number.isInteger(data.chunkIndex) || data.chunkIndex < 0 || typeof data.chunkCount !== "number" || !Number.isInteger(data.chunkCount) || data.chunkCount <= 0)
-    return false;
-  return data.chunkIndex < data.chunkCount && e.sid === `memory-${data.documentId}`;
-}
-
-class Outbox {
-  dir;
-  spoolPath;
-  cursorPath;
-  projectRoot;
-  maxSpoolBytes;
-  maxDestLagBytes;
-  constructor(projectRoot, opts = {}) {
-    this.projectRoot = projectRoot;
-    this.dir = join4(projectRoot, ".augenta", "outbox");
-    this.spoolPath = join4(this.dir, "spool.jsonl");
-    this.cursorPath = join4(this.dir, "cursor.json");
-    this.maxSpoolBytes = opts.maxSpoolBytes ?? MAX_SPOOL_BYTES;
-    this.maxDestLagBytes = opts.maxDestLagBytes ?? MAX_DEST_LAG_BYTES;
-  }
-  ensure() {
-    ensureAugentaDir(this.projectRoot);
-    mkdirSync2(this.dir, { recursive: true });
-  }
-  append(records) {
-    if (records.length === 0)
-      return true;
-    this.ensure();
-    try {
-      if (statSync(this.spoolPath).size >= this.maxSpoolBytes)
-        return false;
-    } catch {}
-    appendFileSync(this.spoolPath, records.map((r) => JSON.stringify(r)).join(`
-`) + `
-`);
-    return true;
-  }
-  forceAppend(records) {
-    if (records.length === 0)
-      return;
-    this.ensure();
-    appendFileSync(this.spoolPath, records.map((r) => JSON.stringify(r)).join(`
-`) + `
-`);
-  }
-  dropEpisodePath() {
-    return join4(this.dir, "dropped.json");
-  }
-  markDropped() {
-    this.ensure();
-    const path = this.dropEpisodePath();
-    if (existsSync3(path))
-      return false;
-    writeFileSync2(path, JSON.stringify({ since: new Date().toISOString() }));
-    return true;
-  }
-  clearDropEpisode() {
-    try {
-      unlinkSync(this.dropEpisodePath());
-    } catch {}
-  }
-  discardNoticePath() {
-    return join4(this.dir, "discarded.json");
-  }
-  markDiscarded(entries) {
-    if (entries.length === 0)
-      return;
-    this.ensure();
-    try {
-      writeFileSync2(this.discardNoticePath(), JSON.stringify({ at: new Date().toISOString(), destinations: entries }));
-    } catch {}
-  }
-  takeDiscarded() {
-    const path = this.discardNoticePath();
-    try {
-      const parsed = JSON.parse(readFileSync2(path, "utf8"));
-      unlinkSync(path);
-      if (!Array.isArray(parsed.destinations) || parsed.destinations.length === 0) {
-        return;
-      }
-      return parsed.destinations;
-    } catch {
-      return;
-    }
-  }
-  static offset(value) {
-    return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
-  }
-  static strikes(value) {
-    if (!value || typeof value !== "object" || Array.isArray(value))
-      return {};
-    const parsed = {};
-    for (const [key, count] of Object.entries(value)) {
-      const n = Outbox.offset(count);
-      if (!key || n === undefined)
-        return {};
-      parsed[key] = n;
-    }
-    return parsed;
-  }
-  readCursor() {
-    let raw;
-    try {
-      raw = JSON.parse(readFileSync2(this.cursorPath, "utf8"));
-    } catch {
-      return { shipped: 0, lagStrikes: {} };
-    }
-    const shipped = Outbox.offset(raw.shipped) ?? 0;
-    const lagStrikes = Outbox.strikes(raw.lagStrikes);
-    const links = raw.links;
-    if (!links || typeof links !== "object" || Array.isArray(links)) {
-      return { shipped, lagStrikes };
-    }
-    const parsed = {};
-    for (const [key, value] of Object.entries(links)) {
-      const off = Outbox.offset(value);
-      if (!key || off === undefined)
-        return { shipped, lagStrikes };
-      parsed[key] = off;
-    }
-    if (Object.keys(parsed).length === 0)
-      return { shipped, lagStrikes };
-    return { shipped, links: parsed, lagStrikes };
-  }
-  writeCursor(links, scalar, lagStrikes = {}) {
-    this.ensure();
-    const strikes = Object.keys(lagStrikes).length > 0 ? { lagStrikes } : {};
-    const body = links ? { shipped: Math.min(...Object.values(links)), links, ...strikes } : { shipped: scalar ?? 0 };
-    const tmp = this.cursorPath + ".tmp";
-    writeFileSync2(tmp, JSON.stringify(body));
-    renameSync(tmp, this.cursorPath);
-  }
-  shippedOffset(destKey) {
-    const { shipped, links } = this.readCursor();
-    const stored = destKey === undefined || !links ? shipped : links[destKey] ?? 0;
-    return stored > this.spoolEnd() ? 0 : stored;
-  }
-  spoolEnd() {
-    try {
-      return statSync(this.spoolPath).size;
-    } catch {
-      return 0;
-    }
-  }
-  registerDestinations(keys, opts = {}) {
-    const wanted = [...new Set(keys)];
-    if (wanted.length === 0)
-      return;
-    const { shipped, links, lagStrikes } = this.readCursor();
-    const spoolEnd = this.spoolEnd();
-    const inheritsScalar = (key) => shipped === 0 || (opts.freshKeys !== undefined ? !opts.freshKeys.includes(key) : wanted.length === 1);
-    const next = {};
-    for (const key of wanted) {
-      next[key] = links?.[key] ?? (links ? spoolEnd : inheritsScalar(key) ? shipped : spoolEnd);
-    }
-    const unchanged = links !== undefined && Object.keys(links).length === wanted.length && wanted.every((key) => links[key] === next[key]);
-    if (unchanged)
-      return;
-    const strikes = {};
-    for (const key of wanted)
-      if (lagStrikes[key])
-        strikes[key] = lagStrikes[key];
-    this.writeCursor(next, undefined, strikes);
-  }
-  enforceLag(progressed = []) {
-    const { links, lagStrikes } = this.readCursor();
-    if (!links || Object.keys(links).length < 2)
-      return [];
-    if (progressed.length === 0)
-      return [];
-    const leader = Math.max(...Object.values(links));
-    const swept = [];
-    const next = { ...links };
-    const strikes = {};
-    for (const [destKey, from] of Object.entries(links)) {
-      if (progressed.includes(destKey))
-        continue;
-      if (leader - from <= this.maxDestLagBytes)
-        continue;
-      const count = (lagStrikes[destKey] ?? 0) + 1;
-      if (count < LAG_STRIKES) {
-        strikes[destKey] = count;
-        continue;
-      }
-      const to = leader - this.maxDestLagBytes;
-      if (to <= from)
-        continue;
-      next[destKey] = to;
-      swept.push({ destKey, from, to });
-    }
-    const strikesChanged = Object.keys(strikes).length !== Object.keys(lagStrikes).length || Object.entries(strikes).some(([key, count]) => lagStrikes[key] !== count);
-    if (swept.length > 0 || strikesChanged)
-      this.writeCursor(next, undefined, strikes);
-    return swept;
-  }
-  hasPendingBytes() {
-    try {
-      return statSync(this.spoolPath).size > this.shippedOffset();
-    } catch {
-      return false;
-    }
-  }
-  pendingByteCount(destKey) {
-    return Math.max(0, this.spoolEnd() - this.shippedOffset(destKey));
-  }
-  readPending(maxBatch = Infinity, destKey) {
-    const shipped = this.shippedOffset(destKey);
-    if (!existsSync3(this.spoolPath))
-      return { records: [], endOffset: shipped, hasMore: false };
-    const buf = readFileSync2(this.spoolPath);
-    const start = Math.min(shipped, buf.length);
-    const records = [];
-    let off = start;
-    let hasMore = false;
-    let cursor = start;
-    while (cursor < buf.length) {
-      const nl = buf.indexOf(NEWLINE, cursor);
-      const lineEnd = nl === -1 ? buf.length : nl;
-      const next = nl === -1 ? buf.length : nl + 1;
-      const text = buf.subarray(cursor, lineEnd).toString("utf8").trim();
-      if (text) {
-        if (records.length >= maxBatch) {
-          hasMore = true;
-          break;
-        }
-        try {
-          const parsed = JSON.parse(text);
-          if (isCaptureEvent(parsed) || isRawRecord(parsed) || isDocumentRecord(parsed))
-            records.push(parsed);
-        } catch {}
-      }
-      off = next;
-      cursor = next;
-    }
-    return { records, endOffset: off, hasMore };
-  }
-  advance(endOffset, destKey) {
-    if (destKey === undefined) {
-      this.writeCursor(undefined, endOffset);
-      return;
-    }
-    const { shipped, links, lagStrikes } = this.readCursor();
-    const merged = { ...links ?? {} };
-    merged[destKey] = Math.max(merged[destKey] ?? (links ? 0 : shipped), endOffset);
-    this.writeCursor(merged, undefined, lagStrikes);
-  }
-  pendingCount(destKey) {
-    return this.readPending(Infinity, destKey).records.length;
-  }
-  compact() {
-    if (!existsSync3(this.spoolPath))
-      return;
-    let size;
-    try {
-      size = statSync(this.spoolPath).size;
-    } catch {
-      return;
-    }
-    if (size > 0 && this.shippedOffset() >= size) {
-      const archivePath = this.spoolPath + ".archive";
-      try {
-        renameSync(this.spoolPath, archivePath);
-      } catch {
-        return;
-      }
-      const { links, lagStrikes } = this.readCursor();
-      if (links) {
-        this.writeCursor(Object.fromEntries(Object.keys(links).map((key) => [key, 0])), undefined, lagStrikes);
-      } else {
-        this.advance(0);
-      }
-      try {
-        unlinkSync(archivePath);
-      } catch {}
-    }
-  }
-}
-
-// capture/health.ts
-var STAGES = ["dispatch", "capture", "delivery"];
-var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
-function read(projectRoot, stage) {
+function setAugentaIgnore(projectRoot, form) {
+  const path = join(ensureAugentaDir(projectRoot), ".gitignore");
+  const wanted = form === "shared" ? SHARED_IGNORE : LOCAL_IGNORE;
   try {
-    const s = JSON.parse(readFileSync3(join5(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
-    if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
+    const current = readFileSync(path, "utf8");
+    if (current === wanted || current !== LOCAL_IGNORE && current !== SHARED_IGNORE)
       return;
-    return {
-      at: new Date(s.at).toISOString(),
-      outcome: s.outcome,
-      count: s.count,
-      successes: s.successes,
-      ...Number.isFinite(Date.parse(s.lastSuccessAt)) ? { lastSuccessAt: new Date(s.lastSuccessAt).toISOString() } : {}
-    };
-  } catch {
-    return;
-  }
-}
-function recordHealth(projectRoot, stage, outcome, count = 0) {
-  try {
-    const dir = join5(ensureAugentaDir(projectRoot), "state");
-    mkdirSync3(dir, { recursive: true });
-    const old = read(projectRoot, stage);
-    const at = new Date().toISOString();
-    const success = outcome === "captured" || outcome === "accepted";
-    const value = {
-      at,
-      outcome,
-      count,
-      successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
-      ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
-    };
-    const file = join5(dir, `health-${stage}.json`);
-    const tmp = `${file}.${randomUUID()}.tmp`;
-    writeFileSync3(tmp, JSON.stringify(value), { mode: 384 });
-    renameSync2(tmp, file);
+    writeFileSync(path, wanted);
   } catch {}
 }
-function captureHealth(projectRoot) {
-  const cfg = loadProjectConfig(projectRoot);
-  const activity = Object.fromEntries(STAGES.map((stage) => [stage, read(projectRoot, stage) ?? null]));
-  return {
-    configured: !!cfg,
-    enabled: captureEnabled(cfg),
-    configuration: cfg ? "valid" : existsSync4(join5(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
-    activityScope: "project",
-    hostDispatch: "unverified",
-    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds.length : cfg ? 1 : 0,
-    pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
-    ...activity,
-    hostApproval: "unknown",
-    ingestion: "unverified",
-    nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
-  };
-}
 
-// capture/harness.ts
-function detectedHarness(explicit, env = process.env) {
-  if (explicit)
-    return explicit;
-  const codex = Boolean(env.CODEX_THREAD_ID || env.CODEX_SANDBOX || env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE === "Codex Desktop");
-  const claude = env.CLAUDECODE === "1";
-  if (codex === claude)
-    return;
-  return codex ? "codex" : "claude-code";
+// capture/network.ts
+class DiscoveryError extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+    this.name = "DiscoveryError";
+  }
 }
-
-// scripts/connect.ts
-import { chmodSync as chmodSync3, existsSync as existsSync6, writeFileSync as writeFileSync5 } from "node:fs";
-import { basename, join as join7 } from "node:path";
-import { createInterface } from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
+var TLS_CODES = /^(CERT_|UNABLE_TO_|SELF_SIGNED_CERT|DEPTH_ZERO_SELF_SIGNED_CERT|ERR_TLS_)/;
+function* causes(error) {
+  let current = error;
+  for (let depth = 0;current && typeof current === "object" && depth < 8; depth++) {
+    yield current;
+    current = current.cause;
+  }
+}
+function classifyNetworkError(error) {
+  for (const link of causes(error)) {
+    if (link instanceof DiscoveryError) {
+      return link.status === 404 ? undefined : { kind: "proxy_refused", status: link.status };
+    }
+    const proxy = /^Proxy response \((\d{3})\)/.exec(String(link.message ?? ""));
+    if (proxy)
+      return { kind: "proxy_refused", status: Number(proxy[1]) };
+    const code = typeof link.code === "string" ? link.code : undefined;
+    if (code === "ENOTFOUND" || code === "EAI_AGAIN")
+      return { kind: "dns", code };
+    if (code === "ECONNREFUSED")
+      return { kind: "refused", code };
+    if (code === "ECONNRESET" || code === "EPIPE" || code === "UND_ERR_SOCKET")
+      return { kind: "reset", code };
+    if (code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT" || link.name === "TimeoutError") {
+      return { kind: "timeout", ...code ? { code } : {} };
+    }
+    if (code && TLS_CODES.test(code))
+      return { kind: "tls", code };
+  }
+  return;
+}
+var PRODUCTION = { control: "https://augenta.ai", issuer: "https://auth.augenta.ai", gateway: "https://api.augenta.ai" };
+async function check(fetcher, url, timeoutMs, isAugenta) {
+  const host = new URL(url).host;
+  try {
+    const response = await fetcher(url, { signal: AbortSignal.timeout(timeoutMs) });
+    const body = await response.json().catch(() => {
+      return;
+    });
+    return isAugenta(response, body) ? { host, ok: true } : { host, ok: false, reason: `answered ${response.status}, not as Augenta does` };
+  } catch (error) {
+    const failure = classifyNetworkError(error);
+    return {
+      host,
+      ok: false,
+      reason: !failure ? "no answer" : failure.kind === "proxy_refused" ? `a proxy refused it (${failure.status})` : failure.kind === "dns" ? "the name did not resolve" : failure.kind === "refused" ? "the connection was refused" : failure.kind === "reset" ? "the connection was cut" : failure.kind === "timeout" ? "no answer in time" : "its TLS certificate was not trusted"
+    };
+  }
+}
+async function diagnoseHosts(controlUrl, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 3000;
+  const fetcher = options.fetcher ?? ((url, init) => fetch(url, { ...init, signal: init.signal }));
+  const control = controlUrl.replace(/\/+$/, "");
+  let issuer;
+  let gateway;
+  const discovery = await check(fetcher, `${control}/.well-known/augenta.json`, timeoutMs, (response, body) => {
+    const document = body;
+    if (!response.ok || typeof document?.issuer !== "string")
+      return false;
+    issuer = document.issuer;
+    gateway = typeof document.gateway === "string" ? document.gateway : undefined;
+    return true;
+  });
+  if (!discovery.ok && control === PRODUCTION.control) {
+    issuer = PRODUCTION.issuer;
+    gateway = PRODUCTION.gateway;
+  }
+  const rest = await Promise.all([
+    issuer ? check(fetcher, `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`, timeoutMs, (response, body) => response.ok && typeof body?.issuer === "string") : undefined,
+    gateway ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) => response.status === 401 && typeof body?.error === "string") : undefined
+  ]);
+  return [discovery, ...rest.filter((item) => Boolean(item))];
+}
 
 // runtime/node.ts
 import { spawnSync } from "node:child_process";
-import { realpathSync as realpathSync2 } from "node:fs";
-import { resolve as resolve2 } from "node:path";
+import { accessSync, constants, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 async function readStdin() {
   const chunks = [];
@@ -608,21 +192,66 @@ function isMain(metaUrl) {
   return canonical(fileURLToPath(metaUrl)) === canonical(entry);
 }
 function canonical(path) {
-  const absolute = resolve2(path);
+  const absolute = resolve(path);
   try {
-    return realpathSync2.native(absolute);
+    return realpathSync.native(absolute);
   } catch {
     return absolute;
   }
 }
-function openBrowser(command) {
-  const opener = command[0];
-  if (!opener)
+var SANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/mitm-proxy-ca.crt";
+var SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
+function nodeHonorsEnvProxy(version) {
+  const [major = 0, minor = 0] = version.split(".").map(Number);
+  return major >= 24 || major === 22 && minor >= 21;
+}
+function readable(path) {
+  try {
+    accessSync(path, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function envProxyReexecEnv(env, nodeVersion, runningUnderBun, isReadable = readable) {
+  if (env.AUGENTA_PROXY_REEXEC || runningUnderBun)
     return;
-  const url = command[command.length - 1];
-  if (!url || !isHttpsUrl(url))
+  const proxied = Boolean(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy);
+  const useProxy = proxied && !env.NODE_USE_ENV_PROXY && nodeHonorsEnvProxy(nodeVersion);
+  const ca = env.NODE_EXTRA_CA_CERTS ? undefined : isReadable(SANDBOX_PROXY_CA) ? SANDBOX_PROXY_CA : (useProxy || env.NODE_USE_ENV_PROXY) && isReadable(SYSTEM_CA_BUNDLE) ? SYSTEM_CA_BUNDLE : undefined;
+  if (!useProxy && !ca)
     return;
-  spawnSync(opener, command.slice(1), { stdio: "ignore" });
+  return {
+    ...env,
+    AUGENTA_PROXY_REEXEC: "1",
+    ...useProxy ? { NODE_USE_ENV_PROXY: "1", NODE_NO_WARNINGS: env.NODE_NO_WARNINGS ?? "1" } : {},
+    ...ca ? { NODE_EXTRA_CA_CERTS: ca } : {}
+  };
+}
+function reexecForEnvProxy() {
+  const next = envProxyReexecEnv(process.env, process.versions.node, Boolean(process.versions.bun));
+  if (!next)
+    return;
+  const result = spawnSync(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
+    stdio: "inherit",
+    env: next
+  });
+  if (result.error)
+    return;
+  process.exit(result.status ?? 1);
+}
+function urlOpener(platform = process.platform) {
+  if (platform === "darwin")
+    return ["open"];
+  if (platform === "win32")
+    return ["rundll32", "url.dll,FileProtocolHandler"];
+  return ["xdg-open"];
+}
+function openBrowser(url) {
+  if (!isHttpsUrl(url))
+    return;
+  const [file, ...args] = urlOpener();
+  spawnSync(file, [...args, url], { stdio: "ignore" });
 }
 function isHttpsUrl(value) {
   try {
@@ -632,23 +261,7 @@ function isHttpsUrl(value) {
   }
 }
 
-// runtime/version.ts
-var PLUGIN_VERSION = "0.10.2";
-
 // capture/auth.ts
-import {
-  chmodSync as chmodSync2,
-  existsSync as existsSync5,
-  mkdirSync as mkdirSync4,
-  readFileSync as readFileSync4,
-  renameSync as renameSync3,
-  statSync as statSync2,
-  unlinkSync as unlinkSync2,
-  writeFileSync as writeFileSync4
-} from "node:fs";
-import { createHash, randomUUID as randomUUID2 } from "node:crypto";
-import { homedir } from "node:os";
-import { join as join6 } from "node:path";
 class ReLoginRequiredError extends Error {
   reason;
   constructor(message, reason) {
@@ -657,22 +270,22 @@ class ReLoginRequiredError extends Error {
     this.reason = reason;
   }
 }
-var authRoot = () => process.env.AUGENTA_AUTH_HOME || join6(homedir(), ".augenta");
-var authPath = () => join6(authRoot(), "auth.json");
-var lockPath = () => join6(authRoot(), "auth.lock");
+var authRoot = () => process.env.AUGENTA_AUTH_HOME || join2(homedir(), ".augenta");
+var authPath = () => join2(authRoot(), "auth.json");
+var lockPath = () => join2(authRoot(), "auth.lock");
 var LOCK_WAIT_MS = 1e4;
 var STALE_LOCK_MS = 30000;
 var REQUEST_TIMEOUT_MS = 15000;
 function ensureAuthRoot() {
-  mkdirSync4(authRoot(), { recursive: true, mode: 448 });
+  mkdirSync2(authRoot(), { recursive: true, mode: 448 });
   chmodSync2(authRoot(), 448);
 }
 function readAuthStore() {
   try {
     ensureAuthRoot();
-    if (existsSync5(authPath()))
+    if (existsSync2(authPath()))
       chmodSync2(authPath(), 384);
-    const parsed = JSON.parse(readFileSync4(authPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
       return { version: 1, profiles: {} };
     }
@@ -684,20 +297,20 @@ function readAuthStore() {
 function writeAuthStore(store) {
   ensureAuthRoot();
   const path = authPath();
-  const tmp = `${path}.${process.pid}.${randomUUID2()}.tmp`;
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    writeFileSync4(tmp, `${JSON.stringify(store, null, 2)}
+    writeFileSync2(tmp, `${JSON.stringify(store, null, 2)}
 `, {
       mode: 384,
       flag: "wx"
     });
     chmodSync2(tmp, 384);
-    renameSync3(tmp, path);
+    renameSync(tmp, path);
     chmodSync2(path, 384);
   } finally {
     try {
-      if (existsSync5(tmp))
-        unlinkSync2(tmp);
+      if (existsSync2(tmp))
+        unlinkSync(tmp);
     } catch {}
   }
 }
@@ -707,24 +320,24 @@ async function withAuthLock(fn) {
   const deadline = Date.now() + LOCK_WAIT_MS;
   while (true) {
     try {
-      writeFileSync4(lock, String(process.pid), { flag: "wx", mode: 384 });
+      writeFileSync2(lock, String(process.pid), { flag: "wx", mode: 384 });
       break;
     } catch {
       try {
-        if (Date.now() - statSync2(lock).mtimeMs > STALE_LOCK_MS)
-          unlinkSync2(lock);
+        if (Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS)
+          unlinkSync(lock);
       } catch {}
       if (Date.now() >= deadline) {
         throw new Error("another Augenta login or token refresh is still running");
       }
-      await new Promise((resolve3) => setTimeout(resolve3, 100));
+      await new Promise((resolve2) => setTimeout(resolve2, 100));
     }
   }
   try {
     return await fn();
   } finally {
     try {
-      unlinkSync2(lock);
+      unlinkSync(lock);
     } catch {}
   }
 }
@@ -757,12 +370,17 @@ async function refreshTokens(profile) {
   }
   throw new Error(`Augenta token refresh failed (${response.status})`);
 }
-async function augentaOAuthConfig(controlUrl2) {
-  const response = await fetch(`${controlUrl2.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+async function augentaOAuthConfig(controlUrl) {
+  const response = await fetch(`${controlUrl.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const host = new URL(controlUrl).host;
   if (!response.ok) {
-    throw new Error("Augenta sign-in is not configured for this environment");
+    if (response.status === 404)
+      throw new Error("Augenta sign-in is not configured for this environment");
+    throw new DiscoveryError(response.status, `${host} answered ${response.status} instead of Augenta's sign-in discovery; a proxy or network allowlist may be answering for it`);
   }
-  const value = await response.json();
+  const value = await response.json().catch(() => {
+    throw new DiscoveryError(response.status, `${host} did not answer with Augenta's sign-in discovery; a proxy or captive page may be answering for it`);
+  });
   if (!value.issuer || !value.clientId || !value.gateway) {
     throw new Error("Augenta returned incomplete sign-in configuration");
   }
@@ -772,24 +390,17 @@ async function augentaOAuthConfig(controlUrl2) {
     gateway: value.gateway.replace(/\/+$/, "")
   };
 }
-function browserCommand(url) {
-  if (process.platform === "darwin")
-    return ["open", url];
-  if (process.platform === "win32")
-    return ["cmd", "/c", "start", "", url];
-  return ["xdg-open", url];
-}
-var pendingLoginPath = () => join6(authRoot(), "pending-login.json");
+var pendingLoginPath = () => join2(authRoot(), "pending-login.json");
 function savePendingLogin(pending) {
   ensureAuthRoot();
   const path = pendingLoginPath();
-  writeFileSync4(path, `${JSON.stringify(pending, null, 2)}
+  writeFileSync2(path, `${JSON.stringify(pending, null, 2)}
 `, { mode: 384 });
   chmodSync2(path, 384);
 }
 function readPendingLogin() {
   try {
-    const parsed = JSON.parse(readFileSync4(pendingLoginPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(pendingLoginPath(), "utf8"));
     if (typeof parsed.deviceCode !== "string" || typeof parsed.clientId !== "string" || typeof parsed.issuer !== "string" || typeof parsed.expiresAt !== "number" || parsed.expiresAt <= Date.now()) {
       return;
     }
@@ -800,7 +411,7 @@ function readPendingLogin() {
 }
 function clearPendingLogin() {
   try {
-    unlinkSync2(pendingLoginPath());
+    unlinkSync(pendingLoginPath());
   } catch {}
 }
 async function beginDeviceLogin(config, opts = {}) {
@@ -829,7 +440,7 @@ async function beginDeviceLogin(config, opts = {}) {
   };
   if (opts.openBrowser !== false) {
     try {
-      openBrowser(browserCommand(pending.verificationUri));
+      openBrowser(pending.verificationUri);
     } catch {}
   }
   return pending;
@@ -838,7 +449,7 @@ async function pollDeviceToken(pending, opts) {
   const deadline = Math.min(pending.expiresAt, Date.now() + opts.waitMs);
   let intervalMs = pending.intervalMs;
   while (Date.now() < deadline) {
-    await new Promise((resolve3) => setTimeout(resolve3, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
+    await new Promise((resolve2) => setTimeout(resolve2, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
     const response = await fetch(endpoint(pending.issuer, "/oauth2/token"), {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -967,9 +578,16 @@ function storedProfileUpdatedAt(profileId) {
   const ms = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN;
   return Number.isFinite(ms) ? ms : undefined;
 }
+function hasStoredProfile(profileId) {
+  return storedProfile(profileId) !== undefined;
+}
+function storedProfileUserId(profileId) {
+  const userId = storedProfile(profileId)?.userId;
+  return typeof userId === "string" && userId ? userId : undefined;
+}
 function storedProfile(profileId) {
   try {
-    const parsed = JSON.parse(readFileSync4(authPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object")
       return;
     return Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
@@ -995,12 +613,12 @@ async function fetchWithProfile(profileId, url, init = {}) {
 }
 var NOTICES = ["relogin", "badkey", "connect"];
 function noticePath(projectRoot, notice) {
-  return join6(projectRoot, ".augenta", `${notice}-required`);
+  return join2(projectRoot, ".augenta", `${notice}-required`);
 }
 function markAuthNotice(projectRoot, notice) {
   try {
     ensureAugentaDir(projectRoot);
-    writeFileSync4(noticePath(projectRoot, notice), `${notice}
+    writeFileSync2(noticePath(projectRoot, notice), `${notice}
 `, {
       mode: 384
     });
@@ -1008,7 +626,7 @@ function markAuthNotice(projectRoot, notice) {
 }
 function authNoticePending(projectRoot, notice, since) {
   try {
-    return statSync2(noticePath(projectRoot, notice)).mtimeMs >= (since ?? Number.NEGATIVE_INFINITY);
+    return statSync(noticePath(projectRoot, notice)).mtimeMs >= (since ?? Number.NEGATIVE_INFINITY);
   } catch {
     return false;
   }
@@ -1017,14 +635,726 @@ function takeAuthNotice(projectRoot) {
   let found;
   for (const notice of NOTICES) {
     const path = noticePath(projectRoot, notice);
-    if (!existsSync5(path))
+    if (!existsSync2(path))
       continue;
     found ??= notice;
     try {
-      unlinkSync2(path);
+      unlinkSync(path);
     } catch {}
   }
   return found;
+}
+
+// capture/links.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
+function linksPath(projectRoot) {
+  return join3(projectRoot, ".augenta", "state", "links.json");
+}
+function legacyAdoptionPath(projectRoot) {
+  return join3(projectRoot, ".augenta", "state", "adopted.json");
+}
+var nonEmpty = (value) => typeof value === "string" && value.length > 0;
+function readLinks(projectRoot) {
+  try {
+    const value = JSON.parse(readFileSync3(linksPath(projectRoot), "utf8"));
+    if (value.version !== 1)
+      return;
+    if (!nonEmpty(value.profileId) || !nonEmpty(value.userId) || !nonEmpty(value.projectKey))
+      return;
+    if (!nonEmpty(value.joinedAt) || !Number.isFinite(Date.parse(value.joinedAt)))
+      return;
+    if (!Array.isArray(value.links) || value.links.length === 0)
+      return;
+    const links = [];
+    for (const item of value.links) {
+      const link = item;
+      if (!link || !nonEmpty(link.workspaceId) || !nonEmpty(link.connectorId))
+        return;
+      if (links.some((seen) => seen.workspaceId === link.workspaceId || seen.connectorId === link.connectorId)) {
+        return;
+      }
+      links.push({ workspaceId: link.workspaceId, connectorId: link.connectorId });
+    }
+    return {
+      profileId: value.profileId,
+      userId: value.userId,
+      projectKey: value.projectKey,
+      joinedAt: new Date(value.joinedAt).toISOString(),
+      links
+    };
+  } catch {
+    return;
+  }
+}
+function writeLinks(projectRoot, links) {
+  const dir = join3(ensureAugentaDir(projectRoot), "state");
+  mkdirSync3(dir, { recursive: true });
+  const path = join3(dir, "links.json");
+  const tmp = `${path}.${randomUUID2()}.tmp`;
+  try {
+    writeFileSync3(tmp, JSON.stringify({
+      version: 1,
+      profileId: links.profileId,
+      userId: links.userId,
+      projectKey: links.projectKey,
+      joinedAt: links.joinedAt,
+      links: links.links.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId }))
+    }), { mode: 384 });
+    renameSync2(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+  rmSync(legacyAdoptionPath(projectRoot), { force: true });
+}
+
+// capture/project.ts
+import { execFileSync } from "node:child_process";
+import { existsSync as existsSync3, realpathSync as realpathSync2 } from "node:fs";
+import { dirname, join as join4, resolve as resolve2 } from "node:path";
+function gitRevParse(cwd, arg) {
+  try {
+    const value = execFileSync("git", ["rev-parse", arg], {
+      cwd,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).toString().trim();
+    return value || undefined;
+  } catch {
+    return;
+  }
+}
+function isTrackedByGit(projectRoot, relativePath) {
+  try {
+    execFileSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
+      cwd: projectRoot,
+      stdio: "ignore"
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function resolveProjectRoot(cwd) {
+  if (!cwd)
+    return;
+  let dir;
+  try {
+    dir = realpathSync2(cwd);
+  } catch {
+    return;
+  }
+  while (true) {
+    if (existsSync3(join4(dir, ".augenta", "config.json")))
+      return dir;
+    if (existsSync3(join4(dir, ".git")))
+      return;
+    const parent = dirname(dir);
+    if (parent === dir)
+      return;
+    dir = parent;
+  }
+}
+function resolveProject(args, cwd) {
+  if (args.project)
+    return { projectRoot: resolve2(cwd, args.project) };
+  const configured = resolveProjectRoot(cwd);
+  if (configured)
+    return { projectRoot: configured };
+  const top = gitRevParse(cwd, "--show-toplevel");
+  if (!top)
+    return { projectRoot: cwd };
+  return { projectRoot: top };
+}
+function resolveTargetProject(args, cwd) {
+  return resolveProject(args, cwd).projectRoot;
+}
+
+// capture/config.ts
+var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
+var DEFAULT_CONTROL_URL = "https://augenta.ai";
+function parseDestinations(raw) {
+  if (!Array.isArray(raw) || raw.length === 0)
+    return;
+  const destinations = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object")
+      return;
+    const connectorId = typeof item.connectorId === "string" ? item.connectorId.trim() : "";
+    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
+    if (!connectorId || !workspaceId)
+      return;
+    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
+      return;
+    if (destinations.some((destination) => destination.connectorId === connectorId))
+      continue;
+    const workspaceName = item.workspaceName?.trim();
+    destinations.push({ connectorId, workspaceId, ...workspaceName ? { workspaceName } : {} });
+  }
+  return destinations;
+}
+function parseWorkspaces(raw) {
+  if (!Array.isArray(raw) || raw.length === 0)
+    return;
+  const workspaces = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object")
+      return;
+    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
+    if (!workspaceId)
+      return;
+    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
+      return;
+    if (workspaces.some((workspace) => workspace.workspaceId === workspaceId))
+      continue;
+    const workspaceName = item.workspaceName?.trim();
+    workspaces.push({ workspaceId, ...workspaceName ? { workspaceName } : {} });
+  }
+  return workspaces;
+}
+function joinedRoutes(projectRoot, profileId, projectKey, workspaces) {
+  const links = readLinks(projectRoot);
+  if (!links || links.projectKey !== projectKey)
+    return { join: "none" };
+  if (links.profileId !== profileId || storedProfileUserId(profileId) !== links.userId)
+    return { join: "signin" };
+  const destinations = [];
+  for (const workspace of workspaces) {
+    const link = links.links.find((entry) => entry.workspaceId === workspace.workspaceId);
+    if (!link)
+      return { join: "workspaces" };
+    destinations.push({ connectorId: link.connectorId, ...workspace });
+  }
+  if (links.links.length !== workspaces.length)
+    return { join: "workspaces" };
+  return { join: "joined", destinations, joinedAt: links.joinedAt };
+}
+function configPath(projectRoot) {
+  return join5(projectRoot, ".augenta", "config.json");
+}
+function loadProjectConfig(projectRoot) {
+  try {
+    const value = JSON.parse(readFileSync4(configPath(projectRoot), "utf8"));
+    if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
+      return;
+    const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
+    const settings = {};
+    for (const key of ["endpoint", "controlUrl", "ingestUrl", "discoveredGateway"]) {
+      const raw = value[key];
+      if (raw !== undefined && typeof raw !== "string")
+        return;
+      if (typeof raw === "string" && raw.trim()) {
+        settings[key] = raw.trim().replace(/\/+$/, "");
+      }
+    }
+    if (value.autoRecall !== undefined && typeof value.autoRecall !== "boolean")
+      return;
+    if (typeof value.autoRecall === "boolean")
+      settings.autoRecall = value.autoRecall;
+    if (value.org !== undefined) {
+      if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
+        return;
+      if (value.org.name !== undefined && typeof value.org.name !== "string")
+        return;
+      settings.org = { id: value.org.id.trim(), ...value.org.name?.trim() ? { name: value.org.name.trim() } : {} };
+    }
+    if (value.authMode === "oauth") {
+      if (value.destinations !== undefined)
+        return;
+      const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
+      const projectKey = typeof value.projectKey === "string" ? value.projectKey.trim() : "";
+      const workspaces = parseWorkspaces(value.workspaces);
+      if (!profileId || !projectKey || !workspaces)
+        return;
+      const routes = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      return {
+        ...settings,
+        authMode: "oauth",
+        profileId,
+        projectKey,
+        workspaces,
+        join: routes.join,
+        ...routes.destinations ? {
+          destinations: routes.destinations,
+          connectorIds: routes.destinations.map((destination) => destination.connectorId),
+          captureSince: routes.joinedAt
+        } : {},
+        projectRoot
+      };
+    }
+    const destinations = value.destinations === undefined ? undefined : parseDestinations(value.destinations);
+    if (value.destinations !== undefined && !destinations)
+      return;
+    if (destinations) {
+      settings.destinations = destinations;
+      settings.connectorIds = destinations.map((destination) => destination.connectorId);
+    }
+    if (value.authMode === "api-key") {
+      const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
+      if (!apiKey || Array.isArray(value.destinations) && value.destinations.length !== 1)
+        return;
+      return {
+        ...settings,
+        authMode: "api-key",
+        ...captureSince ? { captureSince } : {},
+        apiKey,
+        projectRoot
+      };
+    }
+    return;
+  } catch {
+    return;
+  }
+}
+function projectConfig(cwd) {
+  const root = resolveProjectRoot(cwd);
+  return root ? loadProjectConfig(root) : undefined;
+}
+function controlUrl(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_CONTROL_URL?.trim() || cfg?.controlUrl || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
+}
+function gatewayBase(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+}
+function experiencesUrl(cfg) {
+  return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
+}
+function captureKilled() {
+  const value = process.env.AUGENTA_CAPTURE_ENABLED;
+  return value === "0" || value === "false";
+}
+function captureGate(cfg) {
+  if (captureKilled())
+    return "killed";
+  if (cfg.authMode !== "oauth")
+    return cfg.apiKey ? "live" : "signed_out";
+  if (!cfg.profileId || !hasStoredProfile(cfg.profileId))
+    return "signed_out";
+  if (!cfg.connectorIds?.length)
+    return "not_adopted";
+  return "live";
+}
+function captureEnabled(cfg) {
+  return Boolean(cfg) && captureGate(cfg) === "live";
+}
+function effectiveCaptureSince(cfg) {
+  return cfg.captureSince;
+}
+
+// capture/outbox.ts
+import { join as join6 } from "node:path";
+import { mkdirSync as mkdirSync4, existsSync as existsSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync4, appendFileSync, renameSync as renameSync3, statSync as statSync2, unlinkSync as unlinkSync2 } from "node:fs";
+var NEWLINE = 10;
+var MAX_SPOOL_BYTES = 50 * 1024 * 1024;
+var MAX_DEST_LAG_BYTES = 16 * 1024 * 1024;
+var LAG_STRIKES = 3;
+function isCaptureEvent(o) {
+  const e = o;
+  return !!e && typeof e.sid === "string" && typeof e.text === "string" && Number.isInteger(e.seq);
+}
+function isRawRecord(o) {
+  const e = o;
+  return !!e && typeof e.raw === "string" && typeof e.sid === "string";
+}
+function isDocumentRecord(o) {
+  const e = o;
+  if (!e || e.type !== "doc" || e.src !== "claude-code" && e.src !== "codex" || typeof e.sid !== "string" || typeof e.proj !== "string" || e.proj.length === 0)
+    return false;
+  const data = e.data;
+  if (!data || data.kind !== "agent-memory" || typeof data.documentId !== "string" || data.documentId.length === 0 || typeof data.sourcePath !== "string" || typeof data.title !== "string" || data.format !== "text/markdown" || typeof data.text !== "string" || typeof data.sourceUpdatedAt !== "string" || typeof data.capturedAt !== "string" || typeof data.revision !== "string" || data.revision.length === 0 || typeof data.deleted !== "boolean" || typeof data.chunkIndex !== "number" || !Number.isInteger(data.chunkIndex) || data.chunkIndex < 0 || typeof data.chunkCount !== "number" || !Number.isInteger(data.chunkCount) || data.chunkCount <= 0)
+    return false;
+  return data.chunkIndex < data.chunkCount && e.sid === `memory-${data.documentId}`;
+}
+
+class Outbox {
+  dir;
+  spoolPath;
+  cursorPath;
+  projectRoot;
+  maxSpoolBytes;
+  maxDestLagBytes;
+  constructor(projectRoot, opts = {}) {
+    this.projectRoot = projectRoot;
+    this.dir = join6(projectRoot, ".augenta", "outbox");
+    this.spoolPath = join6(this.dir, "spool.jsonl");
+    this.cursorPath = join6(this.dir, "cursor.json");
+    this.maxSpoolBytes = opts.maxSpoolBytes ?? MAX_SPOOL_BYTES;
+    this.maxDestLagBytes = opts.maxDestLagBytes ?? MAX_DEST_LAG_BYTES;
+  }
+  ensure() {
+    ensureAugentaDir(this.projectRoot);
+    mkdirSync4(this.dir, { recursive: true });
+  }
+  append(records) {
+    if (records.length === 0)
+      return true;
+    this.ensure();
+    try {
+      if (statSync2(this.spoolPath).size >= this.maxSpoolBytes)
+        return false;
+    } catch {}
+    appendFileSync(this.spoolPath, records.map((r) => JSON.stringify(r)).join(`
+`) + `
+`);
+    return true;
+  }
+  forceAppend(records) {
+    if (records.length === 0)
+      return;
+    this.ensure();
+    appendFileSync(this.spoolPath, records.map((r) => JSON.stringify(r)).join(`
+`) + `
+`);
+  }
+  dropEpisodePath() {
+    return join6(this.dir, "dropped.json");
+  }
+  markDropped() {
+    this.ensure();
+    const path = this.dropEpisodePath();
+    if (existsSync4(path))
+      return false;
+    writeFileSync4(path, JSON.stringify({ since: new Date().toISOString() }));
+    return true;
+  }
+  clearDropEpisode() {
+    try {
+      unlinkSync2(this.dropEpisodePath());
+    } catch {}
+  }
+  discardNoticePath() {
+    return join6(this.dir, "discarded.json");
+  }
+  markDiscarded(entries) {
+    if (entries.length === 0)
+      return;
+    this.ensure();
+    try {
+      writeFileSync4(this.discardNoticePath(), JSON.stringify({ at: new Date().toISOString(), destinations: entries }));
+    } catch {}
+  }
+  takeDiscarded() {
+    const path = this.discardNoticePath();
+    try {
+      const parsed = JSON.parse(readFileSync5(path, "utf8"));
+      unlinkSync2(path);
+      if (!Array.isArray(parsed.destinations) || parsed.destinations.length === 0) {
+        return;
+      }
+      return parsed.destinations;
+    } catch {
+      return;
+    }
+  }
+  static offset(value) {
+    return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+  }
+  static strikes(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return {};
+    const parsed = {};
+    for (const [key, count] of Object.entries(value)) {
+      const n = Outbox.offset(count);
+      if (!key || n === undefined)
+        return {};
+      parsed[key] = n;
+    }
+    return parsed;
+  }
+  readCursor() {
+    let raw;
+    try {
+      raw = JSON.parse(readFileSync5(this.cursorPath, "utf8"));
+    } catch {
+      return { shipped: 0, lagStrikes: {} };
+    }
+    const shipped = Outbox.offset(raw.shipped) ?? 0;
+    const lagStrikes = Outbox.strikes(raw.lagStrikes);
+    const links = raw.links;
+    if (!links || typeof links !== "object" || Array.isArray(links)) {
+      return { shipped, lagStrikes };
+    }
+    const parsed = {};
+    for (const [key, value] of Object.entries(links)) {
+      const off = Outbox.offset(value);
+      if (!key || off === undefined)
+        return { shipped, lagStrikes };
+      parsed[key] = off;
+    }
+    if (Object.keys(parsed).length === 0)
+      return { shipped, lagStrikes };
+    return { shipped, links: parsed, lagStrikes };
+  }
+  writeCursor(links, scalar, lagStrikes = {}) {
+    this.ensure();
+    const strikes = Object.keys(lagStrikes).length > 0 ? { lagStrikes } : {};
+    const body = links ? { shipped: Math.min(...Object.values(links)), links, ...strikes } : { shipped: scalar ?? 0 };
+    const tmp = this.cursorPath + ".tmp";
+    writeFileSync4(tmp, JSON.stringify(body));
+    renameSync3(tmp, this.cursorPath);
+  }
+  shippedOffset(destKey) {
+    const { shipped, links } = this.readCursor();
+    const stored = destKey === undefined || !links ? shipped : links[destKey] ?? 0;
+    return stored > this.spoolEnd() ? 0 : stored;
+  }
+  spoolEnd() {
+    try {
+      return statSync2(this.spoolPath).size;
+    } catch {
+      return 0;
+    }
+  }
+  registerDestinations(keys, opts = {}) {
+    const wanted = [...new Set(keys)];
+    if (wanted.length === 0)
+      return;
+    const { shipped, links, lagStrikes } = this.readCursor();
+    const spoolEnd = this.spoolEnd();
+    const inheritsScalar = (key) => shipped === 0 || (opts.freshKeys !== undefined ? !opts.freshKeys.includes(key) : wanted.length === 1);
+    const next = {};
+    for (const key of wanted) {
+      next[key] = links?.[key] ?? (links ? spoolEnd : inheritsScalar(key) ? shipped : spoolEnd);
+    }
+    const unchanged = links !== undefined && Object.keys(links).length === wanted.length && wanted.every((key) => links[key] === next[key]);
+    if (unchanged)
+      return;
+    const strikes = {};
+    for (const key of wanted)
+      if (lagStrikes[key])
+        strikes[key] = lagStrikes[key];
+    this.writeCursor(next, undefined, strikes);
+  }
+  enforceLag(progressed = []) {
+    const { links, lagStrikes } = this.readCursor();
+    if (!links || Object.keys(links).length < 2)
+      return [];
+    if (progressed.length === 0)
+      return [];
+    const leader = Math.max(...Object.values(links));
+    const swept = [];
+    const next = { ...links };
+    const strikes = {};
+    for (const [destKey, from] of Object.entries(links)) {
+      if (progressed.includes(destKey))
+        continue;
+      if (leader - from <= this.maxDestLagBytes)
+        continue;
+      const count = (lagStrikes[destKey] ?? 0) + 1;
+      if (count < LAG_STRIKES) {
+        strikes[destKey] = count;
+        continue;
+      }
+      const to = leader - this.maxDestLagBytes;
+      if (to <= from)
+        continue;
+      next[destKey] = to;
+      swept.push({ destKey, from, to });
+    }
+    const strikesChanged = Object.keys(strikes).length !== Object.keys(lagStrikes).length || Object.entries(strikes).some(([key, count]) => lagStrikes[key] !== count);
+    if (swept.length > 0 || strikesChanged)
+      this.writeCursor(next, undefined, strikes);
+    return swept;
+  }
+  hasPendingBytes() {
+    try {
+      return statSync2(this.spoolPath).size > this.shippedOffset();
+    } catch {
+      return false;
+    }
+  }
+  pendingByteCount(destKey) {
+    return Math.max(0, this.spoolEnd() - this.shippedOffset(destKey));
+  }
+  readPending(maxBatch = Infinity, destKey) {
+    const shipped = this.shippedOffset(destKey);
+    if (!existsSync4(this.spoolPath))
+      return { records: [], endOffset: shipped, hasMore: false };
+    const buf = readFileSync5(this.spoolPath);
+    const start = Math.min(shipped, buf.length);
+    const records = [];
+    let off = start;
+    let hasMore = false;
+    let cursor = start;
+    while (cursor < buf.length) {
+      const nl = buf.indexOf(NEWLINE, cursor);
+      const lineEnd = nl === -1 ? buf.length : nl;
+      const next = nl === -1 ? buf.length : nl + 1;
+      const text = buf.subarray(cursor, lineEnd).toString("utf8").trim();
+      if (text) {
+        if (records.length >= maxBatch) {
+          hasMore = true;
+          break;
+        }
+        try {
+          const parsed = JSON.parse(text);
+          if (isCaptureEvent(parsed) || isRawRecord(parsed) || isDocumentRecord(parsed))
+            records.push(parsed);
+        } catch {}
+      }
+      off = next;
+      cursor = next;
+    }
+    return { records, endOffset: off, hasMore };
+  }
+  advance(endOffset, destKey) {
+    if (destKey === undefined) {
+      this.writeCursor(undefined, endOffset);
+      return;
+    }
+    const { shipped, links, lagStrikes } = this.readCursor();
+    const merged = { ...links ?? {} };
+    merged[destKey] = Math.max(merged[destKey] ?? (links ? 0 : shipped), endOffset);
+    this.writeCursor(merged, undefined, lagStrikes);
+  }
+  pendingCount(destKey) {
+    return this.readPending(Infinity, destKey).records.length;
+  }
+  compact() {
+    if (!existsSync4(this.spoolPath))
+      return;
+    let size;
+    try {
+      size = statSync2(this.spoolPath).size;
+    } catch {
+      return;
+    }
+    if (size > 0 && this.shippedOffset() >= size) {
+      const archivePath = this.spoolPath + ".archive";
+      try {
+        renameSync3(this.spoolPath, archivePath);
+      } catch {
+        return;
+      }
+      const { links, lagStrikes } = this.readCursor();
+      if (links) {
+        this.writeCursor(Object.fromEntries(Object.keys(links).map((key) => [key, 0])), undefined, lagStrikes);
+      } else {
+        this.advance(0);
+      }
+      try {
+        unlinkSync2(archivePath);
+      } catch {}
+    }
+  }
+}
+
+// capture/health.ts
+var STAGES = ["dispatch", "capture", "delivery"];
+var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
+function read(projectRoot, stage) {
+  try {
+    const s = JSON.parse(readFileSync6(join7(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
+      return;
+    return {
+      at: new Date(s.at).toISOString(),
+      outcome: s.outcome,
+      count: s.count,
+      successes: s.successes,
+      ...Number.isFinite(Date.parse(s.lastSuccessAt)) ? { lastSuccessAt: new Date(s.lastSuccessAt).toISOString() } : {}
+    };
+  } catch {
+    return;
+  }
+}
+function recordHealth(projectRoot, stage, outcome, count = 0) {
+  try {
+    const dir = join7(ensureAugentaDir(projectRoot), "state");
+    mkdirSync5(dir, { recursive: true });
+    const old = read(projectRoot, stage);
+    const at = new Date().toISOString();
+    const success = outcome === "captured" || outcome === "accepted";
+    const value = {
+      at,
+      outcome,
+      count,
+      successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
+      ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
+    };
+    const file = join7(dir, `health-${stage}.json`);
+    const tmp = `${file}.${randomUUID3()}.tmp`;
+    writeFileSync5(tmp, JSON.stringify(value), { mode: 384 });
+    renameSync4(tmp, file);
+  } catch {}
+}
+function captureHealth(projectRoot) {
+  const cfg = loadProjectConfig(projectRoot);
+  const activity = Object.fromEntries(STAGES.map((stage) => [stage, read(projectRoot, stage) ?? null]));
+  const gate = cfg ? captureGate(cfg) : undefined;
+  return {
+    configured: !!cfg,
+    enabled: gate === "live",
+    ...gate ? { gate } : {},
+    configuration: cfg ? "valid" : existsSync5(join7(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    activityScope: "project",
+    hostDispatch: "unverified",
+    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg ? 1 : 0,
+    pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
+    ...activity,
+    hostApproval: "unknown",
+    ingestion: "unverified",
+    nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in" : gate === "not_adopted" ? "adopt" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
+  };
+}
+
+// capture/harness.ts
+function detectedHarness(explicit, env = process.env) {
+  if (explicit)
+    return explicit;
+  const codex = Boolean(env.CODEX_THREAD_ID || env.CODEX_SANDBOX || env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE === "Codex Desktop");
+  const claude = env.CLAUDECODE === "1";
+  if (codex === claude)
+    return;
+  return codex ? "codex" : "claude-code";
+}
+
+// scripts/connect.ts
+import { chmodSync as chmodSync3, existsSync as existsSync7, readFileSync as readFileSync7, renameSync as renameSync5, rmSync as rmSync2, writeFileSync as writeFileSync6 } from "node:fs";
+import { basename, join as join9 } from "node:path";
+import { randomUUID as randomUUID4 } from "node:crypto";
+import { createInterface } from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
+
+// runtime/version.ts
+var PLUGIN_VERSION = "0.11.0";
+
+// capture/environment.ts
+import { existsSync as existsSync6 } from "node:fs";
+import { dirname as dirname2, join as join8, resolve as resolve3 } from "node:path";
+function sessionEnvironment(env = process.env) {
+  const declared = env.AUGENTA_EPHEMERAL?.trim().toLowerCase();
+  if (declared === "0" || declared === "false")
+    return { ephemeral: false, signals: ["AUGENTA_EPHEMERAL=0"] };
+  const signals = [];
+  let kind;
+  if (env.CLAUDE_CODE_REMOTE === "true") {
+    signals.push("CLAUDE_CODE_REMOTE");
+    kind ??= "claude-cloud";
+  }
+  if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {
+    signals.push("CODEX_HOME=/opt/codex (heuristic)");
+    kind ??= "codex-cloud";
+  }
+  if (declared === "1" || declared === "true") {
+    signals.push("AUGENTA_EPHEMERAL=1");
+    kind ??= "declared";
+  }
+  return { ephemeral: signals.length > 0, ...kind ? { kind } : {}, signals };
+}
+function insideGitCheckout(dir) {
+  let current = resolve3(dir);
+  while (true) {
+    if (existsSync6(join8(current, ".git")))
+      return true;
+    const parent = dirname2(current);
+    if (parent === current)
+      return false;
+    current = parent;
+  }
+}
+function ephemeralProject(projectRoot, env = process.env) {
+  return sessionEnvironment(env).ephemeral && !insideGitCheckout(projectRoot);
 }
 
 // capture/platform.ts
@@ -1084,20 +1414,27 @@ function environmentLabel(controlUrl2) {
 }
 function describeError(error) {
   const message = error?.message ?? String(error);
+  if (error instanceof DiscoveryError)
+    return message;
+  const failure = classifyNetworkError(error);
+  switch (failure?.kind) {
+    case "proxy_refused":
+      return `cannot reach Augenta: a proxy refused the connection (${failure.status}). This network's allowlist may block Augenta's hosts.`;
+    case "dns":
+      return "cannot reach Augenta: the host name did not resolve. Check your network or DNS.";
+    case "refused":
+      return "cannot reach Augenta: the connection was refused. Check the URL, and any proxy or firewall.";
+    case "reset":
+      return "cannot reach Augenta: the connection was cut. Check any proxy or firewall.";
+    case "timeout":
+      return "cannot reach Augenta: no answer in time. Check your network, and any proxy or firewall.";
+    case "tls":
+      return "cannot reach Augenta: the TLS certificate could not be verified. Check for a TLS-intercepting proxy.";
+  }
   if (message !== "fetch failed")
     return message;
   const cause = error.cause;
-  const code = cause?.code;
-  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
-    return "cannot reach Augenta: the host name did not resolve. Check your network or DNS.";
-  }
-  if (code === "ECONNREFUSED") {
-    return "cannot reach Augenta: the connection was refused. Check the URL, and any proxy or firewall.";
-  }
-  if (code === "CERT_HAS_EXPIRED" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {
-    return "cannot reach Augenta: the TLS certificate could not be verified. Check for a TLS-intercepting proxy.";
-  }
-  const detail = cause?.message ?? code;
+  const detail = cause?.message ?? cause?.code;
   return detail ? `cannot reach Augenta: ${detail}` : "cannot reach Augenta: the network request failed. Check your connection.";
 }
 // scripts/connect.ts
@@ -1148,6 +1485,14 @@ function parseArgs(argv) {
       args.health = true;
     } else if (flag === "--repair-harness") {
       args.repairHarness = true;
+    } else if (flag === "--auto-recall") {
+      const value = valueFor(flag, i++);
+      if (value !== "on" && value !== "off") {
+        throw new Error("--auto-recall must be on or off");
+      }
+      args.autoRecall = value === "on";
+    } else if (flag === "--adopt") {
+      args.adopt = true;
     } else if (flag === "--probe") {
       args.probe = true;
     } else if (flag === "--login") {
@@ -1159,9 +1504,13 @@ function parseArgs(argv) {
   return args;
 }
 function writeApiKeyConfig(projectRoot, apiKey, endpoint2, details = {}) {
+  if (isTrackedByGit(projectRoot, ".augenta/config.json")) {
+    throw new Error(".augenta/config.json is tracked by git, and an API-key config would put the key in it; untrack it first (git rm --cached .augenta/config.json)");
+  }
   const dir = ensureAugentaDir(projectRoot);
-  const path = join7(dir, "config.json");
-  writeFileSync5(path, `${JSON.stringify({
+  setAugentaIgnore(projectRoot, "local");
+  const path = join9(dir, "config.json");
+  writeFileSync6(path, `${JSON.stringify({
     authMode: "api-key",
     captureSince: new Date().toISOString(),
     apiKey,
@@ -1169,6 +1518,7 @@ function writeApiKeyConfig(projectRoot, apiKey, endpoint2, details = {}) {
     destinations: details.destinations?.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
     controlUrl: details.controlUrl,
     ingestUrl: details.ingestUrl,
+    autoRecall: details.autoRecall ?? false,
     ...endpoint2 ? { endpoint: endpoint2 } : {}
   }, null, 2)}
 `, { mode: 384 });
@@ -1180,20 +1530,36 @@ function writeOAuthConfig(projectRoot, connection) {
     throw new Error("an OAuth connection requires at least one Connector");
   }
   const dir = ensureAugentaDir(projectRoot);
-  const path = join7(dir, "config.json");
-  writeFileSync5(path, `${JSON.stringify({
-    authMode: "oauth",
-    captureSince: new Date().toISOString(),
-    profileId: connection.profileId,
-    controlUrl: connection.controlUrl,
-    endpoint: connection.endpoint,
-    discoveredGateway: connection.discoveredGateway,
-    org: { id: connection.org.id, name: connection.org.name },
-    destinations: connection.destinations.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
-    ingestUrl: connection.ingestUrl
-  }, null, 2)}
+  const path = join9(dir, "config.json");
+  const joinedAt = new Date().toISOString();
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync6(tmp, `${JSON.stringify({
+      authMode: "oauth",
+      projectKey: connection.projectKey,
+      profileId: connection.profileId,
+      controlUrl: connection.controlUrl,
+      endpoint: connection.endpoint,
+      discoveredGateway: connection.discoveredGateway,
+      org: { id: connection.org.id, name: connection.org.name },
+      workspaces: connection.destinations.map(({ workspaceId, workspaceName }) => ({ workspaceId, workspaceName })),
+      autoRecall: connection.autoRecall ?? false,
+      ingestUrl: connection.ingestUrl
+    }, null, 2)}
 `, { mode: 384 });
+    renameSync5(tmp, path);
+  } finally {
+    rmSync2(tmp, { force: true });
+  }
   chmodSync3(path, 384);
+  setAugentaIgnore(projectRoot, "shared");
+  writeLinks(projectRoot, {
+    profileId: connection.profileId,
+    userId: connection.userId,
+    projectKey: connection.projectKey,
+    joinedAt,
+    links: connection.destinations.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId }))
+  });
   return path;
 }
 async function choose(prompt, values, label) {
@@ -1214,6 +1580,22 @@ async function choose(prompt, values, label) {
       throw new Error(`invalid selection: ${answer.trim() || "(empty)"}`);
     }
     return selected;
+  } finally {
+    rl.close();
+  }
+}
+async function askAutoRecall(current) {
+  if (!input.isTTY) {
+    throw new Error("run augenta:connect in an interactive terminal");
+  }
+  const fallback = current ?? false;
+  console.log("Automatic recall looks up what these Workspaces remember about each prompt you submit, and hands any match to your agent. Your agent can still ask with /augenta:recall either way.");
+  const rl = createInterface({ input, output });
+  try {
+    const answer = (await rl.question(`Turn on automatic recall for this project? [${fallback ? "Y/n" : "y/N"}]: `)).trim().toLowerCase();
+    if (!answer)
+      return fallback;
+    return answer === "y" || answer === "yes";
   } finally {
     rl.close();
   }
@@ -1370,18 +1752,73 @@ async function selectedWorkspaces(profileId, gateway, organizationName, preselec
     choices = await listWorkspaces(profileId, gateway);
   }
 }
-async function priorLinks(profileId, gateway, ids) {
+function legacyConnectorIds(projectRoot) {
+  try {
+    const raw = JSON.parse(readFileSync7(configPath(projectRoot), "utf8"));
+    if (raw.authMode !== "oauth" || !Array.isArray(raw.destinations))
+      return [];
+    const ids = raw.destinations.map((item) => item && typeof item === "object" ? item.connectorId : undefined).filter((id) => typeof id === "string" && id.trim().length > 0).map((id) => id.trim());
+    return [...new Set(ids)];
+  } catch {
+    return [];
+  }
+}
+function priorCandidateIds(projectRoot, signedIn) {
+  const links = readLinks(projectRoot);
+  const local = links && links.userId === signedIn.userId ? links.links.map((link) => link.connectorId) : [];
+  return [...new Set([...local, ...legacyConnectorIds(projectRoot)])];
+}
+function unsentFromAnotherSignIn(projectRoot, userId) {
+  const previous = readLinks(projectRoot);
+  if (!previous || previous.userId === userId)
+    return 0;
+  try {
+    return new Outbox(projectRoot).pendingByteCount();
+  } catch {
+    return 0;
+  }
+}
+async function priorLinks(profileId, gateway, ids, userId) {
   const links = [];
+  const unresolved = [];
   for (const id of ids) {
     const link = await currentConnector(profileId, gateway, id).catch(() => {
       return;
     });
-    if (link)
+    if (!link)
+      unresolved.push(id);
+    else if (link.ownerUserId === userId)
       links.push(link);
   }
-  return links;
+  return { links, unresolved };
 }
-async function linkForWorkspace(projectRoot, args, profileId, gateway, workspace, adoptable) {
+async function ownProjectLinks(profileId, gateway, owner, workspaceId) {
+  const query = new URLSearchParams({ kind: "agent", status: "active", workspaceId });
+  const { connectors } = await bearerJson(profileId, `${gateway}/v1/connectors?${query}`);
+  return (connectors ?? []).filter((link) => link.kind === "agent" && link.status === "active" && link.workspaceId === workspaceId && link.ownerUserId === owner.userId && link.metadata?.projectKey === owner.projectKey).sort((a, b) => (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+async function adoptionCandidates(profileId, gateway, owner, workspaces, prior, lookup) {
+  const candidates = new Map;
+  for (const workspace of workspaces) {
+    const own = prior.filter((link) => link.workspaceId === workspace.id);
+    if (!lookup || own.some((link) => link.kind === "agent" && link.status === "active")) {
+      candidates.set(workspace.id, own);
+      continue;
+    }
+    try {
+      const found = await ownProjectLinks(profileId, gateway, owner, workspace.id);
+      candidates.set(workspace.id, [...own, ...found.filter((link) => !own.some((mine) => mine.id === link.id))]);
+    } catch (error) {
+      candidates.set(workspace.id, error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+  return candidates;
+}
+function sameMetadata(a, b) {
+  const canonical2 = (value) => JSON.stringify(Object.entries(value ?? {}).sort(([x], [y]) => x < y ? -1 : x > y ? 1 : 0));
+  return canonical2(a) === canonical2(b);
+}
+async function linkForWorkspace(projectRoot, args, profileId, gateway, workspace, adoptable, owner) {
   const name = basename(projectRoot);
   const fields = {
     workspaceId: workspace.id,
@@ -1392,17 +1829,21 @@ async function linkForWorkspace(projectRoot, args, profileId, gateway, workspace
     harness: detectedHarness(args.harness),
     client: "augenta-plugin",
     description: `Agent activity and project memory from ${name}`,
-    metadata: { pluginVersion: PLUGIN_VERSION }
+    metadata: { pluginVersion: PLUGIN_VERSION, projectKey: owner.projectKey }
   };
-  const existing = adoptable.find((link) => link.kind === "agent" && link.status === "active" && link.workspaceId === workspace.id);
+  const existing = adoptable.find((link) => link.kind === "agent" && link.status === "active" && link.workspaceId === workspace.id && link.ownerUserId === owner.userId);
   if (existing) {
+    const metadata = { ...existing.metadata ?? {}, ...fields.metadata };
+    if (existing.name === fields.name && existing.projectName === fields.projectName && (fields.harness === undefined || existing.harness === fields.harness) && existing.client === fields.client && existing.description === fields.description && sameMetadata(existing.metadata, metadata)) {
+      return { connector: existing, action: "adopted" };
+    }
     const { kind: _kind, workspaceId: _workspaceId, ...mutableFields } = fields;
     const connector2 = (await bearerJson(profileId, `${gateway}/v1/connectors/${encodeURIComponent(existing.id)}`, {
       method: "PATCH",
       headers: {
         ...existing._etag ? { "if-match": existing._etag } : {}
       },
-      body: JSON.stringify({ ...mutableFields, _etag: existing._etag })
+      body: JSON.stringify({ ...mutableFields, metadata, _etag: existing._etag })
     })).connector;
     return { connector: connector2, action: "adopted" };
   }
@@ -1419,7 +1860,7 @@ async function resolveOAuth(args, projectRoot = args.project ?? process.cwd()) {
   return { oauth: { ...discovered, gateway }, gateway, control, discoveredGateway };
 }
 function priorConnection(projectRoot) {
-  if (!existsSync6(join7(projectRoot, ".augenta", "config.json")))
+  if (!existsSync7(join9(projectRoot, ".augenta", "config.json")))
     return;
   try {
     const existing = loadProjectConfig(projectRoot);
@@ -1429,15 +1870,66 @@ function priorConnection(projectRoot) {
   }
 }
 async function establishConnectors(projectRoot, args, profileId, gateway, connection, workspaces, priorConnectorIds, available = workspaces, preresolved) {
-  const adoptable = preresolved ?? await priorLinks(profileId, gateway, priorConnectorIds);
-  const unresolvedConnectorIds = priorConnectorIds.filter((id) => !adoptable.some((link) => link.id === id));
-  const priorWorkspaceIds = adoptable.map((link) => link.workspaceId);
+  const prior = preresolved ?? await priorLinks(profileId, gateway, priorConnectorIds, connection.owner.userId);
+  const adoptable = prior.links;
+  const unresolvedConnectorIds = prior.unresolved;
+  const priorWorkspaceIds = [
+    ...new Set([
+      ...(connection.recorded ?? []).map((workspace) => workspace.workspaceId),
+      ...adoptable.map((link) => link.workspaceId)
+    ])
+  ];
+  const candidates = await adoptionCandidates(profileId, gateway, connection.owner, workspaces, adoptable, connection.knownProject);
+  const results = await linkWorkspaces(projectRoot, args, profileId, gateway, connection.owner, workspaces, candidates);
+  for (const result of results) {
+    if (!result.connectorId && priorWorkspaceIds.includes(result.workspaceId))
+      result.wasConnected = true;
+  }
+  const verifiedIds = results.map((result) => result.connectorId).filter((id) => Boolean(id));
+  const selectedIds = workspaces.map((workspace) => workspace.id);
+  const nameFor = (id) => available.find((workspace) => workspace.id === id)?.name ?? connection.recorded?.find((workspace) => workspace.workspaceId === id)?.workspaceName;
+  const removed = priorWorkspaceIds.filter((id) => !selectedIds.includes(id)).map((workspaceId) => {
+    const name = nameFor(workspaceId);
+    const own = adoptable.find((link) => link.workspaceId === workspaceId);
+    return {
+      ...own ? { connectorId: own.id } : {},
+      workspaceId,
+      ...name ? { workspaceName: name } : {},
+      disposition: "left_in_place"
+    };
+  });
+  if (verifiedIds.length === 0)
+    return { results, removed, unresolvedConnectorIds };
+  const previous = loadProjectConfig(projectRoot);
+  const unsent = unsentFromAnotherSignIn(projectRoot, connection.owner.userId);
+  const configPath2 = writeOAuthConfig(projectRoot, {
+    profileId,
+    userId: connection.owner.userId,
+    projectKey: connection.owner.projectKey,
+    controlUrl: connection.controlUrl,
+    org: connection.org,
+    discoveredGateway: connection.discoveredGateway,
+    endpoint: gateway,
+    destinations: results.filter((result) => Boolean(result.connectorId)).map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+    autoRecall: args.autoRecall ?? previous?.autoRecall ?? false,
+    ingestUrl: previous?.ingestUrl
+  });
+  try {
+    const freshKeys = results.filter((result) => result.connectorId && (result.action === "created" || !priorConnectorIds.includes(result.connectorId))).map((result) => result.connectorId);
+    new Outbox(projectRoot).registerDestinations(verifiedIds, { freshKeys });
+  } catch {}
+  return { results, removed, unresolvedConnectorIds, configPath: configPath2, ...unsent > 0 ? { unsentFromAnotherSignIn: unsent } : {} };
+}
+async function linkWorkspaces(projectRoot, args, profileId, gateway, owner, workspaces, candidates) {
   const results = [];
   for (const workspace of workspaces) {
     try {
-      const { connector, action } = await linkForWorkspace(projectRoot, args, profileId, gateway, workspace, adoptable);
+      const adoptable = candidates.get(workspace.id) ?? [];
+      if (adoptable instanceof Error)
+        throw adoptable;
+      const { connector, action } = await linkForWorkspace(projectRoot, args, profileId, gateway, workspace, adoptable, owner);
       const verified = await bearerJson(profileId, `${gateway}/v1/connectors/${encodeURIComponent(connector.id)}`);
-      if (verified.connector.status !== "active" || verified.connector.workspaceId !== workspace.id) {
+      if (verified.connector.status !== "active" || verified.connector.workspaceId !== workspace.id || verified.connector.ownerUserId !== owner.userId) {
         throw new Error("Connector verification failed");
       }
       results.push({
@@ -1450,45 +1942,20 @@ async function establishConnectors(projectRoot, args, profileId, gateway, connec
       results.push({
         workspaceId: workspace.id,
         workspaceName: workspace.name,
-        message: error instanceof Error ? error.message : String(error),
-        ...priorWorkspaceIds.includes(workspace.id) ? { wasConnected: true } : {}
+        message: error instanceof Error ? error.message : String(error)
       });
     }
   }
-  const verifiedIds = results.map((result) => result.connectorId).filter((id) => Boolean(id));
-  const selectedIds = workspaces.map((workspace) => workspace.id);
-  const nameFor = (id) => available.find((workspace) => workspace.id === id)?.name;
-  const removed = adoptable.filter((link) => !selectedIds.includes(link.workspaceId)).map((link) => {
-    const name = nameFor(link.workspaceId);
-    return {
-      connectorId: link.id,
-      workspaceId: link.workspaceId,
-      ...name ? { workspaceName: name } : {},
-      disposition: "left_in_place"
-    };
-  });
-  if (verifiedIds.length === 0)
-    return { results, removed, unresolvedConnectorIds };
-  const configPath2 = writeOAuthConfig(projectRoot, {
-    profileId,
-    ...connection,
-    endpoint: gateway,
-    destinations: results.filter((result) => Boolean(result.connectorId)).map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
-    ingestUrl: loadProjectConfig(projectRoot)?.ingestUrl
-  });
-  try {
-    const freshKeys = results.filter((result) => result.action === "created" && result.connectorId).map((result) => result.connectorId);
-    new Outbox(projectRoot).registerDestinations(verifiedIds, { freshKeys });
-  } catch {}
-  return { results, removed, unresolvedConnectorIds, configPath: configPath2 };
+  return results;
 }
 async function connectProject(projectRoot, args) {
   const { oauth, gateway, control, discoveredGateway } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
   const selected = await selectOrCreateProfile(oauth, prior?.profileId);
   console.log(`Signed in as ${selected.me.user.name || selected.me.user.email} to ${selected.me.org.name} (${selected.me.org.id}).`);
-  const priorIds = prior?.connectorIds ?? [];
-  const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds);
+  const priorIds = priorCandidateIds(projectRoot, { userId: selected.me.user.id });
+  const owner = { userId: selected.me.user.id, projectKey: prior?.projectKey ?? randomUUID4() };
+  const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds, owner.userId);
   const available = await listWorkspaces(selected.profileId, gateway);
   const environment = environmentLabel(control);
   console.log("Every Workspace you select receives the FULL record — this project's agent activity, its raw transcript lines (structurally sanitized, but NOT secret-scrubbed), and its project memory, complete, in each.");
@@ -1499,11 +1966,25 @@ async function connectProject(projectRoot, args) {
   if (prior?.controlUrl && prior.controlUrl !== control) {
     console.log(`This project is moving from ${environmentLabel(prior.controlUrl)} to ${environment}.`);
   }
-  const workspaces = await selectedWorkspaces(selected.profileId, gateway, selected.me.org.name, resolvedPrior.map((link) => link.workspaceId), available);
+  if (prior && isTrackedByGit(projectRoot, ".augenta/config.json")) {
+    console.log("Git tracks this project's .augenta/config.json, so the set you choose changes the Workspaces for everyone who pulls it.");
+  }
+  const workspaces = await selectedWorkspaces(selected.profileId, gateway, selected.me.org.name, [
+    ...(prior?.workspaces ?? []).map((workspace) => workspace.workspaceId),
+    ...resolvedPrior.links.map((link) => link.workspaceId)
+  ], available);
   if (workspaces.length === 0) {
     throw new Error("choose at least one Workspace");
   }
-  const { results, removed, unresolvedConnectorIds, configPath: written } = await establishConnectors(projectRoot, args, selected.profileId, gateway, { controlUrl: control, org: selected.me.org, discoveredGateway }, workspaces, priorIds, available, resolvedPrior);
+  const autoRecall = args.autoRecall ?? await askAutoRecall(loadProjectConfig(projectRoot)?.autoRecall);
+  const { results, removed, unresolvedConnectorIds, configPath: written, unsentFromAnotherSignIn: unsent } = await establishConnectors(projectRoot, { ...args, autoRecall }, selected.profileId, gateway, {
+    controlUrl: control,
+    org: selected.me.org,
+    discoveredGateway,
+    owner,
+    knownProject: Boolean(prior?.projectKey),
+    recorded: prior?.workspaces
+  }, workspaces, priorIds, available, resolvedPrior);
   const live = results.filter((result) => result.connectorId);
   const failed = results.filter((result) => !result.connectorId);
   if (live.length > 0) {
@@ -1511,6 +1992,7 @@ async function connectProject(projectRoot, args) {
     if (live.length > 1) {
       console.log("Each of those receives the full record, so the audience is the union of everyone with access to any of them.");
     }
+    console.log(`Automatic recall is ${autoRecall ? "on" : "off"} for this project.`);
   } else {
     console.log("No destination could be linked. No config was written.");
   }
@@ -1519,10 +2001,13 @@ async function connectProject(projectRoot, args) {
   }
   if (written) {
     for (const entry of removed) {
-      console.log(`No longer sending to ${entry.workspaceName ?? entry.workspaceId}. Its Connector ${entry.connectorId} is left in place and idle — remove it in Augenta if you want it gone.`);
+      console.log(entry.connectorId ? `No longer sending to ${entry.workspaceName ?? entry.workspaceId}. Its Connector ${entry.connectorId} is left in place and idle — remove it in Augenta if you want it gone.` : `No longer sending to ${entry.workspaceName ?? entry.workspaceId}.`);
     }
     if (unresolvedConnectorIds.length > 0) {
       console.log(`Dropped ${unresolvedConnectorIds.join(", ")}: this project listed ${unresolvedConnectorIds.length === 1 ? "that Connector" : "those Connectors"} but ${unresolvedConnectorIds.length === 1 ? "it is" : "they are"} no longer readable with this sign-in.`);
+    }
+    if (unsent) {
+      console.log(`${unsent} bytes of records captured here under another person's sign-in were not sent and will not be: they could go only through that person's own Connectors.`);
     }
   }
 }
@@ -1542,9 +2027,31 @@ async function workspaceStep(profileId, gateway, me) {
     workspaces: workspaces.map(({ id, name }) => ({ id, name }))
   };
 }
-async function priorDestinations(profileId, gateway, ids, workspaces) {
+async function priorDestinations(profileId, gateway, userId, prior, ids, workspaces) {
   const destinations = [];
   const unresolvedConnectorIds = [];
+  if (prior?.workspaces) {
+    for (const recorded of prior.workspaces) {
+      const name = workspaces.find((n) => n.id === recorded.workspaceId)?.name;
+      const mine = prior.destinations?.find((destination) => destination.workspaceId === recorded.workspaceId);
+      let connectorId;
+      if (mine) {
+        const link = await currentConnector(profileId, gateway, mine.connectorId).catch(() => {
+          return;
+        });
+        if (link?.ownerUserId === userId)
+          connectorId = link.id;
+        else
+          unresolvedConnectorIds.push(mine.connectorId);
+      }
+      destinations.push({
+        ...connectorId ? { connectorId } : {},
+        workspaceId: recorded.workspaceId,
+        ...name ? { workspaceName: name } : {}
+      });
+    }
+    return { destinations, unresolvedConnectorIds };
+  }
   for (const id of ids) {
     const link = await currentConnector(profileId, gateway, id).catch(() => {
       return;
@@ -1553,6 +2060,8 @@ async function priorDestinations(profileId, gateway, ids, workspaces) {
       unresolvedConnectorIds.push(id);
       continue;
     }
+    if (link.ownerUserId !== userId)
+      continue;
     const name = workspaces.find((n) => n.id === link.workspaceId)?.name;
     destinations.push({
       connectorId: link.id,
@@ -1568,8 +2077,12 @@ async function probeConnection(resolved, args) {
   const change = environmentChange(cfg, args);
   const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
-  const priorIds = prior?.connectorIds ?? [];
-  const alreadyConnected = { alreadyConnected: Boolean(cfg), ...current ? { current } : {}, ...change };
+  const alreadyConnected = {
+    alreadyConnected: Boolean(cfg),
+    ...current ? { current } : {},
+    ...change,
+    ...cfg ? joinedState(cfg) : {}
+  };
   const usable = await usableProfiles(oauth, prior?.profileId);
   if (usable.length === 0)
     return { status: "need_login", ...alreadyConnected };
@@ -1588,7 +2101,7 @@ async function probeConnection(resolved, args) {
   return {
     ...step,
     ...alreadyConnected,
-    ...await priorDestinations(usable[0].profileId, gateway, priorIds, step.workspaces)
+    ...await priorDestinations(usable[0].profileId, gateway, usable[0].me.user.id, prior, priorCandidateIds(resolved.projectRoot, { userId: usable[0].me.user.id }), step.workspaces)
   };
 }
 async function startLogin(args) {
@@ -1742,7 +2255,14 @@ async function connectToWorkspaces(resolved, args) {
     };
   }
   const workspaces = available.filter((item) => requested.includes(item.id));
-  const { results, removed, unresolvedConnectorIds, configPath: configPath2 } = await establishConnectors(resolved.projectRoot, args, picked.profileId, gateway, { controlUrl: control, org: picked.me.org, discoveredGateway }, workspaces, prior?.connectorIds ?? [], available);
+  const { results, removed, unresolvedConnectorIds, configPath: configPath2, unsentFromAnotherSignIn: unsent } = await establishConnectors(resolved.projectRoot, args, picked.profileId, gateway, {
+    controlUrl: control,
+    org: picked.me.org,
+    discoveredGateway,
+    owner: { userId: picked.me.user.id, projectKey: prior?.projectKey ?? randomUUID4() },
+    knownProject: Boolean(prior?.projectKey),
+    recorded: prior?.workspaces
+  }, workspaces, priorCandidateIds(resolved.projectRoot, { userId: picked.me.user.id }), available);
   const destinations = results.filter((result) => result.connectorId);
   const failed = results.filter((result) => !result.connectorId);
   if (destinations.length === 0) {
@@ -1766,14 +2286,25 @@ async function connectToWorkspaces(resolved, args) {
     } : {},
     ...removed.length > 0 ? { removed } : {},
     ...unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {},
+    ...unsent ? { unsentFromAnotherSignIn: unsent } : {},
     organization: picked.me.org.name,
     ...environmentChange(prior, args),
+    autoRecall: loadProjectConfig(resolved.projectRoot)?.autoRecall ? "on" : "off",
     configPath: configPath2
   };
 }
 function environmentChange(cfg, args) {
   const next = controlUrl(cfg, args.controlUrl);
   return cfg?.controlUrl && cfg.controlUrl !== next ? { environmentChange: { from: environmentLabel(cfg.controlUrl), to: environmentLabel(next) } } : {};
+}
+function joinedState(cfg) {
+  return {
+    adopted: cfg.authMode === "oauth" ? cfg.join === "joined" : true,
+    configTracked: isTrackedByGit(cfg.projectRoot, ".augenta/config.json")
+  };
+}
+function autoRecallSetting(cfg) {
+  return cfg.autoRecall === undefined ? "on_by_default" : cfg.autoRecall ? "on" : "off";
 }
 function savedConnection(cfg) {
   if (!cfg)
@@ -1782,7 +2313,8 @@ function savedConnection(cfg) {
     authMode: cfg.authMode,
     environment: environmentLabel(cfg.controlUrl),
     organization: cfg.org?.name ?? cfg.org?.id,
-    destinations: cfg.destinations ?? []
+    destinations: cfg.authMode === "oauth" ? cfg.workspaces ?? [] : cfg.destinations ?? [],
+    autoRecall: autoRecallSetting(cfg)
   };
 }
 async function runJsonVerb(resolved, args) {
@@ -1790,11 +2322,25 @@ async function runJsonVerb(resolved, args) {
   const metadata = {
     environment: environmentLabel(args.repairHarness ? cfg?.controlUrl : controlUrl(cfg, args.controlUrl)),
     ...args.repairHarness ? {} : environmentChange(cfg, args),
-    ...args.probe && cfg ? { current: savedConnection(cfg) } : {}
+    ...args.probe && cfg ? { current: savedConnection(cfg) } : {},
+    ...args.probe ? { session: sessionEnvironment() } : {}
   };
   try {
     return { ...await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot }), ...metadata };
   } catch (error) {
+    if (classifyNetworkError(error)) {
+      const hosts = await diagnoseHosts(controlUrl(cfg, args.controlUrl));
+      const blocked = hosts.filter((host) => !host.ok);
+      if (blocked.length > 0) {
+        return {
+          status: "error",
+          code: "network_blocked",
+          hosts,
+          message: `this network does not let connect reach ${blocked.map((host) => `${host.host} (${host.reason})`).join(", ")}; ` + `connect needs ${hosts.map((host) => host.host).join(", ")}, so allow them in this environment's network settings`,
+          ...metadata
+        };
+      }
+    }
     return { status: "error", code: "failed", message: describeError(error), ...metadata };
   }
 }
@@ -1804,6 +2350,9 @@ async function repairHarness(projectRoot, args) {
   const cfg = loadProjectConfig(projectRoot);
   if (cfg?.authMode !== "oauth")
     return { status: "error", code: "oauth_connection_required", message: "repair requires a readable browser-connected project config" };
+  const owner = cfg.destinations?.length ? storedProfileUserId(cfg.profileId) : undefined;
+  if (!owner)
+    return { status: "error", code: "not_joined", message: "this checkout has not joined its project's connection; join it with connect first" };
   const savedGateway = cfg.endpoint || cfg.discoveredGateway;
   if (!savedGateway)
     return { status: "error", code: "endpoint_required", message: "repair requires a saved project endpoint" };
@@ -1815,8 +2364,8 @@ async function repairHarness(projectRoot, args) {
     try {
       const url = `${gateway}/v1/connectors/${encodeURIComponent(connectorId)}`;
       const { connector } = await bearerJson(cfg.profileId, url);
-      if (connector.id !== connectorId || connector.kind !== "agent" || connector.status !== "active" || connector.workspaceId !== destination.workspaceId || !connector._etag) {
-        throw new Error("Connector must be an active agent in the recorded Workspace with a current revision; nothing changed");
+      if (connector.id !== connectorId || connector.kind !== "agent" || connector.status !== "active" || connector.workspaceId !== destination.workspaceId || connector.ownerUserId !== owner || !connector._etag) {
+        throw new Error("Connector must be your active agent in the recorded Workspace with a current revision; nothing changed");
       }
       const { connector: updated } = await bearerJson(cfg.profileId, url, {
         method: "PATCH",
@@ -1839,14 +2388,155 @@ async function repairHarness(projectRoot, args) {
     failed
   };
 }
+async function adoptProject(resolved, args) {
+  const cfg = loadProjectConfig(resolved.projectRoot);
+  if (!cfg) {
+    return { status: "error", code: "not_connected", message: "this project has no readable connection to join; connect it instead" };
+  }
+  if (cfg.authMode !== "oauth") {
+    return { status: "error", code: "oauth_connection_required", message: "an API-key project has nothing to join: its key is its connection" };
+  }
+  const recorded = cfg.controlUrl ?? DEFAULT_CONTROL_URL;
+  if (controlUrl(cfg) !== recorded) {
+    return {
+      status: "error",
+      code: "environment_mismatch",
+      message: `this project's config records the ${environmentLabel(recorded)} environment, but this session is pointed at ${environmentLabel(controlUrl(cfg))}; unset AUGENTA_CONTROL_URL to join it`
+    };
+  }
+  const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
+  const usable = await usableProfiles(oauth, cfg.profileId);
+  const organization = cfg.org?.name ?? cfg.org?.id;
+  if (usable.length === 0) {
+    return { status: "need_login", message: "sign in to Augenta, then join again", organization };
+  }
+  const picked = usable.find((item) => item.profileId === cfg.profileId);
+  if (!picked && reusableProfiles(oauth).some((item) => item.profileId === cfg.profileId)) {
+    return { status: "need_login", message: `the sign-in to ${organization ?? "this project's organization"} needs renewing; sign in again, then join`, organization };
+  }
+  if (!picked) {
+    return {
+      status: "error",
+      code: "org_mismatch",
+      organization,
+      signedInTo: [...new Set(usable.map((item) => item.me.org.name))],
+      message: `this project was connected in ${organization ?? "another organization"}, and this sign-in is not; sign in to that organization, or choose different Workspaces`
+    };
+  }
+  const owner = { userId: picked.me.user.id, projectKey: cfg.projectKey };
+  const available = await listWorkspaces(picked.profileId, gateway);
+  const workspaces = [];
+  const unreachable = [];
+  for (const entry of cfg.workspaces) {
+    const live = available.find((workspace) => workspace.id === entry.workspaceId);
+    if (live)
+      workspaces.push(live);
+    else
+      unreachable.push({ ...entry });
+  }
+  if (unreachable.length > 0) {
+    return {
+      status: "error",
+      code: "destinations_unreachable",
+      reachable: workspaces.map(({ id, name }) => ({ workspaceId: id, workspaceName: name })),
+      unreachable,
+      organization,
+      message: `this sign-in cannot use ${unreachable.map((item) => item.workspaceName ?? item.workspaceId).join(", ")}; you may need to be added to ${unreachable.length === 1 ? "that Workspace" : "those Workspaces"}. Nothing was created, and capture stays off in this checkout`
+    };
+  }
+  const previous = readLinks(resolved.projectRoot)?.links.map((link) => link.connectorId) ?? [];
+  const prior = await priorLinks(picked.profileId, gateway, priorCandidateIds(resolved.projectRoot, { userId: owner.userId }), owner.userId);
+  const candidates = await adoptionCandidates(picked.profileId, gateway, owner, workspaces, prior.links, true);
+  const unchecked = workspaces.filter((workspace) => candidates.get(workspace.id) instanceof Error);
+  if (unchecked.length > 0) {
+    return {
+      status: "error",
+      code: "join_failed",
+      failed: unchecked.map((workspace) => ({
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
+        message: describeError(candidates.get(workspace.id))
+      })),
+      organization,
+      message: `could not check this sign-in's existing links into ${unchecked.map((workspace) => workspace.name).join(", ")}; nothing was created, and capture stays off in this checkout`
+    };
+  }
+  const results = await linkWorkspaces(resolved.projectRoot, args, picked.profileId, gateway, owner, workspaces, candidates);
+  const failed = results.filter((result) => !result.connectorId);
+  if (failed.length > 0) {
+    return {
+      status: "error",
+      code: "join_failed",
+      failed: failed.map(({ workspaceId, workspaceName, message }) => ({ workspaceId, workspaceName, message })),
+      organization,
+      message: `could not link ${failed.map((result) => result.workspaceName).join(", ")}; capture stays off in this checkout. Any link already made is kept and reused when you join again`
+    };
+  }
+  const destinations = results.map(({ connectorId, workspaceId, workspaceName, action }) => ({
+    connectorId,
+    workspaceId,
+    workspaceName,
+    action
+  }));
+  const unsent = unsentFromAnotherSignIn(resolved.projectRoot, owner.userId);
+  writeLinks(resolved.projectRoot, {
+    profileId: picked.profileId,
+    userId: owner.userId,
+    projectKey: owner.projectKey,
+    joinedAt: new Date().toISOString(),
+    links: destinations.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId }))
+  });
+  const ids = destinations.map((destination) => destination.connectorId);
+  try {
+    new Outbox(resolved.projectRoot).registerDestinations(ids, { freshKeys: ids.filter((id) => !previous.includes(id)) });
+  } catch {}
+  return {
+    status: "adopted",
+    destinations,
+    ...unsent > 0 ? { unsentFromAnotherSignIn: unsent } : {},
+    organization,
+    autoRecall: autoRecallSetting(cfg),
+    captureHealth: captureHealth(resolved.projectRoot)
+  };
+}
+function setAutoRecall(projectRoot, autoRecall) {
+  const cfg = loadProjectConfig(projectRoot);
+  if (!cfg) {
+    return {
+      status: "error",
+      code: "not_connected",
+      message: "this project has no readable connection; connect it first, then change automatic recall"
+    };
+  }
+  if (cfg.authMode === "oauth" && cfg.join !== "joined") {
+    return {
+      status: "error",
+      code: "not_joined",
+      message: "this checkout has not joined its project's connection; join it with connect first, then change automatic recall"
+    };
+  }
+  const path = configPath(projectRoot);
+  const raw = JSON.parse(readFileSync7(path, "utf8"));
+  raw.autoRecall = autoRecall;
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync6(tmp, `${JSON.stringify(raw, null, 2)}
+`, { mode: 384 });
+    renameSync5(tmp, path);
+  } finally {
+    rmSync2(tmp, { force: true });
+  }
+  chmodSync3(path, 384);
+  return { status: "auto_recall_updated", autoRecall: autoRecall ? "on" : "off" };
+}
 async function dispatchJsonVerb(resolved, args) {
   if (args.repairHarness) {
-    if (args.health || args.probe || args.login || args.awaitLogin || args.verifyOnly || args.workspaces !== undefined || args.createWorkspace !== undefined || args.apiKey || args.endpoint || args.controlUrl || args.profile) {
+    if (args.health || args.probe || args.login || args.awaitLogin || args.verifyOnly || args.workspaces !== undefined || args.createWorkspace !== undefined || args.apiKey || args.endpoint || args.controlUrl || args.profile || args.autoRecall !== undefined || args.adopt) {
       return { status: "error", code: "conflicting_verbs", message: "--repair-harness uses the saved project connection; combine it only with --json, --project and --harness" };
     }
     return repairHarness(resolved.projectRoot, args);
   }
-  if (args.health && (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe)) {
+  if (args.health && (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe || args.autoRecall !== undefined || args.adopt)) {
     return { status: "error", code: "conflicting_verbs", message: "--health is a local read-only operation; run it by itself with --json" };
   }
   if (args.apiKey) {
@@ -1862,6 +2552,35 @@ async function dispatchJsonVerb(resolved, args) {
       code: "conflicting_verbs",
       message: "--create-workspace and --workspace are separate steps; create first, then ask for the complete destination set again and pass it with --workspace"
     };
+  }
+  if ((args.probe || args.workspaces?.length || args.adopt) && ephemeralProject(resolved.projectRoot)) {
+    const session = sessionEnvironment();
+    return {
+      status: "error",
+      code: "ephemeral_project",
+      session,
+      message: `this session's machine is discarded when the session ends (${session.signals.join(", ")}), and ` + `${resolved.projectRoot} is not inside a Git checkout, so a connection written here could not outlast it; ` + "connect from a local session instead (in Cowork, a local session with the project folder attached)"
+    };
+  }
+  if (args.adopt) {
+    if (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe || args.verifyOnly || args.autoRecall !== undefined || args.endpoint || args.controlUrl || args.profile) {
+      return {
+        status: "error",
+        code: "conflicting_verbs",
+        message: "--adopt joins the connection this project's config already records; run it alone with --json"
+      };
+    }
+    return adoptProject(resolved, args);
+  }
+  if (args.autoRecall !== undefined && !args.workspaces?.length) {
+    if (args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe || args.verifyOnly || args.endpoint || args.controlUrl || args.profile) {
+      return {
+        status: "error",
+        code: "conflicting_verbs",
+        message: "--auto-recall changes only this project's setting; run it alone with --json, or pass it with --workspace while connecting"
+      };
+    }
+    return setAutoRecall(resolved.projectRoot, args.autoRecall);
   }
   if (args.createWorkspace !== undefined) {
     return createWorkspaceForSelection(resolved, args);
@@ -1879,7 +2598,7 @@ async function dispatchJsonVerb(resolved, args) {
   return {
     status: "error",
     code: "no_verb",
-    message: "--json requires one of --probe, --login, --await-login, --create-workspace <name>, or --workspace <id> (repeatable)"
+    message: "--json requires one of --probe, --login, --await-login, --create-workspace <name>, --workspace <id> (repeatable), --adopt, or --auto-recall on|off"
   };
 }
 async function verifyApiKeyConnection(apiKey, gateway) {
@@ -1928,7 +2647,7 @@ async function verifyProjectKey(projectRoot, endpointOverride) {
   const gateway = gatewayBase(cfg, endpointOverride);
   return { connector: await verifyApiKeyConnection(apiKey, gateway), gateway };
 }
-async function connectWithApiKey(projectRoot, apiKey, endpoint2) {
+async function connectWithApiKey(projectRoot, apiKey, endpoint2, autoRecall) {
   const prior = loadProjectConfig(projectRoot);
   const gateway = gatewayBase(prior, endpoint2);
   const connector = await verifyApiKeyConnection(apiKey, gateway);
@@ -1936,6 +2655,7 @@ async function connectWithApiKey(projectRoot, apiKey, endpoint2) {
     path: writeApiKeyConfig(projectRoot, apiKey, gateway === DEFAULT_GATEWAY ? undefined : gateway, {
       org: { id: connector.orgId },
       destinations: [{ connectorId: connector.id, workspaceId: connector.workspaceId }],
+      autoRecall: autoRecall ?? prior?.autoRecall ?? false,
       ...prior?.controlUrl ? { controlUrl: prior.controlUrl } : {},
       ...prior?.ingestUrl ? { ingestUrl: prior.ingestUrl } : {}
     }),
@@ -1943,6 +2663,7 @@ async function connectWithApiKey(projectRoot, apiKey, endpoint2) {
   };
 }
 if (isMain(import.meta.url)) {
+  reexecForEnvProxy();
   const argv = process.argv.slice(2);
   const wantsJson = argv.includes("--json");
   try {
@@ -1969,8 +2690,8 @@ if (isMain(import.meta.url)) {
       const { connector, gateway } = await verifyProjectKey(projectRoot, args.endpoint);
       console.log(`The platform key in .augenta/config.json is accepted by ${gateway} and resolves to Connector ${connector.id} (${connector.status}, ${connector.direction}). Nothing was written.`);
     } else if (args.apiKey?.trim()) {
-      const existed = existsSync6(join7(projectRoot, ".augenta", "config.json"));
-      const { path, connector } = await connectWithApiKey(projectRoot, args.apiKey.trim(), args.endpoint);
+      const existed = existsSync7(join9(projectRoot, ".augenta", "config.json"));
+      const { path, connector } = await connectWithApiKey(projectRoot, args.apiKey.trim(), args.endpoint, args.autoRecall);
       console.log(`${existed ? "Updated" : "Wrote"} ${path} (0600). Platform-key capture is enabled through Connector ${connector.id}.`);
       console.log("Off switch: delete .augenta/config.json, or set AUGENTA_CAPTURE_ENABLED=0.");
     } else if (!input.isTTY) {

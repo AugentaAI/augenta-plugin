@@ -167,6 +167,10 @@ back to the main checkout or sibling worktrees. An unconnected worktree returns
   to reconnect rather than to connect for the first time.
 - **`need_login`** — the stored Augenta sign-in is missing or expired. Point at
   `/augenta:connect` (`$augenta:connect` on Codex) and stop.
+- **`not_joined`** — this checkout has the project's config, usually committed by
+  a teammate, but has not joined it, so its question was not sent. Point at
+  `/augenta:connect` (`$augenta:connect` on Codex), which shows the project's
+  Workspaces and asks whether to use them, and stop.
 - **`recall_unavailable`** — recall is not available in this Augenta
   environment. Say so plainly and stop; there is nothing to retry and nothing
   the user can configure.
@@ -260,6 +264,8 @@ Run the skill yourself when no block appeared and the task needs past context,
 when you need a different or narrower question than the prompt, or when the user
 wants Augenta's model to write the answer.
 
-Automatic recall is off while `AUGENTA_CAPTURE_ENABLED=0` pauses capture, or when
-`AUGENTA_AUTO_RECALL=0` is set in the environment that starts the coding app;
-asking with this skill still works in both cases.
+Automatic recall is off while `AUGENTA_CAPTURE_ENABLED=0` pauses capture, when
+`AUGENTA_AUTO_RECALL=0` is set in the environment that starts the coding app, or
+when the project turned it off at connect; asking with this skill still works in
+every case. With automatic recall off no block arrives on its own, so run this
+skill whenever the task needs past context.

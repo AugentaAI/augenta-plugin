@@ -14,6 +14,10 @@
 export function isCodexHarness(transcriptPath: string | undefined | null): boolean {
   if (!transcriptPath) return false;
   const p = transcriptPath.replace(/\\/g, "/");
+  // Claude Code's own layout wins before the CODEX_HOME prefix test: a cloud
+  // image can set CODEX_HOME to the home directory itself (e.g. /root), and every
+  // Claude transcript under /root/.claude/projects/ would then read as Codex.
+  if (/\/\.claude\/projects\//.test(p)) return false;
   const configuredHome = process.env.CODEX_HOME?.replace(/\\/g, "/").replace(/\/+$/, "");
   return /\/\.codex\//.test(p) ||
     /\/rollout-[^/]*\.jsonl$/i.test(p) ||

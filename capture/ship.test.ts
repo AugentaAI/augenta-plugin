@@ -15,6 +15,7 @@
  *
  * Run: bun test capture/ship.test.ts
  */
+import { writeOAuthProject } from "../__tests__/fixtures";
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1130,10 +1131,10 @@ describe("the shipper process renews a stale sign-in even when another drain hol
         profiles: { p1: { issuer, clientId: "client", gateway: issuer, userId: "u", orgId: "o",
           accessToken: "stale", refreshToken: "refresh-1", expiresAt: Date.now() - 1_000, updatedAt: new Date().toISOString() } },
       }));
-      mkdirSync(join(project, ".augenta"), { recursive: true });
-      writeFileSync(join(project, ".augenta", "config.json"), JSON.stringify({
-        authMode: "oauth", profileId: "p1", destinations: [{ connectorId: "c1", workspaceId: "w1" }], endpoint: issuer,
-      }));
+      // Joined, as connect leaves a checkout; the shipper ships only for a live one.
+      writeOAuthProject(project, {
+        profileId: "p1", userId: "u", destinations: [{ connectorId: "c1", workspaceId: "w1" }], extra: { endpoint: issuer },
+      });
       expect(acquireLock(project)).toBe(true); // the other, still-running drain
       const env: Record<string, string> = { ...(process.env as Record<string, string>), AUGENTA_AUTH_HOME: authHome };
       delete env.AUGENTA_CAPTURE_ENABLED;

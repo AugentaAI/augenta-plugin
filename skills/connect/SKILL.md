@@ -15,8 +15,8 @@ Connection is per project and is the user's consent boundary.
 
 You run the connect script yourself and drive it with `--json`. Each verb returns
 one JSON object and exits. The user's only jobs are answering the Workspace
-question, naming a new Workspace if they choose to create one, and, if they are
-not signed in yet, clicking one link.
+question and the automatic-recall question beside it, naming a new Workspace if
+they choose to create one, and, if they are not signed in yet, clicking one link.
 
 ## The script
 
@@ -43,6 +43,12 @@ Only if your harness did not give you this file's directory, find the install:
 ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/augenta/*/dist/scripts/connect.mjs \
       "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/augenta/*/dist/scripts/connect.mjs 2>/dev/null
 ```
+
+If neither finds the script, do not keep searching other machines or shells. In a
+cloud session whose shell reaches the user's folder through a separate device
+shell (a Cowork cloud task), the plugin is not in that shell: say that connect
+cannot run in this session, and suggest a local session with the project folder
+attached.
 
 Every verb below is then:
 
@@ -114,6 +120,13 @@ Read-only. It starts no sign-in, so nothing has happened yet and you can still
 explain and ask. `alreadyConnected: true` means reconnecting will verify or change
 which Workspaces this project feeds — continue, do not stop.
 
+When `session.ephemeral` is `true`, this session runs on a machine that is
+discarded when the session ends. Say so before any sign-in: the sign-in lasts only
+for this session, and each new session signs in again. The connection itself is
+kept only through the repository, when its `.augenta/config.json` is committed.
+On `ephemeral_project`, report `message` and stop: the project folder is not in a
+repository, so nothing connect writes here would outlast the session.
+
 `current` describes the saved connection before live checks: its `environment`,
 `organization`, and `destinations` (including saved names). Use it for context;
 the live top-level `destinations` and Workspace list win when choosing the set.
@@ -132,6 +145,49 @@ replaces the whole set:
 - a `destinations` entry with no `workspaceName` — its Workspace is no longer in
   the organization's list, so it cannot be offered as an option in step 3 and will
   be dropped by whatever the user answers.
+
+### If this checkout has not joined the recorded connection
+
+When `alreadyConnected` is `true`, `current.authMode` is `oauth` and `adopted` is
+`false`, this checkout has the project's `.augenta/config.json` but has not joined
+it, so capture is off here. The file was usually committed by a teammate, or
+carried into a new worktree or cloud checkout. Joining uses the recorded
+Workspaces as they are; it does not choose again. It links the user's **own**
+Connector in each of them, reusing one they already have for this project, so
+records they send go through a link that belongs to them.
+
+Before asking, name `current.organization`, every entry in `current.destinations`,
+and `current.environment` when it is not `prod`. Say, as in step 3, that each of
+those Workspaces receives the **full record** (activity, raw transcript lines and
+project memory), so the audience is the **union** of everyone with access to any
+of them, and that raw transcript records are structurally sanitized but **not**
+secret-scrubbed. Say whether automatic recall is on for the project, from
+`current.autoRecall`.
+
+Then ask one question with three options: **Use these Workspaces**, **Choose
+different Workspaces**, and **Cancel**. Choosing to use the recorded set is this
+checkout's consent, so do not ask a second yes/no.
+
+- **Use these Workspaces**: if `--probe` said `need_login`, sign in first (step 2).
+  Then run this instead of step 3:
+
+  ```bash
+  node "$CONNECT" --harness <harness> --json --adopt
+  ```
+
+  On `adopted`, confirm as in step 4, naming every destination. On `org_mismatch`,
+  say the project was connected in `organization` and this sign-in is to another
+  one; offer to sign in to that organization, or to choose different Workspaces. On
+  `destinations_unreachable`, name each `unreachable` Workspace and say the user
+  may need to be added to it by someone who administers it; nothing was created,
+  and capture stays off in this checkout until every recorded Workspace is
+  reachable. On `join_failed`, report `message` and each `failed` entry; capture
+  stays off, and joining again retries. On `environment_mismatch`, report
+  `message`.
+- **Choose different Workspaces**: continue with steps 2 and 3. When
+  `configTracked` is `true`, say first that git tracks the config, so the new
+  selection changes the destinations for everyone who pulls it.
+- **Cancel**: acknowledge and stop. Capture stays off in this checkout.
 
 ## 2. Sign in, only if `--probe` said `need_login`
 
@@ -159,7 +215,8 @@ node "$CONNECT" --harness <harness> --json --await-login
 - `login_pending` — the link is still valid. Tell the user you are still waiting
   and call it again. Use a longer Bash timeout with `--wait <seconds>` if you want
   fewer, longer waits.
-- `need_workspace` — signed in. Go to step 3.
+- `need_workspace` — signed in. Go to step 3, or, when the user chose to use the
+  recorded Workspaces above, run `--adopt`.
 - `status: "error"` — report `message`. `login_denied` means the user declined, so
   do not silently retry.
 
@@ -180,7 +237,9 @@ Everyone has their own `Default Workspace`. Ask it every time,
 including when that is the only Workspace and including when the project is
 already connected. Never offer to keep the current selection without showing it;
 never treat one answer as authorization for more than one destination; never
-proceed on silence.
+proceed on silence. The one exception is a checkout joining its recorded
+connection (step 1), where the recorded set is shown and the user chooses to use
+it or to choose again.
 
 Before the user answers, say — in one or two sentences, naming the organization
 from `signedInAs`:
@@ -189,9 +248,9 @@ from `signedInAs`:
   activity, its raw transcript lines, and its project memory, complete, in each;
 - so **anyone with access to any selected Workspace can read this project's
   captured activity** — the audience is the union of all of them;
-- that each prompt they submit is also asked of those Workspaces as a recall
-  question, so what they remember can be added to the conversation
-  (`AUGENTA_AUTO_RECALL=0` turns just that off);
+- that if they turn on automatic recall (asked alongside), each prompt they
+  submit is also asked of those Workspaces as a recall question, so what they
+  remember can be added to the conversation;
 - and, if `environment` is not `prod`, which environment this is.
 
 For Codex, also explain that capture starts with native turns beginning after
@@ -207,6 +266,14 @@ destinations, add `Create a new Workspace` as the final numbered option, and say
 `Reply with every number you want. Choose at least one Workspace.` A valid
 numbered selection is the user's consent: run the verb from that selection
 without asking for a second yes/no confirmation.
+
+**Ask about automatic recall in the same round**, as a second question alongside
+the Workspace question (in plain text, as a second line to answer `on` or
+`off`). It is a separate setting, not a confirmation of the selection. Offer
+**Off, pre-selected**, and On; pre-select On only when `current.autoRecall` is
+`on`. Say that On asks the selected Workspaces about every prompt they submit and
+adds what they remember to the conversation, and that **either way you can still
+run `/augenta:recall` yourself** whenever remembered context would help.
 
 An empty answer or `none` is not a valid destination set: ask again and do not
 run the verb. If the user cancels the flow, acknowledge and stop; for an already
@@ -232,11 +299,11 @@ not create the Workspace again. On `status: "error"`, report `message`; do not
 claim creation succeeded.
 
 ```bash
-node "$CONNECT" --harness <harness> --json --workspace <id> --workspace <id>
+node "$CONNECT" --harness <harness> --json --workspace <id> --workspace <id> --auto-recall <on|off>
 ```
 
 Repeat `--workspace` once per selected Workspace. Pass the `id`s, never the
-names. The arguments are exactly the entries the user selected from the list you
+names. Always pass `--auto-recall` with the user's answer to the second question. The arguments are exactly the entries the user selected from the list you
 rendered — never a destination the user did not select, and never one they
 dropped. If `--probe` returned `need_profile`, ask which organization first and
 add `--profile <profileId>`.
@@ -247,7 +314,7 @@ Creation and connection are separate calls: never pass `--create-workspace` and
 ## 4. Confirm
 
 Connector creation proves configuration only. After the next completed turn,
-run the same installed `dist/scripts/connect.mjs` with `--project <projectRoot> --json --health` to check activity. If dispatch is absent, direct the user to
+run the same installed `dist/scripts/connect.mjs` with `--project <projectRoot> --json --health` to check activity. A `nextStep` of `sign_in` means this machine has no saved sign-in for the project, and `adopt` means this checkout has not joined its connection (see step 1); both are fixed by running connect again here. If dispatch is absent, direct the user to
 review the plugin hooks in their host and follow its activation/restart guidance.
 Never change host trust records or invoke capture/delivery manually as proof.
 Report API acceptance separately from verified ingestion.
@@ -257,14 +324,28 @@ each of them, through that entry's `connectorId`. When there is more than one,
 restate that the full record goes to each, so the audience is the union. Name the
 environment if it is not `prod`. Restate that raw transcript records are
 structurally sanitized but **not** secret-scrubbed, and that this now applies to
-every destination you just named.
+every destination you just named. Say whether automatic recall is on or off, from
+`autoRecall`.
+
+Also say that `.augenta/config.json` holds no sign-in token and may be committed,
+so every checkout of this project points at the same Workspaces; each checkout
+still joins with connect. If the project should keep it private, the user can add
+`.augenta/` to the repository's `.gitignore`.
 
 If `removed` is non-empty, name each removed Workspace: this project **no longer
-sends** to it. Its Connector is **left in place and idle** — nothing was disabled
-or deleted; the user can remove it in Augenta if they want it gone.
+sends** to it. When the entry has a `connectorId`, that Connector is the user's
+own and is **left in place and idle** — nothing was disabled or deleted; the user
+can remove it in Augenta if they want it gone. When `--probe` reported
+`configTracked: true`, say that the Workspace is dropped for everyone who pulls
+the config.
 
 If `unresolvedConnectorIds` is present, say that this project listed those
 Connectors but they are no longer readable, so they have been dropped.
+
+If `unsentFromAnotherSignIn` is present (on `connected`, `partially_connected` or
+`adopted`), say that records captured in this checkout under another person's
+sign-in were not sent and will not be: they could go only through that person's
+own Connectors, never through this user's.
 
 On `partially_connected`, report the truth in that order: which destinations
 **are** live now (capture to them is on) — including the full-record and
@@ -281,6 +362,24 @@ Mention that deleting `.augenta/config.json` or setting
 `AUGENTA_CAPTURE_ENABLED=0` disables activity and memory capture. A completed
 connection always has at least one Workspace; deleting the config is how the user
 turns capture off.
+
+## Change only automatic recall
+
+When the user asks to turn automatic recall on or off for this project, change
+just that setting. It does not reconnect or touch the destinations:
+
+```bash
+node "$CONNECT" --harness <harness> --json --auto-recall <on|off>
+```
+
+If `--probe` reported `configTracked: true`, say first that git tracks the config,
+so the change applies to everyone who pulls it once it is committed. On
+`auto_recall_updated`, confirm the new `autoRecall` value. On `not_connected`,
+the project has no readable connection: run the connect flow instead. On
+`not_joined`, this checkout has not joined the project's connection: offer to
+join it first (step 1), then change the setting. Setting
+`AUGENTA_AUTO_RECALL=0` in the environment that starts the coding app turns it off
+for every project. `/augenta:recall` keeps working whatever this setting is.
 
 On `status: "error"`, report `message`. `unknown_workspace` means an id did not
 match the organization's live list and **nothing was created** — re-run `--probe`

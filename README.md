@@ -74,7 +74,8 @@ Open **Customize → Plugins → Add → Add marketplace**. Enter
 enable Augenta.
 
 Start a new Code or Cowork task with your project folder attached. Choose
-Augenta's connect skill from the `/` or `+` menu.
+Augenta's connect skill from the `/` or `+` menu. Cloud tasks work differently;
+see [Cloud sessions](#cloud-sessions).
 
 ### ChatGPT Desktop
 
@@ -129,14 +130,20 @@ answers after a consent refusal.
 A new Workspace may have nothing to recall yet. If recall is not available,
 the plugin will say so.
 
-**Recall also runs on its own.** When you submit a prompt in a connected project,
-the plugin asks your Workspaces what they remember about it and gives any match
-to your agent as background, which it uses only when relevant. This lookup asks
-for saved memory only, with no Augenta answer-model call. It removes pasted
-blocks and common secret patterns from the prompt first, and skips commands and
-very short replies. It waits at most five seconds. If Augenta is slow, offline,
-or has nothing saved, your prompt goes ahead as usual. The looked-up memory is
-not captured back into your Workspaces.
+**Recall also runs on its own, if you turn it on.** Connect asks whether to turn
+on automatic recall for the project; it is off unless you choose it. When it is
+on, each prompt you submit in the project is also a recall question:
+
+- Your Workspaces are asked for saved memory only, with no Augenta answer-model
+  call, and any match reaches your agent as background it uses when relevant.
+- Pasted blocks and common secret patterns are removed from the prompt first,
+  and commands and very short replies are skipped.
+- It waits at most five seconds. If Augenta is slow, offline, or has nothing
+  saved, your prompt goes ahead as usual.
+- The looked-up memory is not captured back into your Workspaces.
+
+Your agent can still use the recall command whether automatic recall is on or
+off.
 
 ## What gets captured
 
@@ -161,8 +168,9 @@ Recall sends only the question text, with no files or transcript attached.
 Augenta records the request but keeps no copy of the question or answer. It
 keeps a one-way fingerprint of the question to check for retries. Short
 questions can be guessed from that fingerprint, so treat them as visible to
-the Workspace's audience. Automatic recall uses each prompt you submit as the
-question, so every prompt leaves such a fingerprint in each selected Workspace.
+the Workspace's audience. When automatic recall is on, it uses each prompt you
+submit as the question, so every prompt leaves such a fingerprint in each
+selected Workspace.
 
 ## Turn it off
 
@@ -173,16 +181,71 @@ To pause capture across projects, set `AUGENTA_CAPTURE_ENABLED=0` in the
 environment that starts your coding app. This also pauses automatic recall.
 Asking with the recall command still works while a project has its config file.
 
-To turn off only automatic recall, set `AUGENTA_AUTO_RECALL=0` in the same
-environment. Capture and the recall command keep working.
+To turn automatic recall on or off for one project, ask your agent to change
+it, or run connect again and answer that question. To turn it off for every
+project, set `AUGENTA_AUTO_RECALL=0` in the same environment. Capture and the
+recall command keep working either way.
 
 ## Configuration
 
 Connect handles setup for you. Your project stores its connection in
 `.augenta/config.json`: sign-in profile reference, environment URLs, organization
-and chosen destinations. Sign-in tokens stay in your private global profile.
-Older `connectorIds` configs need one reconnect per project. See
-[connection settings](docs/configuration.md) for file details and changing Workspaces.
+and chosen Workspaces. Sign-in tokens stay in your private global profile. See
+[connection settings](docs/configuration.md) for file details and changing
+Workspaces.
+
+Upgrading a browser-connected project from 0.10 or earlier? Run connect once in
+it; the [changelog](CHANGELOG.md) says why.
+
+### Share a project's setup
+
+A browser-connected `config.json` holds no sign-in token and no Connector, so
+you can commit it. Everyone who checks out the repository then points at the
+same Workspaces. The rest of `.augenta/` stays out of Git on its own. To keep the
+config private instead, add `.augenta/` to your repository's `.gitignore`.
+
+- **Each checkout joins once.** Until its user runs connect there, a checkout
+  with a committed config neither captures nor sends recall questions. Connect
+  signs them in if needed, shows the project's Workspaces, and asks whether to
+  use them.
+- **Each person sends through their own Connector** in each Workspace. It is
+  made the first time they join and reused by their other clones, worktrees and
+  cloud sessions. They need access to every one of those Workspaces, so someone
+  may need to add them first.
+- **Changes are confirmed.** A pulled change to the project's Workspaces stops
+  capture in each checkout until someone there confirms the new set. So does
+  another person signing in on the same machine.
+- **Everyone sharing a config needs plugin 0.11.0 or newer**; older versions
+  cannot read it. API-key configs hold the key, so connect never makes them
+  committable.
+
+## Cloud sessions
+
+A cloud session runs on a machine that is discarded when the session ends. Your
+Augenta sign-in there lasts only for that session, and the project's connection
+lasts only if its `.augenta/config.json` is committed (see
+[Share a project's setup](#share-a-projects-setup)). Each new session then signs
+in and joins it.
+
+| Where | Does Augenta run there? |
+| --- | --- |
+| Claude Code in the cloud (claude.ai/code) | No. Cloud sessions don't install plugins that your repository or your own settings turn on. The only route is your organization's server-managed settings, set by a Team or Enterprise Owner, and Augenta hasn't been tested that way. |
+| Cowork in the cloud | No. The plugin runs on Anthropic's machine while your project folder stays on your computer, so connect can't connect it. Use a local Cowork session instead. On Team and Enterprise plans an Owner controls this in Organization settings → Cowork → "Run Cowork in the cloud". From October 6, 2026, new Pro and Max Cowork tasks run only in the cloud. |
+| Codex cloud | Untested. Internet access is off by default; turn it on and allow the hosts below. |
+
+Wherever commands run behind a network allowlist, allow `augenta.ai`,
+`auth.augenta.ai` and `api.augenta.ai`:
+
+| Where | Setting |
+| --- | --- |
+| Cowork, local or cloud | Organization settings → Capabilities → Code execution → Allow network egress. It applies to sessions created afterwards. |
+| Claude Code in the cloud | The environment's Network access, set to Custom. |
+| Codex cloud | The environment's internet access, with all HTTP methods allowed. The GET, HEAD and OPTIONS-only setting blocks sign-in, capture and recall. |
+
+If a host is blocked, connect tells you which one and why before asking you
+anything. Where the environment sets `HTTPS_PROXY`, connect, recall and the hooks
+send through that proxy and trust the sandbox's proxy certificate. This needs
+Node.js 22.21 or newer; older versions ignore the proxy.
 
 ## Connecting CI or a service
 

@@ -34,588 +34,149 @@ var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, 
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // capture/health.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join5 } from "node:path";
-import { randomUUID } from "node:crypto";
+import { existsSync as existsSync5, mkdirSync as mkdirSync5, readFileSync as readFileSync6, renameSync as renameSync4, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join7 } from "node:path";
+import { randomUUID as randomUUID3 } from "node:crypto";
 
 // capture/config.ts
-import { readFileSync } from "node:fs";
+import { readFileSync as readFileSync4 } from "node:fs";
+import { join as join5 } from "node:path";
+
+// capture/auth.ts
+import {
+  chmodSync as chmodSync2,
+  existsSync as existsSync2,
+  mkdirSync as mkdirSync2,
+  readFileSync as readFileSync2,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync as writeFileSync2
+} from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { join as join2 } from "node:path";
 
-// capture/project.ts
-import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-function gitRevParse(cwd, arg) {
-  try {
-    const value = execFileSync("git", ["rev-parse", arg], {
-      cwd,
-      stdio: ["ignore", "pipe", "ignore"]
-    }).toString().trim();
-    return value || undefined;
-  } catch {
-    return;
-  }
-}
-function resolveProjectRoot(cwd) {
-  if (!cwd)
-    return;
-  let dir;
-  try {
-    dir = realpathSync(cwd);
-  } catch {
-    return;
-  }
-  while (true) {
-    if (existsSync(join(dir, ".augenta", "config.json")))
-      return dir;
-    if (existsSync(join(dir, ".git")))
-      return;
-    const parent = dirname(dir);
-    if (parent === dir)
-      return;
-    dir = parent;
-  }
-}
-function resolveProject(args, cwd) {
-  if (args.project)
-    return { projectRoot: resolve(cwd, args.project) };
-  const configured = resolveProjectRoot(cwd);
-  if (configured)
-    return { projectRoot: configured };
-  const top = gitRevParse(cwd, "--show-toplevel");
-  if (!top)
-    return { projectRoot: cwd };
-  return { projectRoot: top };
-}
-function resolveTargetProject(args, cwd) {
-  return resolveProject(args, cwd).projectRoot;
-}
-
-// capture/config.ts
-var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
-var DEFAULT_CONTROL_URL = "https://augenta.ai";
-function parseDestinations(raw) {
-  if (!Array.isArray(raw) || raw.length === 0)
-    return;
-  const destinations = [];
-  for (const item of raw) {
-    if (!item || typeof item !== "object")
-      return;
-    const connectorId = typeof item.connectorId === "string" ? item.connectorId.trim() : "";
-    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
-    if (!connectorId || !workspaceId)
-      return;
-    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
-      return;
-    if (destinations.some((destination) => destination.connectorId === connectorId))
-      continue;
-    const workspaceName = item.workspaceName?.trim();
-    destinations.push({ connectorId, workspaceId, ...workspaceName ? { workspaceName } : {} });
-  }
-  return destinations;
-}
-function configPath(projectRoot) {
-  return join2(projectRoot, ".augenta", "config.json");
-}
-function loadProjectConfig(projectRoot) {
-  try {
-    const value = JSON.parse(readFileSync(configPath(projectRoot), "utf8"));
-    if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
-      return;
-    const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
-    const settings = {};
-    for (const key of ["endpoint", "controlUrl", "ingestUrl", "discoveredGateway"]) {
-      const raw = value[key];
-      if (raw !== undefined && typeof raw !== "string")
-        return;
-      if (typeof raw === "string" && raw.trim()) {
-        settings[key] = raw.trim().replace(/\/+$/, "");
-      }
-    }
-    if (value.org !== undefined) {
-      if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
-        return;
-      if (value.org.name !== undefined && typeof value.org.name !== "string")
-        return;
-      settings.org = { id: value.org.id.trim(), ...value.org.name?.trim() ? { name: value.org.name.trim() } : {} };
-    }
-    const destinations = value.destinations === undefined ? undefined : parseDestinations(value.destinations);
-    if (value.destinations !== undefined && !destinations)
-      return;
-    if (destinations) {
-      settings.destinations = destinations;
-      settings.connectorIds = destinations.map((destination) => destination.connectorId);
-    }
-    if (value.authMode === "oauth") {
-      const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
-      if (!profileId || !destinations)
-        return;
-      return {
-        ...settings,
-        authMode: "oauth",
-        ...captureSince ? { captureSince } : {},
-        profileId,
-        projectRoot
-      };
-    }
-    if (value.authMode === "api-key") {
-      const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
-      if (!apiKey || Array.isArray(value.destinations) && value.destinations.length !== 1)
-        return;
-      return {
-        ...settings,
-        authMode: "api-key",
-        ...captureSince ? { captureSince } : {},
-        apiKey,
-        projectRoot
-      };
-    }
-    return;
-  } catch {
-    return;
-  }
-}
-function projectConfig(cwd) {
-  const root = resolveProjectRoot(cwd);
-  return root ? loadProjectConfig(root) : undefined;
-}
-function controlUrl(cfg, flag) {
-  return (flag?.trim() || process.env.AUGENTA_CONTROL_URL?.trim() || cfg?.controlUrl || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
-}
-function gatewayBase(cfg, flag) {
-  return (flag?.trim() || process.env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
-}
-function experiencesUrl(cfg) {
-  return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
-}
-function captureKilled() {
-  const value = process.env.AUGENTA_CAPTURE_ENABLED;
-  return value === "0" || value === "false";
-}
-function captureEnabled(cfg) {
-  if (!cfg || captureKilled())
-    return false;
-  return cfg.authMode === "oauth" ? Boolean(cfg.profileId) && (cfg.connectorIds?.length ?? 0) > 0 : Boolean(cfg.apiKey);
-}
-
 // capture/augenta-dir.ts
-import { join as join3 } from "node:path";
-import { chmodSync, mkdirSync, existsSync as existsSync2, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { chmodSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+var LOCAL_IGNORE = `*
+`;
+var SHARED_IGNORE = `*
+!/.gitignore
+!/config.json
+`;
 function ensureAugentaDir(projectRoot) {
-  const dir = join3(projectRoot, ".augenta");
+  const dir = join(projectRoot, ".augenta");
   try {
     mkdirSync(dir, { recursive: true, mode: 448 });
     try {
       chmodSync(dir, 448);
     } catch {}
-    const ignore = join3(dir, ".gitignore");
-    if (!existsSync2(ignore))
-      writeFileSync(ignore, `*
-`);
+    const ignore = join(dir, ".gitignore");
+    if (!existsSync(ignore))
+      writeFileSync(ignore, LOCAL_IGNORE);
   } catch {}
   return dir;
 }
-
-// capture/outbox.ts
-import { join as join4 } from "node:path";
-import { mkdirSync as mkdirSync2, existsSync as existsSync3, readFileSync as readFileSync2, writeFileSync as writeFileSync2, appendFileSync, renameSync, statSync, unlinkSync } from "node:fs";
-var NEWLINE = 10;
-var MAX_SPOOL_BYTES = 50 * 1024 * 1024;
-var MAX_DEST_LAG_BYTES = 16 * 1024 * 1024;
-var LAG_STRIKES = 3;
-function isCaptureEvent(o) {
-  const e = o;
-  return !!e && typeof e.sid === "string" && typeof e.text === "string" && Number.isInteger(e.seq);
-}
-function isRawRecord(o) {
-  const e = o;
-  return !!e && typeof e.raw === "string" && typeof e.sid === "string";
-}
-function isDocumentRecord(o) {
-  const e = o;
-  if (!e || e.type !== "doc" || e.src !== "claude-code" && e.src !== "codex" || typeof e.sid !== "string" || typeof e.proj !== "string" || e.proj.length === 0)
-    return false;
-  const data = e.data;
-  if (!data || data.kind !== "agent-memory" || typeof data.documentId !== "string" || data.documentId.length === 0 || typeof data.sourcePath !== "string" || typeof data.title !== "string" || data.format !== "text/markdown" || typeof data.text !== "string" || typeof data.sourceUpdatedAt !== "string" || typeof data.capturedAt !== "string" || typeof data.revision !== "string" || data.revision.length === 0 || typeof data.deleted !== "boolean" || typeof data.chunkIndex !== "number" || !Number.isInteger(data.chunkIndex) || data.chunkIndex < 0 || typeof data.chunkCount !== "number" || !Number.isInteger(data.chunkCount) || data.chunkCount <= 0)
-    return false;
-  return data.chunkIndex < data.chunkCount && e.sid === `memory-${data.documentId}`;
-}
-
-class Outbox {
-  dir;
-  spoolPath;
-  cursorPath;
-  projectRoot;
-  maxSpoolBytes;
-  maxDestLagBytes;
-  constructor(projectRoot, opts = {}) {
-    this.projectRoot = projectRoot;
-    this.dir = join4(projectRoot, ".augenta", "outbox");
-    this.spoolPath = join4(this.dir, "spool.jsonl");
-    this.cursorPath = join4(this.dir, "cursor.json");
-    this.maxSpoolBytes = opts.maxSpoolBytes ?? MAX_SPOOL_BYTES;
-    this.maxDestLagBytes = opts.maxDestLagBytes ?? MAX_DEST_LAG_BYTES;
-  }
-  ensure() {
-    ensureAugentaDir(this.projectRoot);
-    mkdirSync2(this.dir, { recursive: true });
-  }
-  append(records) {
-    if (records.length === 0)
-      return true;
-    this.ensure();
-    try {
-      if (statSync(this.spoolPath).size >= this.maxSpoolBytes)
-        return false;
-    } catch {}
-    appendFileSync(this.spoolPath, records.map((r) => JSON.stringify(r)).join(`
-`) + `
-`);
-    return true;
-  }
-  forceAppend(records) {
-    if (records.length === 0)
-      return;
-    this.ensure();
-    appendFileSync(this.spoolPath, records.map((r) => JSON.stringify(r)).join(`
-`) + `
-`);
-  }
-  dropEpisodePath() {
-    return join4(this.dir, "dropped.json");
-  }
-  markDropped() {
-    this.ensure();
-    const path = this.dropEpisodePath();
-    if (existsSync3(path))
-      return false;
-    writeFileSync2(path, JSON.stringify({ since: new Date().toISOString() }));
-    return true;
-  }
-  clearDropEpisode() {
-    try {
-      unlinkSync(this.dropEpisodePath());
-    } catch {}
-  }
-  discardNoticePath() {
-    return join4(this.dir, "discarded.json");
-  }
-  markDiscarded(entries) {
-    if (entries.length === 0)
-      return;
-    this.ensure();
-    try {
-      writeFileSync2(this.discardNoticePath(), JSON.stringify({ at: new Date().toISOString(), destinations: entries }));
-    } catch {}
-  }
-  takeDiscarded() {
-    const path = this.discardNoticePath();
-    try {
-      const parsed = JSON.parse(readFileSync2(path, "utf8"));
-      unlinkSync(path);
-      if (!Array.isArray(parsed.destinations) || parsed.destinations.length === 0) {
-        return;
-      }
-      return parsed.destinations;
-    } catch {
-      return;
-    }
-  }
-  static offset(value) {
-    return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
-  }
-  static strikes(value) {
-    if (!value || typeof value !== "object" || Array.isArray(value))
-      return {};
-    const parsed = {};
-    for (const [key, count] of Object.entries(value)) {
-      const n = Outbox.offset(count);
-      if (!key || n === undefined)
-        return {};
-      parsed[key] = n;
-    }
-    return parsed;
-  }
-  readCursor() {
-    let raw;
-    try {
-      raw = JSON.parse(readFileSync2(this.cursorPath, "utf8"));
-    } catch {
-      return { shipped: 0, lagStrikes: {} };
-    }
-    const shipped = Outbox.offset(raw.shipped) ?? 0;
-    const lagStrikes = Outbox.strikes(raw.lagStrikes);
-    const links = raw.links;
-    if (!links || typeof links !== "object" || Array.isArray(links)) {
-      return { shipped, lagStrikes };
-    }
-    const parsed = {};
-    for (const [key, value] of Object.entries(links)) {
-      const off = Outbox.offset(value);
-      if (!key || off === undefined)
-        return { shipped, lagStrikes };
-      parsed[key] = off;
-    }
-    if (Object.keys(parsed).length === 0)
-      return { shipped, lagStrikes };
-    return { shipped, links: parsed, lagStrikes };
-  }
-  writeCursor(links, scalar, lagStrikes = {}) {
-    this.ensure();
-    const strikes = Object.keys(lagStrikes).length > 0 ? { lagStrikes } : {};
-    const body = links ? { shipped: Math.min(...Object.values(links)), links, ...strikes } : { shipped: scalar ?? 0 };
-    const tmp = this.cursorPath + ".tmp";
-    writeFileSync2(tmp, JSON.stringify(body));
-    renameSync(tmp, this.cursorPath);
-  }
-  shippedOffset(destKey) {
-    const { shipped, links } = this.readCursor();
-    const stored = destKey === undefined || !links ? shipped : links[destKey] ?? 0;
-    return stored > this.spoolEnd() ? 0 : stored;
-  }
-  spoolEnd() {
-    try {
-      return statSync(this.spoolPath).size;
-    } catch {
-      return 0;
-    }
-  }
-  registerDestinations(keys, opts = {}) {
-    const wanted = [...new Set(keys)];
-    if (wanted.length === 0)
-      return;
-    const { shipped, links, lagStrikes } = this.readCursor();
-    const spoolEnd = this.spoolEnd();
-    const inheritsScalar = (key) => shipped === 0 || (opts.freshKeys !== undefined ? !opts.freshKeys.includes(key) : wanted.length === 1);
-    const next = {};
-    for (const key of wanted) {
-      next[key] = links?.[key] ?? (links ? spoolEnd : inheritsScalar(key) ? shipped : spoolEnd);
-    }
-    const unchanged = links !== undefined && Object.keys(links).length === wanted.length && wanted.every((key) => links[key] === next[key]);
-    if (unchanged)
-      return;
-    const strikes = {};
-    for (const key of wanted)
-      if (lagStrikes[key])
-        strikes[key] = lagStrikes[key];
-    this.writeCursor(next, undefined, strikes);
-  }
-  enforceLag(progressed = []) {
-    const { links, lagStrikes } = this.readCursor();
-    if (!links || Object.keys(links).length < 2)
-      return [];
-    if (progressed.length === 0)
-      return [];
-    const leader = Math.max(...Object.values(links));
-    const swept = [];
-    const next = { ...links };
-    const strikes = {};
-    for (const [destKey, from] of Object.entries(links)) {
-      if (progressed.includes(destKey))
-        continue;
-      if (leader - from <= this.maxDestLagBytes)
-        continue;
-      const count = (lagStrikes[destKey] ?? 0) + 1;
-      if (count < LAG_STRIKES) {
-        strikes[destKey] = count;
-        continue;
-      }
-      const to = leader - this.maxDestLagBytes;
-      if (to <= from)
-        continue;
-      next[destKey] = to;
-      swept.push({ destKey, from, to });
-    }
-    const strikesChanged = Object.keys(strikes).length !== Object.keys(lagStrikes).length || Object.entries(strikes).some(([key, count]) => lagStrikes[key] !== count);
-    if (swept.length > 0 || strikesChanged)
-      this.writeCursor(next, undefined, strikes);
-    return swept;
-  }
-  hasPendingBytes() {
-    try {
-      return statSync(this.spoolPath).size > this.shippedOffset();
-    } catch {
-      return false;
-    }
-  }
-  pendingByteCount(destKey) {
-    return Math.max(0, this.spoolEnd() - this.shippedOffset(destKey));
-  }
-  readPending(maxBatch = Infinity, destKey) {
-    const shipped = this.shippedOffset(destKey);
-    if (!existsSync3(this.spoolPath))
-      return { records: [], endOffset: shipped, hasMore: false };
-    const buf = readFileSync2(this.spoolPath);
-    const start = Math.min(shipped, buf.length);
-    const records = [];
-    let off = start;
-    let hasMore = false;
-    let cursor = start;
-    while (cursor < buf.length) {
-      const nl = buf.indexOf(NEWLINE, cursor);
-      const lineEnd = nl === -1 ? buf.length : nl;
-      const next = nl === -1 ? buf.length : nl + 1;
-      const text = buf.subarray(cursor, lineEnd).toString("utf8").trim();
-      if (text) {
-        if (records.length >= maxBatch) {
-          hasMore = true;
-          break;
-        }
-        try {
-          const parsed = JSON.parse(text);
-          if (isCaptureEvent(parsed) || isRawRecord(parsed) || isDocumentRecord(parsed))
-            records.push(parsed);
-        } catch {}
-      }
-      off = next;
-      cursor = next;
-    }
-    return { records, endOffset: off, hasMore };
-  }
-  advance(endOffset, destKey) {
-    if (destKey === undefined) {
-      this.writeCursor(undefined, endOffset);
-      return;
-    }
-    const { shipped, links, lagStrikes } = this.readCursor();
-    const merged = { ...links ?? {} };
-    merged[destKey] = Math.max(merged[destKey] ?? (links ? 0 : shipped), endOffset);
-    this.writeCursor(merged, undefined, lagStrikes);
-  }
-  pendingCount(destKey) {
-    return this.readPending(Infinity, destKey).records.length;
-  }
-  compact() {
-    if (!existsSync3(this.spoolPath))
-      return;
-    let size;
-    try {
-      size = statSync(this.spoolPath).size;
-    } catch {
-      return;
-    }
-    if (size > 0 && this.shippedOffset() >= size) {
-      const archivePath = this.spoolPath + ".archive";
-      try {
-        renameSync(this.spoolPath, archivePath);
-      } catch {
-        return;
-      }
-      const { links, lagStrikes } = this.readCursor();
-      if (links) {
-        this.writeCursor(Object.fromEntries(Object.keys(links).map((key) => [key, 0])), undefined, lagStrikes);
-      } else {
-        this.advance(0);
-      }
-      try {
-        unlinkSync(archivePath);
-      } catch {}
-    }
-  }
-}
-
-// capture/health.ts
-var STAGES = ["dispatch", "capture", "delivery"];
-var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
-function read(projectRoot, stage) {
+function setAugentaIgnore(projectRoot, form) {
+  const path = join(ensureAugentaDir(projectRoot), ".gitignore");
+  const wanted = form === "shared" ? SHARED_IGNORE : LOCAL_IGNORE;
   try {
-    const s = JSON.parse(readFileSync3(join5(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
-    if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
+    const current = readFileSync(path, "utf8");
+    if (current === wanted || current !== LOCAL_IGNORE && current !== SHARED_IGNORE)
       return;
-    return {
-      at: new Date(s.at).toISOString(),
-      outcome: s.outcome,
-      count: s.count,
-      successes: s.successes,
-      ...Number.isFinite(Date.parse(s.lastSuccessAt)) ? { lastSuccessAt: new Date(s.lastSuccessAt).toISOString() } : {}
-    };
-  } catch {
-    return;
-  }
-}
-function recordHealth(projectRoot, stage, outcome, count = 0) {
-  try {
-    const dir = join5(ensureAugentaDir(projectRoot), "state");
-    mkdirSync3(dir, { recursive: true });
-    const old = read(projectRoot, stage);
-    const at = new Date().toISOString();
-    const success = outcome === "captured" || outcome === "accepted";
-    const value = {
-      at,
-      outcome,
-      count,
-      successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
-      ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
-    };
-    const file = join5(dir, `health-${stage}.json`);
-    const tmp = `${file}.${randomUUID()}.tmp`;
-    writeFileSync3(tmp, JSON.stringify(value), { mode: 384 });
-    renameSync2(tmp, file);
+    writeFileSync(path, wanted);
   } catch {}
 }
-function captureHealth(projectRoot) {
-  const cfg = loadProjectConfig(projectRoot);
-  const activity = Object.fromEntries(STAGES.map((stage) => [stage, read(projectRoot, stage) ?? null]));
-  return {
-    configured: !!cfg,
-    enabled: captureEnabled(cfg),
-    configuration: cfg ? "valid" : existsSync4(join5(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
-    activityScope: "project",
-    hostDispatch: "unverified",
-    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds.length : cfg ? 1 : 0,
-    pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
-    ...activity,
-    hostApproval: "unknown",
-    ingestion: "unverified",
-    nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
-  };
-}
 
-// capture/turn-cursor.ts
-import { join as join6, dirname as dirname2 } from "node:path";
-import { mkdirSync as mkdirSync4, existsSync as existsSync5, readFileSync as readFileSync4, writeFileSync as writeFileSync4, renameSync as renameSync3 } from "node:fs";
-class TurnState {
-  path;
-  projectRoot;
-  constructor(projectRoot) {
-    this.projectRoot = projectRoot;
-    this.path = join6(projectRoot, ".augenta", "state", "turn.json");
+// capture/network.ts
+class DiscoveryError extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+    this.name = "DiscoveryError";
   }
-  readAll() {
-    if (!existsSync5(this.path))
-      return {};
-    try {
-      const parsed = JSON.parse(readFileSync4(this.path, "utf8"));
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
+}
+var TLS_CODES = /^(CERT_|UNABLE_TO_|SELF_SIGNED_CERT|DEPTH_ZERO_SELF_SIGNED_CERT|ERR_TLS_)/;
+function* causes(error) {
+  let current = error;
+  for (let depth = 0;current && typeof current === "object" && depth < 8; depth++) {
+    yield current;
+    current = current.cause;
+  }
+}
+function classifyNetworkError(error) {
+  for (const link of causes(error)) {
+    if (link instanceof DiscoveryError) {
+      return link.status === 404 ? undefined : { kind: "proxy_refused", status: link.status };
     }
+    const proxy = /^Proxy response \((\d{3})\)/.exec(String(link.message ?? ""));
+    if (proxy)
+      return { kind: "proxy_refused", status: Number(proxy[1]) };
+    const code = typeof link.code === "string" ? link.code : undefined;
+    if (code === "ENOTFOUND" || code === "EAI_AGAIN")
+      return { kind: "dns", code };
+    if (code === "ECONNREFUSED")
+      return { kind: "refused", code };
+    if (code === "ECONNRESET" || code === "EPIPE" || code === "UND_ERR_SOCKET")
+      return { kind: "reset", code };
+    if (code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT" || link.name === "TimeoutError") {
+      return { kind: "timeout", ...code ? { code } : {} };
+    }
+    if (code && TLS_CODES.test(code))
+      return { kind: "tls", code };
   }
-  writeAll(all) {
-    ensureAugentaDir(this.projectRoot);
-    mkdirSync4(dirname2(this.path), { recursive: true });
-    const tmp = this.path + ".tmp";
-    writeFileSync4(tmp, JSON.stringify(all));
-    renameSync3(tmp, this.path);
+  return;
+}
+var PRODUCTION = { control: "https://augenta.ai", issuer: "https://auth.augenta.ai", gateway: "https://api.augenta.ai" };
+async function check(fetcher, url, timeoutMs, isAugenta) {
+  const host = new URL(url).host;
+  try {
+    const response = await fetcher(url, { signal: AbortSignal.timeout(timeoutMs) });
+    const body = await response.json().catch(() => {
+      return;
+    });
+    return isAugenta(response, body) ? { host, ok: true } : { host, ok: false, reason: `answered ${response.status}, not as Augenta does` };
+  } catch (error) {
+    const failure = classifyNetworkError(error);
+    return {
+      host,
+      ok: false,
+      reason: !failure ? "no answer" : failure.kind === "proxy_refused" ? `a proxy refused it (${failure.status})` : failure.kind === "dns" ? "the name did not resolve" : failure.kind === "refused" ? "the connection was refused" : failure.kind === "reset" ? "the connection was cut" : failure.kind === "timeout" ? "no answer in time" : "its TLS certificate was not trusted"
+    };
   }
-  get(transcriptPath) {
-    const v = this.readAll()[transcriptPath];
-    return typeof v === "number" && v >= 0 ? v : 0;
+}
+async function diagnoseHosts(controlUrl, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 3000;
+  const fetcher = options.fetcher ?? ((url, init) => fetch(url, { ...init, signal: init.signal }));
+  const control = controlUrl.replace(/\/+$/, "");
+  let issuer;
+  let gateway;
+  const discovery = await check(fetcher, `${control}/.well-known/augenta.json`, timeoutMs, (response, body) => {
+    const document = body;
+    if (!response.ok || typeof document?.issuer !== "string")
+      return false;
+    issuer = document.issuer;
+    gateway = typeof document.gateway === "string" ? document.gateway : undefined;
+    return true;
+  });
+  if (!discovery.ok && control === PRODUCTION.control) {
+    issuer = PRODUCTION.issuer;
+    gateway = PRODUCTION.gateway;
   }
-  bump(transcriptPath) {
-    const all = this.readAll();
-    const cur = typeof all[transcriptPath] === "number" && all[transcriptPath] >= 0 ? all[transcriptPath] : 0;
-    all[transcriptPath] = cur + 1;
-    this.writeAll(all);
-    return cur + 1;
-  }
+  const rest = await Promise.all([
+    issuer ? check(fetcher, `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`, timeoutMs, (response, body) => response.ok && typeof body?.issuer === "string") : undefined,
+    gateway ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) => response.status === 401 && typeof body?.error === "string") : undefined
+  ]);
+  return [discovery, ...rest.filter((item) => Boolean(item))];
 }
 
 // runtime/node.ts
 import { spawnSync } from "node:child_process";
-import { realpathSync as realpathSync2 } from "node:fs";
-import { resolve as resolve2 } from "node:path";
+import { accessSync, constants, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 async function readStdin() {
   const chunks = [];
@@ -631,21 +192,66 @@ function isMain(metaUrl) {
   return canonical(fileURLToPath(metaUrl)) === canonical(entry);
 }
 function canonical(path) {
-  const absolute = resolve2(path);
+  const absolute = resolve(path);
   try {
-    return realpathSync2.native(absolute);
+    return realpathSync.native(absolute);
   } catch {
     return absolute;
   }
 }
-function openBrowser(command) {
-  const opener = command[0];
-  if (!opener)
+var SANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/mitm-proxy-ca.crt";
+var SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
+function nodeHonorsEnvProxy(version) {
+  const [major = 0, minor = 0] = version.split(".").map(Number);
+  return major >= 24 || major === 22 && minor >= 21;
+}
+function readable(path) {
+  try {
+    accessSync(path, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function envProxyReexecEnv(env, nodeVersion, runningUnderBun, isReadable = readable) {
+  if (env.AUGENTA_PROXY_REEXEC || runningUnderBun)
     return;
-  const url = command[command.length - 1];
-  if (!url || !isHttpsUrl(url))
+  const proxied = Boolean(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy);
+  const useProxy = proxied && !env.NODE_USE_ENV_PROXY && nodeHonorsEnvProxy(nodeVersion);
+  const ca = env.NODE_EXTRA_CA_CERTS ? undefined : isReadable(SANDBOX_PROXY_CA) ? SANDBOX_PROXY_CA : (useProxy || env.NODE_USE_ENV_PROXY) && isReadable(SYSTEM_CA_BUNDLE) ? SYSTEM_CA_BUNDLE : undefined;
+  if (!useProxy && !ca)
     return;
-  spawnSync(opener, command.slice(1), { stdio: "ignore" });
+  return {
+    ...env,
+    AUGENTA_PROXY_REEXEC: "1",
+    ...useProxy ? { NODE_USE_ENV_PROXY: "1", NODE_NO_WARNINGS: env.NODE_NO_WARNINGS ?? "1" } : {},
+    ...ca ? { NODE_EXTRA_CA_CERTS: ca } : {}
+  };
+}
+function reexecForEnvProxy() {
+  const next = envProxyReexecEnv(process.env, process.versions.node, Boolean(process.versions.bun));
+  if (!next)
+    return;
+  const result = spawnSync(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
+    stdio: "inherit",
+    env: next
+  });
+  if (result.error)
+    return;
+  process.exit(result.status ?? 1);
+}
+function urlOpener(platform = process.platform) {
+  if (platform === "darwin")
+    return ["open"];
+  if (platform === "win32")
+    return ["rundll32", "url.dll,FileProtocolHandler"];
+  return ["xdg-open"];
+}
+function openBrowser(url) {
+  if (!isHttpsUrl(url))
+    return;
+  const [file, ...args] = urlOpener();
+  spawnSync(file, [...args, url], { stdio: "ignore" });
 }
 function isHttpsUrl(value) {
   try {
@@ -655,86 +261,7 @@ function isHttpsUrl(value) {
   }
 }
 
-// hooks/auto-recall.ts
-import { randomUUID as randomUUID4 } from "node:crypto";
-import { mkdirSync as mkdirSync6, readFileSync as readFileSync6, renameSync as renameSync5, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join9 } from "node:path";
-
-// capture/auto-recall-marker.ts
-var AUTO_RECALL_SENTINEL = "[augenta-recall:v1]";
-function hasSentinel(value) {
-  if (typeof value === "string")
-    return value.includes(AUTO_RECALL_SENTINEL);
-  if (Array.isArray(value))
-    return value.some(hasSentinel);
-  return false;
-}
-function isClaudeAutoRecallRecord(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return false;
-  const line = value;
-  if (line.type !== "attachment")
-    return false;
-  const attachment = line.attachment;
-  if (!attachment || typeof attachment !== "object")
-    return false;
-  if (typeof attachment.type !== "string" || !attachment.type.startsWith("hook_"))
-    return false;
-  return hasSentinel(attachment.content) || hasSentinel(attachment.stdout);
-}
-function isCodexAutoRecallItem(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return false;
-  const item = value;
-  if (item.type !== "message" || item.role !== "developer")
-    return false;
-  if (typeof item.content === "string")
-    return hasSentinel(item.content);
-  if (!Array.isArray(item.content))
-    return false;
-  return item.content.some((block) => !!block && typeof block === "object" && hasSentinel(block.text));
-}
-function isCodexAutoRecallRecord(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return false;
-  const line = value;
-  return line.type === "response_item" && isCodexAutoRecallItem(line.payload);
-}
-function stripCodexAutoRecallHistory(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    return;
-  const line = value;
-  if (line.type !== "compacted" || !line.payload || typeof line.payload !== "object")
-    return;
-  const payload = line.payload;
-  let changed = false;
-  const next = { ...payload };
-  for (const [key, entry] of Object.entries(payload)) {
-    if (!Array.isArray(entry))
-      continue;
-    const kept = entry.filter((item) => !isCodexAutoRecallItem(item));
-    if (kept.length !== entry.length) {
-      next[key] = kept;
-      changed = true;
-    }
-  }
-  return changed ? { ...line, payload: next } : undefined;
-}
-
 // capture/auth.ts
-import {
-  chmodSync as chmodSync2,
-  existsSync as existsSync6,
-  mkdirSync as mkdirSync5,
-  readFileSync as readFileSync5,
-  renameSync as renameSync4,
-  statSync as statSync2,
-  unlinkSync as unlinkSync2,
-  writeFileSync as writeFileSync5
-} from "node:fs";
-import { createHash, randomUUID as randomUUID2 } from "node:crypto";
-import { homedir } from "node:os";
-import { join as join7 } from "node:path";
 class ReLoginRequiredError extends Error {
   reason;
   constructor(message, reason) {
@@ -743,22 +270,22 @@ class ReLoginRequiredError extends Error {
     this.reason = reason;
   }
 }
-var authRoot = () => process.env.AUGENTA_AUTH_HOME || join7(homedir(), ".augenta");
-var authPath = () => join7(authRoot(), "auth.json");
-var lockPath = () => join7(authRoot(), "auth.lock");
+var authRoot = () => process.env.AUGENTA_AUTH_HOME || join2(homedir(), ".augenta");
+var authPath = () => join2(authRoot(), "auth.json");
+var lockPath = () => join2(authRoot(), "auth.lock");
 var LOCK_WAIT_MS = 1e4;
 var STALE_LOCK_MS = 30000;
 var REQUEST_TIMEOUT_MS = 15000;
 function ensureAuthRoot() {
-  mkdirSync5(authRoot(), { recursive: true, mode: 448 });
+  mkdirSync2(authRoot(), { recursive: true, mode: 448 });
   chmodSync2(authRoot(), 448);
 }
 function readAuthStore() {
   try {
     ensureAuthRoot();
-    if (existsSync6(authPath()))
+    if (existsSync2(authPath()))
       chmodSync2(authPath(), 384);
-    const parsed = JSON.parse(readFileSync5(authPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
       return { version: 1, profiles: {} };
     }
@@ -770,20 +297,20 @@ function readAuthStore() {
 function writeAuthStore(store) {
   ensureAuthRoot();
   const path = authPath();
-  const tmp = `${path}.${process.pid}.${randomUUID2()}.tmp`;
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    writeFileSync5(tmp, `${JSON.stringify(store, null, 2)}
+    writeFileSync2(tmp, `${JSON.stringify(store, null, 2)}
 `, {
       mode: 384,
       flag: "wx"
     });
     chmodSync2(tmp, 384);
-    renameSync4(tmp, path);
+    renameSync(tmp, path);
     chmodSync2(path, 384);
   } finally {
     try {
-      if (existsSync6(tmp))
-        unlinkSync2(tmp);
+      if (existsSync2(tmp))
+        unlinkSync(tmp);
     } catch {}
   }
 }
@@ -793,24 +320,24 @@ async function withAuthLock(fn) {
   const deadline = Date.now() + LOCK_WAIT_MS;
   while (true) {
     try {
-      writeFileSync5(lock, String(process.pid), { flag: "wx", mode: 384 });
+      writeFileSync2(lock, String(process.pid), { flag: "wx", mode: 384 });
       break;
     } catch {
       try {
-        if (Date.now() - statSync2(lock).mtimeMs > STALE_LOCK_MS)
-          unlinkSync2(lock);
+        if (Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS)
+          unlinkSync(lock);
       } catch {}
       if (Date.now() >= deadline) {
         throw new Error("another Augenta login or token refresh is still running");
       }
-      await new Promise((resolve3) => setTimeout(resolve3, 100));
+      await new Promise((resolve2) => setTimeout(resolve2, 100));
     }
   }
   try {
     return await fn();
   } finally {
     try {
-      unlinkSync2(lock);
+      unlinkSync(lock);
     } catch {}
   }
 }
@@ -843,12 +370,17 @@ async function refreshTokens(profile) {
   }
   throw new Error(`Augenta token refresh failed (${response.status})`);
 }
-async function augentaOAuthConfig(controlUrl2) {
-  const response = await fetch(`${controlUrl2.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+async function augentaOAuthConfig(controlUrl) {
+  const response = await fetch(`${controlUrl.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const host = new URL(controlUrl).host;
   if (!response.ok) {
-    throw new Error("Augenta sign-in is not configured for this environment");
+    if (response.status === 404)
+      throw new Error("Augenta sign-in is not configured for this environment");
+    throw new DiscoveryError(response.status, `${host} answered ${response.status} instead of Augenta's sign-in discovery; a proxy or network allowlist may be answering for it`);
   }
-  const value = await response.json();
+  const value = await response.json().catch(() => {
+    throw new DiscoveryError(response.status, `${host} did not answer with Augenta's sign-in discovery; a proxy or captive page may be answering for it`);
+  });
   if (!value.issuer || !value.clientId || !value.gateway) {
     throw new Error("Augenta returned incomplete sign-in configuration");
   }
@@ -858,24 +390,17 @@ async function augentaOAuthConfig(controlUrl2) {
     gateway: value.gateway.replace(/\/+$/, "")
   };
 }
-function browserCommand(url) {
-  if (process.platform === "darwin")
-    return ["open", url];
-  if (process.platform === "win32")
-    return ["cmd", "/c", "start", "", url];
-  return ["xdg-open", url];
-}
-var pendingLoginPath = () => join7(authRoot(), "pending-login.json");
+var pendingLoginPath = () => join2(authRoot(), "pending-login.json");
 function savePendingLogin(pending) {
   ensureAuthRoot();
   const path = pendingLoginPath();
-  writeFileSync5(path, `${JSON.stringify(pending, null, 2)}
+  writeFileSync2(path, `${JSON.stringify(pending, null, 2)}
 `, { mode: 384 });
   chmodSync2(path, 384);
 }
 function readPendingLogin() {
   try {
-    const parsed = JSON.parse(readFileSync5(pendingLoginPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(pendingLoginPath(), "utf8"));
     if (typeof parsed.deviceCode !== "string" || typeof parsed.clientId !== "string" || typeof parsed.issuer !== "string" || typeof parsed.expiresAt !== "number" || parsed.expiresAt <= Date.now()) {
       return;
     }
@@ -886,7 +411,7 @@ function readPendingLogin() {
 }
 function clearPendingLogin() {
   try {
-    unlinkSync2(pendingLoginPath());
+    unlinkSync(pendingLoginPath());
   } catch {}
 }
 async function beginDeviceLogin(config, opts = {}) {
@@ -915,7 +440,7 @@ async function beginDeviceLogin(config, opts = {}) {
   };
   if (opts.openBrowser !== false) {
     try {
-      openBrowser(browserCommand(pending.verificationUri));
+      openBrowser(pending.verificationUri);
     } catch {}
   }
   return pending;
@@ -924,7 +449,7 @@ async function pollDeviceToken(pending, opts) {
   const deadline = Math.min(pending.expiresAt, Date.now() + opts.waitMs);
   let intervalMs = pending.intervalMs;
   while (Date.now() < deadline) {
-    await new Promise((resolve3) => setTimeout(resolve3, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
+    await new Promise((resolve2) => setTimeout(resolve2, Math.max(1, Math.min(intervalMs, deadline - Date.now()))));
     const response = await fetch(endpoint(pending.issuer, "/oauth2/token"), {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -1053,9 +578,16 @@ function storedProfileUpdatedAt(profileId) {
   const ms = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN;
   return Number.isFinite(ms) ? ms : undefined;
 }
+function hasStoredProfile(profileId) {
+  return storedProfile(profileId) !== undefined;
+}
+function storedProfileUserId(profileId) {
+  const userId = storedProfile(profileId)?.userId;
+  return typeof userId === "string" && userId ? userId : undefined;
+}
 function storedProfile(profileId) {
   try {
-    const parsed = JSON.parse(readFileSync5(authPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object")
       return;
     return Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
@@ -1081,12 +613,12 @@ async function fetchWithProfile(profileId, url, init = {}) {
 }
 var NOTICES = ["relogin", "badkey", "connect"];
 function noticePath(projectRoot, notice) {
-  return join7(projectRoot, ".augenta", `${notice}-required`);
+  return join2(projectRoot, ".augenta", `${notice}-required`);
 }
 function markAuthNotice(projectRoot, notice) {
   try {
     ensureAugentaDir(projectRoot);
-    writeFileSync5(noticePath(projectRoot, notice), `${notice}
+    writeFileSync2(noticePath(projectRoot, notice), `${notice}
 `, {
       mode: 384
     });
@@ -1094,7 +626,7 @@ function markAuthNotice(projectRoot, notice) {
 }
 function authNoticePending(projectRoot, notice, since) {
   try {
-    return statSync2(noticePath(projectRoot, notice)).mtimeMs >= (since ?? Number.NEGATIVE_INFINITY);
+    return statSync(noticePath(projectRoot, notice)).mtimeMs >= (since ?? Number.NEGATIVE_INFINITY);
   } catch {
     return false;
   }
@@ -1103,18 +635,777 @@ function takeAuthNotice(projectRoot) {
   let found;
   for (const notice of NOTICES) {
     const path = noticePath(projectRoot, notice);
-    if (!existsSync6(path))
+    if (!existsSync2(path))
       continue;
     found ??= notice;
     try {
-      unlinkSync2(path);
+      unlinkSync(path);
     } catch {}
   }
   return found;
 }
 
+// capture/links.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
+function linksPath(projectRoot) {
+  return join3(projectRoot, ".augenta", "state", "links.json");
+}
+function legacyAdoptionPath(projectRoot) {
+  return join3(projectRoot, ".augenta", "state", "adopted.json");
+}
+var nonEmpty = (value) => typeof value === "string" && value.length > 0;
+function readLinks(projectRoot) {
+  try {
+    const value = JSON.parse(readFileSync3(linksPath(projectRoot), "utf8"));
+    if (value.version !== 1)
+      return;
+    if (!nonEmpty(value.profileId) || !nonEmpty(value.userId) || !nonEmpty(value.projectKey))
+      return;
+    if (!nonEmpty(value.joinedAt) || !Number.isFinite(Date.parse(value.joinedAt)))
+      return;
+    if (!Array.isArray(value.links) || value.links.length === 0)
+      return;
+    const links = [];
+    for (const item of value.links) {
+      const link = item;
+      if (!link || !nonEmpty(link.workspaceId) || !nonEmpty(link.connectorId))
+        return;
+      if (links.some((seen) => seen.workspaceId === link.workspaceId || seen.connectorId === link.connectorId)) {
+        return;
+      }
+      links.push({ workspaceId: link.workspaceId, connectorId: link.connectorId });
+    }
+    return {
+      profileId: value.profileId,
+      userId: value.userId,
+      projectKey: value.projectKey,
+      joinedAt: new Date(value.joinedAt).toISOString(),
+      links
+    };
+  } catch {
+    return;
+  }
+}
+function writeLinks(projectRoot, links) {
+  const dir = join3(ensureAugentaDir(projectRoot), "state");
+  mkdirSync3(dir, { recursive: true });
+  const path = join3(dir, "links.json");
+  const tmp = `${path}.${randomUUID2()}.tmp`;
+  try {
+    writeFileSync3(tmp, JSON.stringify({
+      version: 1,
+      profileId: links.profileId,
+      userId: links.userId,
+      projectKey: links.projectKey,
+      joinedAt: links.joinedAt,
+      links: links.links.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId }))
+    }), { mode: 384 });
+    renameSync2(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+  rmSync(legacyAdoptionPath(projectRoot), { force: true });
+}
+
+// capture/project.ts
+import { execFileSync } from "node:child_process";
+import { existsSync as existsSync3, realpathSync as realpathSync2 } from "node:fs";
+import { dirname, join as join4, resolve as resolve2 } from "node:path";
+function gitRevParse(cwd, arg) {
+  try {
+    const value = execFileSync("git", ["rev-parse", arg], {
+      cwd,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).toString().trim();
+    return value || undefined;
+  } catch {
+    return;
+  }
+}
+function isTrackedByGit(projectRoot, relativePath) {
+  try {
+    execFileSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
+      cwd: projectRoot,
+      stdio: "ignore"
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function resolveProjectRoot(cwd) {
+  if (!cwd)
+    return;
+  let dir;
+  try {
+    dir = realpathSync2(cwd);
+  } catch {
+    return;
+  }
+  while (true) {
+    if (existsSync3(join4(dir, ".augenta", "config.json")))
+      return dir;
+    if (existsSync3(join4(dir, ".git")))
+      return;
+    const parent = dirname(dir);
+    if (parent === dir)
+      return;
+    dir = parent;
+  }
+}
+function resolveProject(args, cwd) {
+  if (args.project)
+    return { projectRoot: resolve2(cwd, args.project) };
+  const configured = resolveProjectRoot(cwd);
+  if (configured)
+    return { projectRoot: configured };
+  const top = gitRevParse(cwd, "--show-toplevel");
+  if (!top)
+    return { projectRoot: cwd };
+  return { projectRoot: top };
+}
+function resolveTargetProject(args, cwd) {
+  return resolveProject(args, cwd).projectRoot;
+}
+
+// capture/config.ts
+var DEFAULT_GATEWAY = "https://apim-aug-platform-prod-utyom2a4bdhti.azure-api.net";
+var DEFAULT_CONTROL_URL = "https://augenta.ai";
+function parseDestinations(raw) {
+  if (!Array.isArray(raw) || raw.length === 0)
+    return;
+  const destinations = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object")
+      return;
+    const connectorId = typeof item.connectorId === "string" ? item.connectorId.trim() : "";
+    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
+    if (!connectorId || !workspaceId)
+      return;
+    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
+      return;
+    if (destinations.some((destination) => destination.connectorId === connectorId))
+      continue;
+    const workspaceName = item.workspaceName?.trim();
+    destinations.push({ connectorId, workspaceId, ...workspaceName ? { workspaceName } : {} });
+  }
+  return destinations;
+}
+function parseWorkspaces(raw) {
+  if (!Array.isArray(raw) || raw.length === 0)
+    return;
+  const workspaces = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object")
+      return;
+    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
+    if (!workspaceId)
+      return;
+    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
+      return;
+    if (workspaces.some((workspace) => workspace.workspaceId === workspaceId))
+      continue;
+    const workspaceName = item.workspaceName?.trim();
+    workspaces.push({ workspaceId, ...workspaceName ? { workspaceName } : {} });
+  }
+  return workspaces;
+}
+function joinedRoutes(projectRoot, profileId, projectKey, workspaces) {
+  const links = readLinks(projectRoot);
+  if (!links || links.projectKey !== projectKey)
+    return { join: "none" };
+  if (links.profileId !== profileId || storedProfileUserId(profileId) !== links.userId)
+    return { join: "signin" };
+  const destinations = [];
+  for (const workspace of workspaces) {
+    const link = links.links.find((entry) => entry.workspaceId === workspace.workspaceId);
+    if (!link)
+      return { join: "workspaces" };
+    destinations.push({ connectorId: link.connectorId, ...workspace });
+  }
+  if (links.links.length !== workspaces.length)
+    return { join: "workspaces" };
+  return { join: "joined", destinations, joinedAt: links.joinedAt };
+}
+function configPath(projectRoot) {
+  return join5(projectRoot, ".augenta", "config.json");
+}
+function loadProjectConfig(projectRoot) {
+  try {
+    const value = JSON.parse(readFileSync4(configPath(projectRoot), "utf8"));
+    if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
+      return;
+    const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
+    const settings = {};
+    for (const key of ["endpoint", "controlUrl", "ingestUrl", "discoveredGateway"]) {
+      const raw = value[key];
+      if (raw !== undefined && typeof raw !== "string")
+        return;
+      if (typeof raw === "string" && raw.trim()) {
+        settings[key] = raw.trim().replace(/\/+$/, "");
+      }
+    }
+    if (value.autoRecall !== undefined && typeof value.autoRecall !== "boolean")
+      return;
+    if (typeof value.autoRecall === "boolean")
+      settings.autoRecall = value.autoRecall;
+    if (value.org !== undefined) {
+      if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
+        return;
+      if (value.org.name !== undefined && typeof value.org.name !== "string")
+        return;
+      settings.org = { id: value.org.id.trim(), ...value.org.name?.trim() ? { name: value.org.name.trim() } : {} };
+    }
+    if (value.authMode === "oauth") {
+      if (value.destinations !== undefined)
+        return;
+      const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
+      const projectKey = typeof value.projectKey === "string" ? value.projectKey.trim() : "";
+      const workspaces = parseWorkspaces(value.workspaces);
+      if (!profileId || !projectKey || !workspaces)
+        return;
+      const routes = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      return {
+        ...settings,
+        authMode: "oauth",
+        profileId,
+        projectKey,
+        workspaces,
+        join: routes.join,
+        ...routes.destinations ? {
+          destinations: routes.destinations,
+          connectorIds: routes.destinations.map((destination) => destination.connectorId),
+          captureSince: routes.joinedAt
+        } : {},
+        projectRoot
+      };
+    }
+    const destinations = value.destinations === undefined ? undefined : parseDestinations(value.destinations);
+    if (value.destinations !== undefined && !destinations)
+      return;
+    if (destinations) {
+      settings.destinations = destinations;
+      settings.connectorIds = destinations.map((destination) => destination.connectorId);
+    }
+    if (value.authMode === "api-key") {
+      const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
+      if (!apiKey || Array.isArray(value.destinations) && value.destinations.length !== 1)
+        return;
+      return {
+        ...settings,
+        authMode: "api-key",
+        ...captureSince ? { captureSince } : {},
+        apiKey,
+        projectRoot
+      };
+    }
+    return;
+  } catch {
+    return;
+  }
+}
+function projectConfig(cwd) {
+  const root = resolveProjectRoot(cwd);
+  return root ? loadProjectConfig(root) : undefined;
+}
+function controlUrl(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_CONTROL_URL?.trim() || cfg?.controlUrl || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
+}
+function gatewayBase(cfg, flag) {
+  return (flag?.trim() || process.env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+}
+function experiencesUrl(cfg) {
+  return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
+}
+function captureKilled() {
+  const value = process.env.AUGENTA_CAPTURE_ENABLED;
+  return value === "0" || value === "false";
+}
+function captureGate(cfg) {
+  if (captureKilled())
+    return "killed";
+  if (cfg.authMode !== "oauth")
+    return cfg.apiKey ? "live" : "signed_out";
+  if (!cfg.profileId || !hasStoredProfile(cfg.profileId))
+    return "signed_out";
+  if (!cfg.connectorIds?.length)
+    return "not_adopted";
+  return "live";
+}
+function captureEnabled(cfg) {
+  return Boolean(cfg) && captureGate(cfg) === "live";
+}
+function effectiveCaptureSince(cfg) {
+  return cfg.captureSince;
+}
+
+// capture/outbox.ts
+import { join as join6 } from "node:path";
+import { mkdirSync as mkdirSync4, existsSync as existsSync4, readFileSync as readFileSync5, writeFileSync as writeFileSync4, appendFileSync, renameSync as renameSync3, statSync as statSync2, unlinkSync as unlinkSync2 } from "node:fs";
+var NEWLINE = 10;
+var MAX_SPOOL_BYTES = 50 * 1024 * 1024;
+var MAX_DEST_LAG_BYTES = 16 * 1024 * 1024;
+var LAG_STRIKES = 3;
+function isCaptureEvent(o) {
+  const e = o;
+  return !!e && typeof e.sid === "string" && typeof e.text === "string" && Number.isInteger(e.seq);
+}
+function isRawRecord(o) {
+  const e = o;
+  return !!e && typeof e.raw === "string" && typeof e.sid === "string";
+}
+function isDocumentRecord(o) {
+  const e = o;
+  if (!e || e.type !== "doc" || e.src !== "claude-code" && e.src !== "codex" || typeof e.sid !== "string" || typeof e.proj !== "string" || e.proj.length === 0)
+    return false;
+  const data = e.data;
+  if (!data || data.kind !== "agent-memory" || typeof data.documentId !== "string" || data.documentId.length === 0 || typeof data.sourcePath !== "string" || typeof data.title !== "string" || data.format !== "text/markdown" || typeof data.text !== "string" || typeof data.sourceUpdatedAt !== "string" || typeof data.capturedAt !== "string" || typeof data.revision !== "string" || data.revision.length === 0 || typeof data.deleted !== "boolean" || typeof data.chunkIndex !== "number" || !Number.isInteger(data.chunkIndex) || data.chunkIndex < 0 || typeof data.chunkCount !== "number" || !Number.isInteger(data.chunkCount) || data.chunkCount <= 0)
+    return false;
+  return data.chunkIndex < data.chunkCount && e.sid === `memory-${data.documentId}`;
+}
+
+class Outbox {
+  dir;
+  spoolPath;
+  cursorPath;
+  projectRoot;
+  maxSpoolBytes;
+  maxDestLagBytes;
+  constructor(projectRoot, opts = {}) {
+    this.projectRoot = projectRoot;
+    this.dir = join6(projectRoot, ".augenta", "outbox");
+    this.spoolPath = join6(this.dir, "spool.jsonl");
+    this.cursorPath = join6(this.dir, "cursor.json");
+    this.maxSpoolBytes = opts.maxSpoolBytes ?? MAX_SPOOL_BYTES;
+    this.maxDestLagBytes = opts.maxDestLagBytes ?? MAX_DEST_LAG_BYTES;
+  }
+  ensure() {
+    ensureAugentaDir(this.projectRoot);
+    mkdirSync4(this.dir, { recursive: true });
+  }
+  append(records) {
+    if (records.length === 0)
+      return true;
+    this.ensure();
+    try {
+      if (statSync2(this.spoolPath).size >= this.maxSpoolBytes)
+        return false;
+    } catch {}
+    appendFileSync(this.spoolPath, records.map((r) => JSON.stringify(r)).join(`
+`) + `
+`);
+    return true;
+  }
+  forceAppend(records) {
+    if (records.length === 0)
+      return;
+    this.ensure();
+    appendFileSync(this.spoolPath, records.map((r) => JSON.stringify(r)).join(`
+`) + `
+`);
+  }
+  dropEpisodePath() {
+    return join6(this.dir, "dropped.json");
+  }
+  markDropped() {
+    this.ensure();
+    const path = this.dropEpisodePath();
+    if (existsSync4(path))
+      return false;
+    writeFileSync4(path, JSON.stringify({ since: new Date().toISOString() }));
+    return true;
+  }
+  clearDropEpisode() {
+    try {
+      unlinkSync2(this.dropEpisodePath());
+    } catch {}
+  }
+  discardNoticePath() {
+    return join6(this.dir, "discarded.json");
+  }
+  markDiscarded(entries) {
+    if (entries.length === 0)
+      return;
+    this.ensure();
+    try {
+      writeFileSync4(this.discardNoticePath(), JSON.stringify({ at: new Date().toISOString(), destinations: entries }));
+    } catch {}
+  }
+  takeDiscarded() {
+    const path = this.discardNoticePath();
+    try {
+      const parsed = JSON.parse(readFileSync5(path, "utf8"));
+      unlinkSync2(path);
+      if (!Array.isArray(parsed.destinations) || parsed.destinations.length === 0) {
+        return;
+      }
+      return parsed.destinations;
+    } catch {
+      return;
+    }
+  }
+  static offset(value) {
+    return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+  }
+  static strikes(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return {};
+    const parsed = {};
+    for (const [key, count] of Object.entries(value)) {
+      const n = Outbox.offset(count);
+      if (!key || n === undefined)
+        return {};
+      parsed[key] = n;
+    }
+    return parsed;
+  }
+  readCursor() {
+    let raw;
+    try {
+      raw = JSON.parse(readFileSync5(this.cursorPath, "utf8"));
+    } catch {
+      return { shipped: 0, lagStrikes: {} };
+    }
+    const shipped = Outbox.offset(raw.shipped) ?? 0;
+    const lagStrikes = Outbox.strikes(raw.lagStrikes);
+    const links = raw.links;
+    if (!links || typeof links !== "object" || Array.isArray(links)) {
+      return { shipped, lagStrikes };
+    }
+    const parsed = {};
+    for (const [key, value] of Object.entries(links)) {
+      const off = Outbox.offset(value);
+      if (!key || off === undefined)
+        return { shipped, lagStrikes };
+      parsed[key] = off;
+    }
+    if (Object.keys(parsed).length === 0)
+      return { shipped, lagStrikes };
+    return { shipped, links: parsed, lagStrikes };
+  }
+  writeCursor(links, scalar, lagStrikes = {}) {
+    this.ensure();
+    const strikes = Object.keys(lagStrikes).length > 0 ? { lagStrikes } : {};
+    const body = links ? { shipped: Math.min(...Object.values(links)), links, ...strikes } : { shipped: scalar ?? 0 };
+    const tmp = this.cursorPath + ".tmp";
+    writeFileSync4(tmp, JSON.stringify(body));
+    renameSync3(tmp, this.cursorPath);
+  }
+  shippedOffset(destKey) {
+    const { shipped, links } = this.readCursor();
+    const stored = destKey === undefined || !links ? shipped : links[destKey] ?? 0;
+    return stored > this.spoolEnd() ? 0 : stored;
+  }
+  spoolEnd() {
+    try {
+      return statSync2(this.spoolPath).size;
+    } catch {
+      return 0;
+    }
+  }
+  registerDestinations(keys, opts = {}) {
+    const wanted = [...new Set(keys)];
+    if (wanted.length === 0)
+      return;
+    const { shipped, links, lagStrikes } = this.readCursor();
+    const spoolEnd = this.spoolEnd();
+    const inheritsScalar = (key) => shipped === 0 || (opts.freshKeys !== undefined ? !opts.freshKeys.includes(key) : wanted.length === 1);
+    const next = {};
+    for (const key of wanted) {
+      next[key] = links?.[key] ?? (links ? spoolEnd : inheritsScalar(key) ? shipped : spoolEnd);
+    }
+    const unchanged = links !== undefined && Object.keys(links).length === wanted.length && wanted.every((key) => links[key] === next[key]);
+    if (unchanged)
+      return;
+    const strikes = {};
+    for (const key of wanted)
+      if (lagStrikes[key])
+        strikes[key] = lagStrikes[key];
+    this.writeCursor(next, undefined, strikes);
+  }
+  enforceLag(progressed = []) {
+    const { links, lagStrikes } = this.readCursor();
+    if (!links || Object.keys(links).length < 2)
+      return [];
+    if (progressed.length === 0)
+      return [];
+    const leader = Math.max(...Object.values(links));
+    const swept = [];
+    const next = { ...links };
+    const strikes = {};
+    for (const [destKey, from] of Object.entries(links)) {
+      if (progressed.includes(destKey))
+        continue;
+      if (leader - from <= this.maxDestLagBytes)
+        continue;
+      const count = (lagStrikes[destKey] ?? 0) + 1;
+      if (count < LAG_STRIKES) {
+        strikes[destKey] = count;
+        continue;
+      }
+      const to = leader - this.maxDestLagBytes;
+      if (to <= from)
+        continue;
+      next[destKey] = to;
+      swept.push({ destKey, from, to });
+    }
+    const strikesChanged = Object.keys(strikes).length !== Object.keys(lagStrikes).length || Object.entries(strikes).some(([key, count]) => lagStrikes[key] !== count);
+    if (swept.length > 0 || strikesChanged)
+      this.writeCursor(next, undefined, strikes);
+    return swept;
+  }
+  hasPendingBytes() {
+    try {
+      return statSync2(this.spoolPath).size > this.shippedOffset();
+    } catch {
+      return false;
+    }
+  }
+  pendingByteCount(destKey) {
+    return Math.max(0, this.spoolEnd() - this.shippedOffset(destKey));
+  }
+  readPending(maxBatch = Infinity, destKey) {
+    const shipped = this.shippedOffset(destKey);
+    if (!existsSync4(this.spoolPath))
+      return { records: [], endOffset: shipped, hasMore: false };
+    const buf = readFileSync5(this.spoolPath);
+    const start = Math.min(shipped, buf.length);
+    const records = [];
+    let off = start;
+    let hasMore = false;
+    let cursor = start;
+    while (cursor < buf.length) {
+      const nl = buf.indexOf(NEWLINE, cursor);
+      const lineEnd = nl === -1 ? buf.length : nl;
+      const next = nl === -1 ? buf.length : nl + 1;
+      const text = buf.subarray(cursor, lineEnd).toString("utf8").trim();
+      if (text) {
+        if (records.length >= maxBatch) {
+          hasMore = true;
+          break;
+        }
+        try {
+          const parsed = JSON.parse(text);
+          if (isCaptureEvent(parsed) || isRawRecord(parsed) || isDocumentRecord(parsed))
+            records.push(parsed);
+        } catch {}
+      }
+      off = next;
+      cursor = next;
+    }
+    return { records, endOffset: off, hasMore };
+  }
+  advance(endOffset, destKey) {
+    if (destKey === undefined) {
+      this.writeCursor(undefined, endOffset);
+      return;
+    }
+    const { shipped, links, lagStrikes } = this.readCursor();
+    const merged = { ...links ?? {} };
+    merged[destKey] = Math.max(merged[destKey] ?? (links ? 0 : shipped), endOffset);
+    this.writeCursor(merged, undefined, lagStrikes);
+  }
+  pendingCount(destKey) {
+    return this.readPending(Infinity, destKey).records.length;
+  }
+  compact() {
+    if (!existsSync4(this.spoolPath))
+      return;
+    let size;
+    try {
+      size = statSync2(this.spoolPath).size;
+    } catch {
+      return;
+    }
+    if (size > 0 && this.shippedOffset() >= size) {
+      const archivePath = this.spoolPath + ".archive";
+      try {
+        renameSync3(this.spoolPath, archivePath);
+      } catch {
+        return;
+      }
+      const { links, lagStrikes } = this.readCursor();
+      if (links) {
+        this.writeCursor(Object.fromEntries(Object.keys(links).map((key) => [key, 0])), undefined, lagStrikes);
+      } else {
+        this.advance(0);
+      }
+      try {
+        unlinkSync2(archivePath);
+      } catch {}
+    }
+  }
+}
+
+// capture/health.ts
+var STAGES = ["dispatch", "capture", "delivery"];
+var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
+function read(projectRoot, stage) {
+  try {
+    const s = JSON.parse(readFileSync6(join7(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
+      return;
+    return {
+      at: new Date(s.at).toISOString(),
+      outcome: s.outcome,
+      count: s.count,
+      successes: s.successes,
+      ...Number.isFinite(Date.parse(s.lastSuccessAt)) ? { lastSuccessAt: new Date(s.lastSuccessAt).toISOString() } : {}
+    };
+  } catch {
+    return;
+  }
+}
+function recordHealth(projectRoot, stage, outcome, count = 0) {
+  try {
+    const dir = join7(ensureAugentaDir(projectRoot), "state");
+    mkdirSync5(dir, { recursive: true });
+    const old = read(projectRoot, stage);
+    const at = new Date().toISOString();
+    const success = outcome === "captured" || outcome === "accepted";
+    const value = {
+      at,
+      outcome,
+      count,
+      successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
+      ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
+    };
+    const file = join7(dir, `health-${stage}.json`);
+    const tmp = `${file}.${randomUUID3()}.tmp`;
+    writeFileSync5(tmp, JSON.stringify(value), { mode: 384 });
+    renameSync4(tmp, file);
+  } catch {}
+}
+function captureHealth(projectRoot) {
+  const cfg = loadProjectConfig(projectRoot);
+  const activity = Object.fromEntries(STAGES.map((stage) => [stage, read(projectRoot, stage) ?? null]));
+  const gate = cfg ? captureGate(cfg) : undefined;
+  return {
+    configured: !!cfg,
+    enabled: gate === "live",
+    ...gate ? { gate } : {},
+    configuration: cfg ? "valid" : existsSync5(join7(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    activityScope: "project",
+    hostDispatch: "unverified",
+    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg ? 1 : 0,
+    pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
+    ...activity,
+    hostApproval: "unknown",
+    ingestion: "unverified",
+    nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in" : gate === "not_adopted" ? "adopt" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
+  };
+}
+
+// capture/turn-cursor.ts
+import { join as join8, dirname as dirname2 } from "node:path";
+import { mkdirSync as mkdirSync6, existsSync as existsSync6, readFileSync as readFileSync7, writeFileSync as writeFileSync6, renameSync as renameSync5 } from "node:fs";
+class TurnState {
+  path;
+  projectRoot;
+  constructor(projectRoot) {
+    this.projectRoot = projectRoot;
+    this.path = join8(projectRoot, ".augenta", "state", "turn.json");
+  }
+  readAll() {
+    if (!existsSync6(this.path))
+      return {};
+    try {
+      const parsed = JSON.parse(readFileSync7(this.path, "utf8"));
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  writeAll(all) {
+    ensureAugentaDir(this.projectRoot);
+    mkdirSync6(dirname2(this.path), { recursive: true });
+    const tmp = this.path + ".tmp";
+    writeFileSync6(tmp, JSON.stringify(all));
+    renameSync5(tmp, this.path);
+  }
+  get(transcriptPath) {
+    const v = this.readAll()[transcriptPath];
+    return typeof v === "number" && v >= 0 ? v : 0;
+  }
+  bump(transcriptPath) {
+    const all = this.readAll();
+    const cur = typeof all[transcriptPath] === "number" && all[transcriptPath] >= 0 ? all[transcriptPath] : 0;
+    all[transcriptPath] = cur + 1;
+    this.writeAll(all);
+    return cur + 1;
+  }
+}
+
+// hooks/auto-recall.ts
+import { randomUUID as randomUUID5 } from "node:crypto";
+import { mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync6, writeFileSync as writeFileSync7 } from "node:fs";
+import { join as join10 } from "node:path";
+
+// capture/auto-recall-marker.ts
+var AUTO_RECALL_SENTINEL = "[augenta-recall:v1]";
+function hasSentinel(value) {
+  if (typeof value === "string")
+    return value.includes(AUTO_RECALL_SENTINEL);
+  if (Array.isArray(value))
+    return value.some(hasSentinel);
+  return false;
+}
+function isClaudeAutoRecallRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const line = value;
+  if (line.type !== "attachment")
+    return false;
+  const attachment = line.attachment;
+  if (!attachment || typeof attachment !== "object")
+    return false;
+  if (typeof attachment.type !== "string" || !attachment.type.startsWith("hook_"))
+    return false;
+  return hasSentinel(attachment.content) || hasSentinel(attachment.stdout);
+}
+function isCodexAutoRecallItem(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const item = value;
+  if (item.type !== "message" || item.role !== "developer")
+    return false;
+  if (typeof item.content === "string")
+    return hasSentinel(item.content);
+  if (!Array.isArray(item.content))
+    return false;
+  return item.content.some((block) => !!block && typeof block === "object" && hasSentinel(block.text));
+}
+function isCodexAutoRecallRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const line = value;
+  return line.type === "response_item" && isCodexAutoRecallItem(line.payload);
+}
+function stripCodexAutoRecallHistory(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return;
+  const line = value;
+  if (line.type !== "compacted" || !line.payload || typeof line.payload !== "object")
+    return;
+  const payload = line.payload;
+  let changed = false;
+  const next = { ...payload };
+  for (const [key, entry] of Object.entries(payload)) {
+    if (!Array.isArray(entry))
+      continue;
+    const kept = entry.filter((item) => !isCodexAutoRecallItem(item));
+    if (kept.length !== entry.length) {
+      next[key] = kept;
+      changed = true;
+    }
+  }
+  return changed ? { ...line, payload: next } : undefined;
+}
+
 // capture/recall-client.ts
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 
 // capture/platform.ts
 class AugentaRequestError extends Error {
@@ -1173,20 +1464,27 @@ function environmentLabel(controlUrl2) {
 }
 function describeError(error) {
   const message = error?.message ?? String(error);
+  if (error instanceof DiscoveryError)
+    return message;
+  const failure = classifyNetworkError(error);
+  switch (failure?.kind) {
+    case "proxy_refused":
+      return `cannot reach Augenta: a proxy refused the connection (${failure.status}). This network's allowlist may block Augenta's hosts.`;
+    case "dns":
+      return "cannot reach Augenta: the host name did not resolve. Check your network or DNS.";
+    case "refused":
+      return "cannot reach Augenta: the connection was refused. Check the URL, and any proxy or firewall.";
+    case "reset":
+      return "cannot reach Augenta: the connection was cut. Check any proxy or firewall.";
+    case "timeout":
+      return "cannot reach Augenta: no answer in time. Check your network, and any proxy or firewall.";
+    case "tls":
+      return "cannot reach Augenta: the TLS certificate could not be verified. Check for a TLS-intercepting proxy.";
+  }
   if (message !== "fetch failed")
     return message;
   const cause = error.cause;
-  const code = cause?.code;
-  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
-    return "cannot reach Augenta: the host name did not resolve. Check your network or DNS.";
-  }
-  if (code === "ECONNREFUSED") {
-    return "cannot reach Augenta: the connection was refused. Check the URL, and any proxy or firewall.";
-  }
-  if (code === "CERT_HAS_EXPIRED" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {
-    return "cannot reach Augenta: the TLS certificate could not be verified. Check for a TLS-intercepting proxy.";
-  }
-  const detail = cause?.message ?? code;
+  const detail = cause?.message ?? cause?.code;
   return detail ? `cannot reach Augenta: ${detail}` : "cannot reach Augenta: the network request failed. Check your connection.";
 }
 
@@ -1364,7 +1662,7 @@ async function askOnce(ctx, destination) {
     return { outcome: outOfTime(), transient: false };
   const headers = {
     "content-type": "application/json",
-    "idempotency-key": randomUUID3()
+    "idempotency-key": randomUUID4()
   };
   const body = JSON.stringify(destination.workspaceId ? { query: ctx.query, workspace: destination.workspaceId } : { query: ctx.query });
   try {
@@ -1532,6 +1830,9 @@ async function askWorkspaces(searchRoot, request) {
     if (bearer === undefined && !getAuthProfile(profileId)) {
       return bail("need_login", "need_login", "this project's Augenta sign-in is missing; sign in again with the connect skill");
     }
+    if (!cfg.destinations?.length) {
+      return bail("not_joined", "not_joined", "this checkout has not joined its project's Augenta connection; run the connect skill here to confirm its Workspaces first");
+    }
     fetcher = bearer !== undefined ? (target, init) => fetch(target, {
       ...init,
       signal: init.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -1689,14 +1990,14 @@ function scrub(text) {
 // capture/shipper.ts
 import { spawn } from "node:child_process";
 import { existsSync as existsSync7 } from "node:fs";
-import { dirname as dirname3, join as join8 } from "node:path";
+import { dirname as dirname3, join as join9 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function shipperEntry() {
   const self = fileURLToPath2(import.meta.url);
   const ext = self.endsWith(".ts") ? ".ts" : ".mjs";
   const here = dirname3(self);
-  const sibling = join8(here, `ship${ext}`);
-  return existsSync7(sibling) ? sibling : join8(here, "..", "capture", `ship${ext}`);
+  const sibling = join9(here, `ship${ext}`);
+  return existsSync7(sibling) ? sibling : join9(here, "..", "capture", `ship${ext}`);
 }
 function spawnShipper(projectRoot) {
   try {
@@ -1757,11 +2058,11 @@ function autoRecallQuery(prompt) {
   return query;
 }
 function backoffPath(projectRoot) {
-  return join9(projectRoot, ".augenta", "state", "recall-backoff.json");
+  return join10(projectRoot, ".augenta", "state", "recall-backoff.json");
 }
 function rateLimited(projectRoot, now = Date.now()) {
   try {
-    const until = Date.parse(JSON.parse(readFileSync6(backoffPath(projectRoot), "utf8")).until);
+    const until = Date.parse(JSON.parse(readFileSync8(backoffPath(projectRoot), "utf8")).until);
     return Number.isFinite(until) && until > now;
   } catch {
     return false;
@@ -1769,12 +2070,12 @@ function rateLimited(projectRoot, now = Date.now()) {
 }
 function markRateLimited(projectRoot, seconds) {
   try {
-    const dir = join9(ensureAugentaDir(projectRoot), "state");
-    mkdirSync6(dir, { recursive: true });
+    const dir = join10(ensureAugentaDir(projectRoot), "state");
+    mkdirSync7(dir, { recursive: true });
     const file = backoffPath(projectRoot);
-    const tmp = `${file}.${randomUUID4()}.tmp`;
-    writeFileSync6(tmp, JSON.stringify({ until: new Date(Date.now() + seconds * 1000).toISOString() }), { mode: 384 });
-    renameSync5(tmp, file);
+    const tmp = `${file}.${randomUUID5()}.tmp`;
+    writeFileSync7(tmp, JSON.stringify({ until: new Date(Date.now() + seconds * 1000).toISOString() }), { mode: 384 });
+    renameSync6(tmp, file);
   } catch {}
 }
 function label(answer) {
@@ -1826,6 +2127,8 @@ async function runAutoRecall(input, options = {}) {
       return;
     const cfg = projectConfig(input.cwd);
     if (!cfg || !captureEnabled(cfg))
+      return;
+    if (cfg.autoRecall === false)
       return;
     const query = autoRecallQuery(input.prompt);
     if (!query)

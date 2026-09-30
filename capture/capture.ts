@@ -33,7 +33,8 @@ import { captureLock } from "./capture-lock";
 import { recordHealth } from "./health";
 import { normalizeNativeTurns } from "./native-turns";
 import { TurnState } from "./turn-cursor";
-import { captureEnabled, projectConfig, resolveProjectRoot } from "./config";
+import { captureEnabled, effectiveCaptureSince, projectConfig, resolveProjectRoot } from "./config";
+import { setAugentaIgnore } from "./augenta-dir";
 import { captureAgentMemory } from "./memory";
 import { spawnShipper } from "./shipper";
 import { isCodexHarness, sniffHarness } from "../hooks/harness";
@@ -547,7 +548,10 @@ if (isMain(import.meta.url)) {
     const cfg = projectConfig(payload.cwd);
     if (cfg && captureEnabled(cfg)) {
       recordHealth(cfg.projectRoot, "dispatch", "started");
-      try { runCapture(payload, { captureSince: cfg.captureSince }); }
+      // An API-key config holds its key, so it never keeps the shared ignore
+      // form a browser connection may have left behind, even one written by hand.
+      if (cfg.authMode === "api-key") setAugentaIgnore(cfg.projectRoot, "local");
+      try { runCapture(payload, { captureSince: effectiveCaptureSince(cfg) }); }
       catch { recordHealth(cfg.projectRoot, "capture", "failed"); }
     }
   } catch {

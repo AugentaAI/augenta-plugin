@@ -239,6 +239,9 @@ export async function runAutoRecall(
     if (autoRecallDisabled()) return undefined;
     const cfg = projectConfig(input.cwd);
     if (!cfg || !captureEnabled(cfg)) return undefined;
+    // The project's own answer at connect. Only an explicit `false` turns it off:
+    // a config written before connect asked keeps the behaviour it had.
+    if (cfg.autoRecall === false) return undefined;
     const query = autoRecallQuery(input.prompt);
     if (!query) return undefined;
     if (rateLimited(cfg.projectRoot)) return undefined;

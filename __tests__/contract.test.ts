@@ -63,7 +63,7 @@ const CODEX_UI: Record<string, string[]> = {
 };
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.10.2";
+const RELEASE_VERSION = "0.11.0";
 /** How many values the release must set. AGENTS.md → Releases lists them, and a
  *  test below asserts its count is this one. */
 const RELEASE_SURFACES = 8;
@@ -252,6 +252,7 @@ describe("network calls are bounded", () => {
   // test). So assert it structurally: every fetch must carry a signal.
   const sources = [
     "capture/auth.ts",
+    "capture/network.ts",
     "capture/platform.ts",
     "capture/recall-client.ts",
     "capture/ship.ts",
@@ -320,7 +321,7 @@ describe("the connect skill drives connect itself", () => {
   test("drives every JSON verb the CLI exposes", () => {
     // Word-boundary, not substring: a renamed `--workspaces` would satisfy
     // `toContain("--workspace")` VACUOUSLY while the CLI verb no longer exists.
-    for (const verb of ["--json", "--probe", "--login", "--await-login", "--create-workspace", "--workspace", "--profile"]) {
+    for (const verb of ["--json", "--probe", "--login", "--await-login", "--create-workspace", "--workspace", "--profile", "--auto-recall", "--adopt"]) {
       expect(skill).toMatch(new RegExp(`${verb}(?![\\w-])`));
     }
   });
@@ -685,6 +686,44 @@ describe("the recall skill drives recall itself", () => {
     const connect = readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8").replace(/\s+/g, " ");
     expect(connect).toMatch(/each prompt they submit is also asked of those Workspaces/);
   });
+
+  test("a committed config is joined per checkout, with the full disclosure and one answer", () => {
+    /* The owner's decision: a browser config may travel with the repo, and a
+       checkout captures only after its own user joins it through connect. The
+       joining question is consent, so it carries the same disclosure as the
+       Workspace question and must not grow a second yes/no. */
+    const connect = readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8").replace(/\s+/g, " ");
+    expect(connect).toContain("### If this checkout has not joined the recorded connection");
+    expect(connect).toMatch(/receives the \*\*full record\*\*.*the audience is the \*\*union\*\*/);
+    expect(connect).toMatch(/Choosing to use the recorded set is this checkout's consent, so do not ask a second yes\/no/);
+    expect(connect).toMatch(/git tracks the config, so the new selection changes the destinations for everyone who pulls it/);
+    const agents = readFileSync(join(PLUGIN_ROOT, "AGENTS.md"), "utf8").replace(/\s+/g, " ");
+    expect(agents).toMatch(/A committed config is the project's recorded decision; each checkout joins it/);
+    expect(agents).toMatch(/An API-key config holds its key and is never committable/);
+    // Routes exist only from this checkout's own links, made by the person
+    // signed in here, naming exactly the recorded Workspaces.
+    const gate = readFileSync(join(PLUGIN_ROOT, "capture", "config.ts"), "utf8");
+    expect(gate).toMatch(/storedProfileUserId\(profileId\) !== links\.userId/);
+    expect(gate).toMatch(/links\.links\.length !== workspaces\.length/);
+    expect(gate).toMatch(/hasStoredProfile\(cfg\.profileId\)/);
+    expect(gate).toMatch(/if \(value\.destinations !== undefined\) return undefined;/);
+  });
+
+  test("automatic recall is the project's own answer, Off by default, and never gates /augenta:recall", () => {
+    /* The owner's decision: connect asks, with Off pre-selected, and records the
+       answer; a config that predates the question keeps running. The gate lives
+       in the hook only (the shared request layer must stay ungated, above), and
+       the explicit skill must keep working whichever way it was answered. */
+    const hook = readFileSync(join(PLUGIN_ROOT, "hooks", "auto-recall.ts"), "utf8");
+    expect(hook).toContain("cfg.autoRecall === false");
+    const connect = readFileSync(join(SKILLS_DIR, "connect", "SKILL.md"), "utf8").replace(/\s+/g, " ");
+    expect(connect).toMatch(/\*\*Off, pre-selected\*\*/);
+    expect(connect).toMatch(/either way you can still run `\/augenta:recall` yourself/);
+    expect(connect).toMatch(/Always pass `--auto-recall`/);
+    expect(connect).toContain("## Change only automatic recall");
+    const recall = readFileSync(join(SKILLS_DIR, "recall", "SKILL.md"), "utf8").replace(/\s+/g, " ");
+    expect(recall).toMatch(/when the project turned it off at connect; asking with this skill still works/);
+  });
 });
 
 /**
@@ -796,7 +835,9 @@ describe("the consent gate is plural, explicit, and fully disclosed", () => {
       /left in place and idle/,
       /subset of the set the user just confirmed/,
       /platform-key path stays single-destination/i,
-      /`destinations\[\]\.connectorId` is the \*\*only\*\* routing key read/i,
+      /A Connector id is the \*\*only\*\* routing key read/i,
+      /A Connector belongs to one person, so each person links their own/,
+      /Connect adopts only a link whose `ownerUserId` is the signed-in person/,
       /a scalar is not read forward/i,
     ]) {
       expect(agents).toMatch(phrase);
@@ -1111,6 +1152,26 @@ describe("manifests — cross-harness packaging and one version", () => {
     for (const version of referenced) {
       expect(defined, `CHANGELOG.md has no link definition for [${version}]`).toContain(version);
     }
+  });
+
+  test("entries ship under the release version, never an Unreleased section", () => {
+    /* AGENTS.md → Releases: a CHANGELOG entry lands with its version bump. #40–#45
+       parked entries under [Unreleased] at 0.10.2, so `main` shipped them under
+       the old number, and installs cached per version had no new one to fetch.
+       This catches the parking; a bump itself is still the author's to make. */
+    const changelog = readFileSync(join(PLUGIN_ROOT, "CHANGELOG.md"), "utf8");
+    /* Brackets are OPTIONAL here, unlike the link-definition test above: every
+       heading from 0.9.2 down is unbracketed, so a plain `## Unreleased` is the
+       local convention rather than a typo, and a bracket-only match would read
+       straight past the parked section it exists to catch. */
+    const headings = [...changelog.matchAll(/^## \[?([^\]\n]+?)\]?(?:\s+—.*)?$/gm)].map(
+      (m) => m[1]!,
+    );
+    expect(
+      headings.map((heading) => heading.toLowerCase()),
+      "CHANGELOG.md has an [Unreleased] section",
+    ).not.toContain("unreleased");
+    expect(headings[0], "the newest CHANGELOG heading is not RELEASE_VERSION").toBe(RELEASE_VERSION);
   });
 
   test("the versioned marketplace descriptions track the release", () => {

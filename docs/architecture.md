@@ -41,18 +41,21 @@ The [connect script](../scripts/connect.ts) gives you a browser sign-in link. It
 lists the Workspaces you can use and asks for the complete set this project
 should send to. Nothing is selected on your behalf.
 
-Each Workspace gets its own Connector. The project config stores those
-Connector ids inside `destinations`, the chosen Workspace ids and names,
-organization, control URL, gateway, and a reference to your saved sign-in.
-Only Connector ids route capture; the server still authorizes every read.
-Recall checks each selected Connector is active and still points to its saved
-Workspace before asking it, and refreshes display names best-effort without
-rewriting config. Tokens stay in a
-private file in your home folder. See [connection settings](configuration.md).
+Each Workspace gets its own Connector, owned by the person who connected. The
+project config stores the chosen Workspace ids and names, a project key, the
+organization, control URL and gateway, and a reference to your saved sign-in. It
+names no Connector, so it can be committed. Each checkout keeps its own
+Connector ids in `.augenta/state/links.json`. Only those ids route capture, and
+the server still authorizes every write and read. Tokens stay in a private file
+in your home folder. See [connection settings](configuration.md).
 
 Capture checks for `.augenta/config.json` in the working folder and its
-parents. With no readable config, it saves and sends nothing. Session start
-can offer to connect an unconnected project once.
+parents. With no readable config, it saves and sends nothing. A browser
+connection also needs this machine's saved sign-in for it and this checkout's
+own links, because its config may be committed and arrive in checkouts whose
+users never chose its Workspaces. Joining links the person's own Connector in
+each recorded Workspace, reusing one their other checkouts made for the same
+project key. Session start can offer to connect an unconnected project once.
 
 Connect, recall, capture and health use the same local config lookup. It stops
 at a Git checkout/worktree boundary, including worktrees nested below another
@@ -72,11 +75,11 @@ without merging them. Records without a known native boundary carry
 `turn_source: "unknown"`; messages are never guessed to be turn boundaries.
 Claude Code retains its prompt-hook ordinal.
 
-New connections store a `captureSince` timestamp. Codex excludes turns already
-in progress at that time, including the connection turn and older history.
-Existing configs without that field retain their existing capture scope; they
-are not silently rewritten. Reconnecting establishes a new timestamp. This does
-not expand project-memory capture or grant consent to a historical import.
+Each checkout records when it joined (a platform-key config records when it was
+connected). Codex excludes turns already in progress at that time, including the
+connection turn and older history, so joining a project never imports your
+earlier sessions. Reconnecting or joining again sets a new time. This does not
+expand project-memory capture.
 
 A short project lock serializes capture/append/cursor commits across processes.
 A contender waits at most 750 ms, then reports `retry` without changing the cursor;
@@ -143,8 +146,8 @@ successful answer from all of them.
 
 Disabled, inaccessible, or retargeted links are reported as unresolved and are
 not used for recall. A failed Connector check also prevents its question from
-being sent, but is reported as a failure rather than a disabled link. Multiple
-active links to one Workspace produce only one recall request.
+being sent, but is reported as a failure rather than a disabled link. Workspace
+names are refreshed for display without rewriting the config.
 
 A Workspace refusal after a successful link check retains its code and message
 in `failed` alongside the affected unresolved ids. This distinguishes entitlement
@@ -171,8 +174,11 @@ with these differences:
   retried. Anything short of an answer adds nothing, and the prompt proceeds.
 - It never refreshes a sign-in itself. A stale token is renewed by the
   background sender, and the hook waits for it within the budget.
-- It runs only while capture is enabled, and `AUGENTA_AUTO_RECALL=0` turns off
-  only this path. A 429 pauses it until the server's retry time.
+- It runs only while capture is enabled and the project's `autoRecall` answer is
+  not `false`. Connect asks that question with Off pre-selected; a config from
+  before the question existed keeps it on. `AUGENTA_AUTO_RECALL=0` turns off
+  only this path, for every project. A 429 pauses it until the server's retry
+  time.
 
 The added text starts with a fixed marker. Capture drops every transcript copy
 of it, in both apps and both channels, so recalled memory is not saved again.

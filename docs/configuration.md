@@ -31,13 +31,22 @@ the project keeps sending to its old Workspaces.
 
 | Path | What it holds |
 | --- | --- |
-| `<project>/.augenta/config.json` | This project's connection settings |
+| `<project>/.augenta/config.json` | This project's connection settings. A browser connection's records the project's Workspaces and no Connector or sign-in, so it may be committed |
+| `<project>/.augenta/.gitignore` | Keeps the rest of `.augenta/` out of Git: `*` for API-key configs, which hold the key; `*`, `!/.gitignore` and `!/config.json` for browser connections. Connect leaves a file you wrote yourself alone |
+| `<project>/.augenta/state/links.json` | This checkout's own Connector in each recorded Workspace, whose sign-in made them, and when it joined. Never committed |
 | `<project>/.augenta/outbox/` | Records waiting to be sent, plus delivery state |
 | `<project>/.augenta/state/recall-backoff.json` | When automatic recall may ask again after Augenta asked it to slow down |
 | `~/.augenta/auth.json` | Your saved sign-in, shared across connected projects |
 
-The plugin needs a readable project config to capture or recall. An old or
-damaged config prompts you to reconnect. The plugin does not convert it or
+The plugin needs a readable project config to capture or recall. A browser
+connection also captures only once this machine is signed in for it and this
+checkout has joined it with connect; recall needs both as well. Joining links a
+Connector of your own in each recorded Workspace. Those links count only while
+they cover exactly the recorded Workspaces and you are the person signed in, so
+a pulled change to the Workspaces, or someone else signing in here, means
+running connect again.
+Session start says which is missing. An old or damaged config prompts you to
+reconnect. The plugin does not convert it or
 guess where its records should go.
 
 For browser sign-in, the project file looks like this:
@@ -51,12 +60,15 @@ For browser sign-in, the project file looks like this:
   "org": { "id": "org_…", "name": "Example" },
   "destinations": [
     { "connectorId": "connector_…", "workspaceId": "ws-…", "workspaceName": "Platform" }
-  ]
+  ],
+  "autoRecall": false
 }
 ```
 
 `profileId` points to your saved sign-in. `destinations` lists the links and
-Workspaces you chose. It must be a non-empty array; each entry requires
+Workspaces you chose. `autoRecall` records your answer to connect's automatic
+recall question; it must be `true` or `false` if present. A config without it
+predates the question and keeps automatic recall on until you reconnect. It must be a non-empty array; each entry requires
 `connectorId` and `workspaceId`, while `workspaceName` is optional. The project
 file has no sign-in token; it records the organization and Workspaces you chose
 so the plugin can name them without asking the server. The server still decides
@@ -66,8 +78,9 @@ Recall checks each selected link live before sending the question. Disabled or
 inaccessible Connectors, and links whose Workspace no longer matches the saved
 choice, are skipped and reported; reconnect to review those destinations.
 
-Older `connectorIds` configs require a single reconnect per project. They are
-not converted automatically.
+A browser-connected project from 0.10 or earlier needs one reconnect: its config
+is in an older format that is not converted automatically. Connect reuses the
+Connectors it already has.
 
 Sign-in tokens stay in `~/.augenta/auth.json`. The directory uses mode `0700`
 and the file uses `0600`, so only your OS account can access them. Tokens are
@@ -142,7 +155,8 @@ If your job calls the API directly, it does not need this file. Send
 | --- | --- |
 | Stop capture and recall for one project | Delete that project's `.augenta/config.json` |
 | Pause capture and automatic recall across projects, but keep the recall command | Set `AUGENTA_CAPTURE_ENABLED=0` in the environment that starts your coding app |
-| Turn off only automatic recall | Set `AUGENTA_AUTO_RECALL=0` in the environment that starts your coding app |
+| Turn automatic recall on or off for one project | Ask your agent, which runs connect with `--json --auto-recall on` or `off`; nothing else in the config changes |
+| Turn off only automatic recall, for every project | Set `AUGENTA_AUTO_RECALL=0` in the environment that starts your coding app |
 | Resume paused capture or automatic recall | Remove that variable and restart the app with the new environment |
 
 Disconnecting does not erase local buffers or records already sent. Removing
@@ -158,7 +172,7 @@ a Workspace from the selected set also leaves its existing records in place.
 | A refused API key | Check the key and whether its Connector is enabled; browser connect would replace the key setup |
 | “Nothing remembered” | That Workspace may not have saved memory yet |
 | “Recall unavailable” | Recall is not available in the connected Augenta environment |
-| No automatic recall on a prompt | Nothing matched, the prompt was a command or very short, Augenta did not answer within five seconds, or the sign-in needs renewing; ask with the recall command to see why |
+| No automatic recall on a prompt | Automatic recall is off for the project, nothing matched, the prompt was a command or very short, Augenta did not answer within five seconds, or the sign-in needs renewing; ask with the recall command to see why |
 | A notice about discarded records | Those records will not be retried; check the named connection |
 
 For an unresolved problem, [report a bug](https://github.com/AugentaAI/augenta-plugin/issues).

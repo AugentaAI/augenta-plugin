@@ -774,6 +774,21 @@ export async function askWorkspaces(searchRoot: string, request: RecallRequest):
         "this project's Augenta sign-in is missing; sign in again with the connect skill",
       );
     }
+    // A committed config reaches checkouts whose users never answered its
+    // destination question, so a readable config is no longer this user's choice
+    // of Workspaces. Asking from a checkout that has not joined would send the
+    // question, and leave its fingerprint, where they never affirmed. The same
+    // join capture needs, and deliberately NOT the capture kill switch: recall
+    // stays a read that AUGENTA_CAPTURE_ENABLED=0 leaves available. The parsed
+    // config carries destinations only while this checkout's own links name
+    // exactly the recorded Workspaces under the sign-in stored here (config.ts).
+    if (!cfg.destinations?.length) {
+      return bail(
+        "not_joined",
+        "not_joined",
+        "this checkout has not joined its project's Augenta connection; run the connect skill here to confirm its Workspaces first",
+      );
+    }
     /* Looked up at call time, never captured: tests swap `globalThis.fetch`. */
     fetcher = bearer !== undefined
       ? (target, init) => fetch(target, {

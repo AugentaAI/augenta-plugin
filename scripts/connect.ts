@@ -3,7 +3,7 @@
  *
  * Two front ends over the same core. A human running this in a terminal gets the
  * interactive prompts. An agent runs the `--json` verbs — `--probe`, `--login`,
- * `--await-login`, `--create-workspace`, `--workspace` — each of which returns
+ * `--await-login`, `--create-workspace`, `--workspace`, `--auto-recall` — each of which returns
  * one JSON object and exits, so the sign-in link reaches the user in a bounded
  * call instead of after a poll loop nobody can see. No verb accepts or emits a
  * credential: tokens go browser → `~/.augenta/auth.json`, and `--api-key` stays
@@ -18,24 +18,30 @@
  */
 import { captureHealth } from "../capture/health";
 import { detectedHarness } from "../capture/harness";
-import { chmodSync, existsSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { isMain } from "../runtime/node";
+import { isMain, reexecForEnvProxy } from "../runtime/node";
 // Reported to the platform as Connector metadata. One shared constant rather
 // than a literal per call site — see runtime/version.ts for why.
 import { PLUGIN_VERSION } from "../runtime/version";
-import { ensureAugentaDir } from "../capture/augenta-dir";
+import { ensureAugentaDir, setAugentaIgnore } from "../capture/augenta-dir";
+import { readLinks, writeLinks } from "../capture/links";
+import { ephemeralProject, sessionEnvironment } from "../capture/environment";
+import { classifyNetworkError, diagnoseHosts } from "../capture/network";
 import {
   DEFAULT_CONTROL_URL,
   DEFAULT_GATEWAY,
+  configPath,
   controlUrl,
   gatewayBase,
   loadProjectConfig,
   type Destination,
   type Organization,
   type ProjectConfig,
+  type RecordedWorkspace,
 } from "../capture/config";
 import { Outbox } from "../capture/outbox";
 import {
@@ -48,7 +54,7 @@ import {
   type Connector,
   type Workspace,
 } from "../capture/platform";
-import { resolveProject, type ResolvedProject } from "../capture/project";
+import { isTrackedByGit, resolveProject, type ResolvedProject } from "../capture/project";
 /* Re-exported, not re-implemented. These moved to modules a second entrypoint
    can import (an entrypoint may not import another entrypoint), but they are
    still part of this file's published surface: scripts/dev-e2e.ts and
@@ -74,6 +80,7 @@ import {
   reusableProfiles,
   savePendingLogin,
   saveDeviceProfile,
+  storedProfileUserId,
   type OAuthConfig,
 } from "../capture/auth";
 
@@ -90,6 +97,11 @@ interface Args {
   health?: boolean;
   /** Correct only the selected Connectors' metadata; never rewrite consent. */
   repairHarness?: boolean;
+  /** The project's automatic-recall answer. With `--workspace` it is part of
+   *  the one config write; alone it changes only that setting. */
+  autoRecall?: boolean;
+  /** Join this checkout to the destinations its config already records. */
+  adopt?: boolean;
   login?: boolean;
   awaitLogin?: boolean;
   waitSeconds?: number;
@@ -170,6 +182,14 @@ export function parseArgs(argv: string[]): Args {
       args.health = true;
     } else if (flag === "--repair-harness") {
       args.repairHarness = true;
+    } else if (flag === "--auto-recall") {
+      const value = valueFor(flag, i++);
+      if (value !== "on" && value !== "off") {
+        throw new Error("--auto-recall must be on or off");
+      }
+      args.autoRecall = value === "on";
+    } else if (flag === "--adopt") {
+      args.adopt = true;
     } else if (flag === "--probe") {
       args.probe = true;
     } else if (flag === "--login") {
@@ -185,9 +205,17 @@ export function writeApiKeyConfig(
   projectRoot: string,
   apiKey: string,
   endpoint?: string,
-  details: Pick<ProjectConfig, "org" | "destinations" | "controlUrl" | "ingestUrl"> = {},
+  details: Pick<ProjectConfig, "org" | "destinations" | "controlUrl" | "ingestUrl" | "autoRecall"> = {},
 ): string {
+  // The key goes into this file, so it must never be one git already tracks.
+  // Refused before anything is written, rather than written and then warned about.
+  if (isTrackedByGit(projectRoot, ".augenta/config.json")) {
+    throw new Error(
+      ".augenta/config.json is tracked by git, and an API-key config would put the key in it; untrack it first (git rm --cached .augenta/config.json)",
+    );
+  }
   const dir = ensureAugentaDir(projectRoot);
+  setAugentaIgnore(projectRoot, "local");
   const path = join(dir, "config.json");
   writeFileSync(
     path,
@@ -200,6 +228,12 @@ export function writeApiKeyConfig(
         destinations: details.destinations?.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
         controlUrl: details.controlUrl,
         ingestUrl: details.ingestUrl,
+        // Always written, like the OAuth config: this path asks nobody, so an
+        // absent key would hand a config written by this release the
+        // "connected before the question existed" reading and turn automatic
+        // recall on without an answer. `false` is the question's default, and
+        // a caller carrying a prior answer forward passes it here.
+        autoRecall: details.autoRecall ?? false,
         ...(endpoint ? { endpoint } : {}),
       },
       null,
@@ -212,26 +246,35 @@ export function writeApiKeyConfig(
 }
 
 /**
- * Write the project's complete destination set, replacing whatever was there.
+ * Write the project's complete destination set, replacing whatever was there:
+ * the shared config's recorded Workspaces, then this checkout's own links.
  *
  * Callers must pass EVERY destination, never an addition: rewriting the whole
  * file is what makes the config a faithful record of the set the user just
  * confirmed, and a read-modify-write torn halfway would silently drop a
  * destination they consented to.
  *
- * Only destinations is emitted. Older plugins must prompt a reconnect rather
- * than silently interpreting part of the new connection record.
+ * The shared file names no Connector and carries no timestamp, so it may be
+ * committed and stays byte-identical across a re-affirmation that changes
+ * nothing. The links go in second: a crash between the two leaves this checkout
+ * unjoined (capture off), never routing to a set nobody confirmed.
  */
 export function writeOAuthConfig(
   projectRoot: string,
   connection: {
     profileId: string;
+    /** The signed-in person, who owns every Connector in `destinations`. */
+    userId: string;
+    projectKey: string;
     controlUrl: string;
     endpoint: string;
     discoveredGateway?: string;
     org: Organization;
     destinations: readonly Destination[];
     ingestUrl?: string;
+    /** Always written explicitly; `false` when the caller has no answer, which
+     *  is the question's default. */
+    autoRecall?: boolean;
   },
 ): string {
   if (connection.destinations.length === 0) {
@@ -239,26 +282,47 @@ export function writeOAuthConfig(
   }
   const dir = ensureAugentaDir(projectRoot);
   const path = join(dir, "config.json");
-  writeFileSync(
-    path,
-    `${JSON.stringify(
-      {
-        authMode: "oauth",
-        captureSince: new Date().toISOString(),
-        profileId: connection.profileId,
-        controlUrl: connection.controlUrl,
-        endpoint: connection.endpoint,
-        discoveredGateway: connection.discoveredGateway,
-        org: { id: connection.org.id, name: connection.org.name },
-        destinations: connection.destinations.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
-        ingestUrl: connection.ingestUrl,
-      },
-      null,
-      2,
-    )}\n`,
-    { mode: 0o600 },
-  );
+  const joinedAt = new Date().toISOString();
+  // Atomic: the config may be a committed file other checkouts pull, and a torn
+  // write would hand every one of them an unparseable config.
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync(
+      tmp,
+      `${JSON.stringify(
+        {
+          authMode: "oauth",
+          projectKey: connection.projectKey,
+          profileId: connection.profileId,
+          controlUrl: connection.controlUrl,
+          endpoint: connection.endpoint,
+          discoveredGateway: connection.discoveredGateway,
+          org: { id: connection.org.id, name: connection.org.name },
+          workspaces: connection.destinations.map(({ workspaceId, workspaceName }) => ({ workspaceId, workspaceName })),
+          autoRecall: connection.autoRecall ?? false,
+          ingestUrl: connection.ingestUrl,
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+    renameSync(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
   chmodSync(path, 0o600);
+  // A browser connection holds no credential, so its config may be committed
+  // and shared; each checkout still joins through connect, with its own links.
+  // The user who just answered the destination question here has joined.
+  setAugentaIgnore(projectRoot, "shared");
+  writeLinks(projectRoot, {
+    profileId: connection.profileId,
+    userId: connection.userId,
+    projectKey: connection.projectKey,
+    joinedAt,
+    links: connection.destinations.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId })),
+  });
   return path;
 }
 
@@ -290,6 +354,30 @@ async function choose<T>(
       throw new Error(`invalid selection: ${answer.trim() || "(empty)"}`);
     }
     return selected;
+  } finally {
+    rl.close();
+  }
+}
+
+/**
+ * The automatic-recall question. An empty answer keeps the project's current
+ * explicit choice, and otherwise means off, which is the question's default.
+ */
+async function askAutoRecall(current: boolean | undefined): Promise<boolean> {
+  if (!input.isTTY) {
+    throw new Error("run augenta:connect in an interactive terminal");
+  }
+  const fallback = current ?? false;
+  console.log(
+    "Automatic recall looks up what these Workspaces remember about each prompt you submit, and hands any match to your agent. Your agent can still ask with /augenta:recall either way.",
+  );
+  const rl = createInterface({ input, output });
+  try {
+    const answer = (
+      await rl.question(`Turn on automatic recall for this project? [${fallback ? "Y/n" : "y/N"}]: `)
+    ).trim().toLowerCase();
+    if (!answer) return fallback;
+    return answer === "y" || answer === "yes";
   } finally {
     rl.close();
   }
@@ -576,42 +664,189 @@ export async function selectedWorkspaces(
   }
 }
 
+/** Who a link must belong to, and which project it carries. */
+export interface LinkOwner {
+  /** The signed-in person (`/v1/me` user id). */
+  userId: string;
+  /** The project's shared identity, carried in each of its Connectors' metadata. */
+  projectKey: string;
+}
+
 /**
- * This project's prior links, resolved. Ids that no longer resolve — deleted, or
- * in an organization the user has lost access to — are simply dropped: an
- * unreadable prior link is precisely when reconnecting has to keep working.
+ * Connector ids a pre-release browser config listed in the shared file itself
+ * (`destinations[].connectorId`). That shape no longer parses, so these are
+ * never routes: only candidates to REUSE, verified live and owned by the person
+ * signed in, after they answer the destination question again. Reusing keeps
+ * history attached to a link on its route instead of minting a sibling.
+ */
+function legacyConnectorIds(projectRoot: string): string[] {
+  try {
+    const raw = JSON.parse(readFileSync(configPath(projectRoot), "utf8")) as {
+      authMode?: unknown;
+      destinations?: unknown;
+    };
+    if (raw.authMode !== "oauth" || !Array.isArray(raw.destinations)) return [];
+    const ids = raw.destinations
+      .map((item) => (item && typeof item === "object" ? (item as { connectorId?: unknown }).connectorId : undefined))
+      .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      .map((id) => id.trim());
+    return [...new Set(ids)];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * This checkout's prior links first, then a pre-release config's. Local links
+ * count only when the person signed in now made them: after someone else signed
+ * in on this machine they are that person's, and even resolving them would name
+ * their Connectors in this person's output.
+ */
+function priorCandidateIds(projectRoot: string, signedIn: { userId: string }): string[] {
+  const links = readLinks(projectRoot);
+  // The person, not the profile: someone who moved this project to another
+  // organization or environment still owns their old links, and still hears
+  // which of them no longer resolve.
+  const local = links && links.userId === signedIn.userId
+    ? links.links.map((link) => link.connectorId)
+    : [];
+  return [...new Set([...local, ...legacyConnectorIds(projectRoot)])];
+}
+
+/**
+ * Bytes queued here under another person's links, which joining as this person
+ * leaves unsent for good: they could go only through that person's links, under
+ * their sign-in, and never through this person's. Reported, not silent.
+ */
+function unsentFromAnotherSignIn(projectRoot: string, userId: string): number {
+  const previous = readLinks(projectRoot);
+  if (!previous || previous.userId === userId) return 0;
+  try {
+    return new Outbox(projectRoot).pendingByteCount();
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * This checkout's prior links, resolved, keeping only the signed-in person's
+ * own. Ids that no longer resolve — deleted, or in an organization the user has
+ * lost access to — are reported as unresolved: an unreadable prior link is
+ * precisely when reconnecting has to keep working. A link that resolves but
+ * belongs to someone else (an organization manager can read everyone's) is
+ * dropped SILENTLY, never reported, so no output ever names a teammate's
+ * Connector.
  */
 async function priorLinks(
   profileId: string,
   gateway: string,
   ids: readonly string[],
-): Promise<Connector[]> {
+  userId: string,
+): Promise<{ links: Connector[]; unresolved: string[] }> {
   const links: Connector[] = [];
+  const unresolved: string[] = [];
   for (const id of ids) {
     // `currentConnector` throws on anything other than 403/404, which would abort
     // the whole reconnect — the opposite of this function's job. Any unreadable
     // prior link is treated as unresolved and reported by the caller.
     const link = await currentConnector(profileId, gateway, id).catch(() => undefined);
-    if (link) links.push(link);
+    if (!link) unresolved.push(id);
+    else if (link.ownerUserId === userId) links.push(link);
   }
-  return links;
+  return { links, unresolved };
 }
 
 /**
- * The one link that carries this project into `workspace` — adopted when one of
- * this project's prior links ALREADY points there, otherwise created.
+ * The signed-in person's existing links for this project in `workspaceId`,
+ * oldest first — how a fresh clone, worktree or cloud checkout finds the
+ * Connector its user already has instead of minting another every session.
+ *
+ * Matched on the project's `projectKey` AND the owner, never on a folder name:
+ * folder names are not unique across an organization, and a manager's listing
+ * includes everyone's links. Throws on any failure, so a caller never mistakes
+ * "could not look" for "has none" and creates a duplicate.
+ */
+async function ownProjectLinks(
+  profileId: string,
+  gateway: string,
+  owner: LinkOwner,
+  workspaceId: string,
+): Promise<Connector[]> {
+  const query = new URLSearchParams({ kind: "agent", status: "active", workspaceId });
+  const { connectors } = await bearerJson<{ connectors?: Connector[] }>(
+    profileId,
+    `${gateway}/v1/connectors?${query}`,
+  );
+  return (connectors ?? [])
+    .filter(
+      (link) =>
+        link.kind === "agent" &&
+        link.status === "active" &&
+        link.workspaceId === workspaceId &&
+        link.ownerUserId === owner.userId &&
+        link.metadata?.projectKey === owner.projectKey,
+    )
+    .sort(
+      (a, b) =>
+        (Date.parse(a.createdAt ?? "") || 0) - (Date.parse(b.createdAt ?? "") || 0) ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
+}
+
+/**
+ * Every selected Workspace's adoption candidates, resolved BEFORE anything is
+ * created: this checkout's own prior links in it, then — when the project
+ * already had a key another checkout may have linked under — the user's other
+ * links for this project there. A Workspace whose lookup failed maps to its
+ * error rather than to "none", so it can fail without creating a duplicate.
+ */
+async function adoptionCandidates(
+  profileId: string,
+  gateway: string,
+  owner: LinkOwner,
+  workspaces: readonly Workspace[],
+  prior: readonly Connector[],
+  lookup: boolean,
+): Promise<Map<string, Connector[] | Error>> {
+  const candidates = new Map<string, Connector[] | Error>();
+  for (const workspace of workspaces) {
+    const own = prior.filter((link) => link.workspaceId === workspace.id);
+    if (!lookup || own.some((link) => link.kind === "agent" && link.status === "active")) {
+      candidates.set(workspace.id, own);
+      continue;
+    }
+    try {
+      const found = await ownProjectLinks(profileId, gateway, owner, workspace.id);
+      candidates.set(workspace.id, [...own, ...found.filter((link) => !own.some((mine) => mine.id === link.id))]);
+    } catch (error) {
+      candidates.set(workspace.id, error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+  return candidates;
+}
+
+/** Key-order-insensitive comparison of two small JSON objects. */
+function sameMetadata(a: Record<string, unknown> | undefined, b: Record<string, unknown>): boolean {
+  const canonical = (value: Record<string, unknown> | undefined) =>
+    JSON.stringify(Object.entries(value ?? {}).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)));
+  return canonical(a) === canonical(b);
+}
+
+/**
+ * The one link that carries this project into `workspace` for the signed-in
+ * person — adopted when one of their links for it ALREADY points there,
+ * otherwise created.
  *
  * `workspaceId` is never mutated. The pre-fan-out code retargeted the single
  * link by PATCHing a new `workspaceId` onto it, which under fan-out would (a)
  * steal a link belonging to a destination the user KEPT and (b) relabel the route
  * of history already attached to that link. Adopt-or-create instead makes "one
- * link per (project, Workspace)" a stable identity, so re-running connect with
- * the same answer converges instead of accumulating siblings.
+ * link per (person, project, Workspace)" a stable identity, so re-running connect
+ * with the same answer converges instead of accumulating siblings.
  *
- * Adoption is scoped to ids from THIS project's config, never matched against the
- * organization's live links by `projectName` — folder names are not unique across
- * an org, so that would let one user's `~/code/api` adopt another's Connector,
- * which is a misrouting bug strictly worse than a duplicate.
+ * Only a link the person OWNS is ever adopted. The platform accepts records
+ * through a link only from its owner or an organization manager, so a manager
+ * could otherwise adopt a teammate's link and relabel it under their own name.
  */
 async function linkForWorkspace(
   projectRoot: string,
@@ -620,6 +855,7 @@ async function linkForWorkspace(
   gateway: string,
   workspace: Workspace,
   adoptable: readonly Connector[],
+  owner: LinkOwner,
 ): Promise<{ connector: Connector; action: "adopted" | "created" }> {
   const name = basename(projectRoot);
   const fields = {
@@ -631,15 +867,31 @@ async function linkForWorkspace(
     harness: detectedHarness(args.harness),
     client: "augenta-plugin",
     description: `Agent activity and project memory from ${name}`,
-    metadata: { pluginVersion: PLUGIN_VERSION },
+    metadata: { pluginVersion: PLUGIN_VERSION, projectKey: owner.projectKey } as Record<string, unknown>,
   };
   const existing = adoptable.find(
     (link) =>
       link.kind === "agent" &&
       link.status === "active" &&
-      link.workspaceId === workspace.id,
+      link.workspaceId === workspace.id &&
+      link.ownerUserId === owner.userId,
   );
   if (existing) {
+    // The platform replaces `metadata` whole, so keep whatever else it holds.
+    const metadata = { ...(existing.metadata ?? {}), ...fields.metadata };
+    // Unchanged is left alone: every cloud session and worktree joins afresh, and
+    // a PATCH each time would churn the link's revision for nothing.
+    if (
+      existing.name === fields.name &&
+      existing.projectName === fields.projectName &&
+      // An undetected harness sends nothing, so it matches whatever label is there.
+      (fields.harness === undefined || existing.harness === fields.harness) &&
+      existing.client === fields.client &&
+      existing.description === fields.description &&
+      sameMetadata(existing.metadata, metadata)
+    ) {
+      return { connector: existing, action: "adopted" };
+    }
     // Refresh the mutable metadata only. `kind` is immutable and `workspaceId`
     // already matches by construction, so neither is sent.
     const { kind: _kind, workspaceId: _workspaceId, ...mutableFields } = fields;
@@ -652,7 +904,7 @@ async function linkForWorkspace(
           headers: {
             ...(existing._etag ? { "if-match": existing._etag } : {}),
           },
-          body: JSON.stringify({ ...mutableFields, _etag: existing._etag }),
+          body: JSON.stringify({ ...mutableFields, metadata, _etag: existing._etag }),
         },
       )
     ).connector;
@@ -720,7 +972,9 @@ export interface DestinationResult {
 
 /** A destination the user dropped from the set. */
 export interface RemovedDestination {
-  connectorId: string;
+  /** This person's own link to it, when they had one. A Workspace recorded in a
+   *  shared config they never joined has none of theirs to name. */
+  connectorId?: string;
   workspaceId: string;
   workspaceName?: string;
   /** The Connector is left alone on the platform — see below. */
@@ -754,14 +1008,24 @@ async function establishConnectors(
   args: Args,
   profileId: string,
   gateway: string,
-  connection: { controlUrl: string; org: Organization; discoveredGateway?: string },
+  connection: {
+    controlUrl: string;
+    org: Organization;
+    discoveredGateway?: string;
+    owner: LinkOwner;
+    /** Whether `owner.projectKey` predates this run, so other checkouts may hold
+     *  links under it worth finding. A key minted now has none anywhere. */
+    knownProject: boolean;
+    /** The Workspaces the shared config records before this answer. */
+    recorded?: readonly RecordedWorkspace[];
+  },
   workspaces: readonly Workspace[],
   priorConnectorIds: readonly string[],
   /** The organization's live Workspaces, so removals can be NAMED rather than
    *  reported as bare ids. */
   available: readonly Workspace[] = workspaces,
   /** Prior links resolved by the caller, to avoid a second round of GETs. */
-  preresolved?: readonly Connector[],
+  preresolved?: { links: Connector[]; unresolved: string[] },
 ): Promise<{
   results: DestinationResult[];
   removed: RemovedDestination[];
@@ -769,15 +1033,112 @@ async function establishConnectors(
    *  the config, so they must be reported rather than vanishing. */
   unresolvedConnectorIds: string[];
   configPath?: string;
+  /** Queued bytes another person's links here will now never send. */
+  unsentFromAnotherSignIn?: number;
 }> {
-  const adoptable = preresolved ?? (await priorLinks(profileId, gateway, priorConnectorIds));
-  const unresolvedConnectorIds = priorConnectorIds.filter(
-    (id) => !adoptable.some((link) => link.id === id),
+  const prior = preresolved ?? (await priorLinks(profileId, gateway, priorConnectorIds, connection.owner.userId));
+  const adoptable = prior.links;
+  const unresolvedConnectorIds = prior.unresolved;
+  // What the project fed before this answer: the recorded set, plus any
+  // Workspace this person still had a link into.
+  const priorWorkspaceIds = [
+    ...new Set([
+      ...(connection.recorded ?? []).map((workspace) => workspace.workspaceId),
+      ...adoptable.map((link) => link.workspaceId),
+    ]),
+  ];
+  const candidates = await adoptionCandidates(
+    profileId,
+    gateway,
+    connection.owner,
+    workspaces,
+    adoptable,
+    connection.knownProject,
   );
-  const priorWorkspaceIds = adoptable.map((link) => link.workspaceId);
+  const results = await linkWorkspaces(projectRoot, args, profileId, gateway, connection.owner, workspaces, candidates);
+  for (const result of results) {
+    // A destination the project ALREADY fed is being dropped, not merely not
+    // added. Same message either way would hide a change of state.
+    if (!result.connectorId && priorWorkspaceIds.includes(result.workspaceId)) result.wasConnected = true;
+  }
+
+  const verifiedIds = results
+    .map((result) => result.connectorId)
+    .filter((id): id is string => Boolean(id));
+  // Removed means DESELECTED — its Workspace is not in the set the user just
+  // confirmed. A destination they kept but that failed to link is a failure, not a
+  // removal, and must never be reported as one.
+  const selectedIds = workspaces.map((workspace) => workspace.id);
+  const nameFor = (id: string): string | undefined =>
+    available.find((workspace) => workspace.id === id)?.name ??
+    connection.recorded?.find((workspace) => workspace.workspaceId === id)?.workspaceName;
+  const removed = priorWorkspaceIds
+    .filter((id) => !selectedIds.includes(id))
+    .map((workspaceId) => {
+      const name = nameFor(workspaceId);
+      const own = adoptable.find((link) => link.workspaceId === workspaceId);
+      return {
+        ...(own ? { connectorId: own.id } : {}),
+        workspaceId,
+        ...(name ? { workspaceName: name } : {}),
+        disposition: "left_in_place" as const,
+      };
+    });
+
+  if (verifiedIds.length === 0) return { results, removed, unresolvedConnectorIds };
+  const previous = loadProjectConfig(projectRoot);
+  const unsent = unsentFromAnotherSignIn(projectRoot, connection.owner.userId);
+  const configPath = writeOAuthConfig(projectRoot, {
+    profileId,
+    userId: connection.owner.userId,
+    projectKey: connection.owner.projectKey,
+    controlUrl: connection.controlUrl,
+    org: connection.org,
+    discoveredGateway: connection.discoveredGateway,
+    endpoint: gateway,
+    destinations: results
+      .filter((result): result is DestinationResult & { connectorId: string } => Boolean(result.connectorId))
+      .map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
+    // The answer given now, else the project's previous explicit answer. A
+    // config that never recorded one gets the question's default, off.
+    autoRecall: args.autoRecall ?? previous?.autoRecall ?? false,
+    ingestUrl: previous?.ingestUrl,
+  });
+  // Stamp the outbox's destination map here, while we still know which links
+  // are new to this checkout. A newly added Workspace must not inherit the
+  // pending tail a pre-fan-out cursor accumulated for the destination that earned
+  // it, and by the time the shipper runs that distinction is gone (see
+  // Outbox.registerDestinations).
+  try {
+    const freshKeys = results
+      .filter((result) => result.connectorId && (result.action === "created" || !priorConnectorIds.includes(result.connectorId)))
+      .map((result) => result.connectorId!);
+    new Outbox(projectRoot).registerDestinations(verifiedIds, { freshKeys });
+  } catch {
+    /* the shipper reconciles the set on its own; never fail a connect over this */
+  }
+  return { results, removed, unresolvedConnectorIds, configPath, ...(unsent > 0 ? { unsentFromAnotherSignIn: unsent } : {}) };
+}
+
+/**
+ * Adopt or create, then verify, the person's own link in each Workspace. Writes
+ * nothing locally; per-destination and NON-FATAL, so the caller decides whether
+ * a subset is acceptable (connect) or nothing is (joining).
+ */
+async function linkWorkspaces(
+  projectRoot: string,
+  args: Args,
+  profileId: string,
+  gateway: string,
+  owner: LinkOwner,
+  workspaces: readonly Workspace[],
+  candidates: Map<string, Connector[] | Error>,
+): Promise<DestinationResult[]> {
   const results: DestinationResult[] = [];
   for (const workspace of workspaces) {
     try {
+      const adoptable = candidates.get(workspace.id) ?? [];
+      if (adoptable instanceof Error) throw adoptable;
       const { connector, action } = await linkForWorkspace(
         projectRoot,
         args,
@@ -785,6 +1146,7 @@ async function establishConnectors(
         gateway,
         workspace,
         adoptable,
+        owner,
       );
       const verified = await bearerJson<{ connector: Connector }>(
         profileId,
@@ -792,7 +1154,8 @@ async function establishConnectors(
       );
       if (
         verified.connector.status !== "active" ||
-        verified.connector.workspaceId !== workspace.id
+        verified.connector.workspaceId !== workspace.id ||
+        verified.connector.ownerUserId !== owner.userId
       ) {
         throw new Error("Connector verification failed");
       }
@@ -807,57 +1170,10 @@ async function establishConnectors(
         workspaceId: workspace.id,
         workspaceName: workspace.name,
         message: error instanceof Error ? error.message : String(error),
-        // A destination the project ALREADY fed is being dropped, not merely not
-        // added. Same message either way would hide a change of state.
-        ...(priorWorkspaceIds.includes(workspace.id) ? { wasConnected: true } : {}),
       });
     }
   }
-
-  const verifiedIds = results
-    .map((result) => result.connectorId)
-    .filter((id): id is string => Boolean(id));
-  // Removed means DESELECTED — its Workspace is not in the set the user just
-  // confirmed. A destination they kept but that failed to link is a failure, not a
-  // removal, and must never be reported as one.
-  const selectedIds = workspaces.map((workspace) => workspace.id);
-  const nameFor = (id: string): string | undefined =>
-    available.find((workspace) => workspace.id === id)?.name;
-  const removed = adoptable
-    .filter((link) => !selectedIds.includes(link.workspaceId))
-    .map((link) => {
-      const name = nameFor(link.workspaceId);
-      return {
-        connectorId: link.id,
-        workspaceId: link.workspaceId,
-        ...(name ? { workspaceName: name } : {}),
-        disposition: "left_in_place" as const,
-      };
-    });
-
-  if (verifiedIds.length === 0) return { results, removed, unresolvedConnectorIds };
-  const configPath = writeOAuthConfig(projectRoot, {
-    profileId,
-    ...connection,
-    endpoint: gateway,
-    destinations: results
-      .filter((result): result is DestinationResult & { connectorId: string } => Boolean(result.connectorId))
-      .map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
-    ingestUrl: loadProjectConfig(projectRoot)?.ingestUrl,
-  });
-  // Stamp the outbox's destination map here, while we still know which links were
-  // just CREATED. A newly added Workspace must not inherit the pending tail a
-  // pre-fan-out cursor accumulated for the destination that earned it, and by the
-  // time the shipper runs that distinction is gone (see Outbox.registerDestinations).
-  try {
-    const freshKeys = results
-      .filter((result) => result.action === "created" && result.connectorId)
-      .map((result) => result.connectorId!);
-    new Outbox(projectRoot).registerDestinations(verifiedIds, { freshKeys });
-  } catch {
-    /* the shipper reconciles the set on its own; never fail a connect over this */
-  }
-  return { results, removed, unresolvedConnectorIds, configPath };
+  return results;
 }
 
 export async function connectProject(
@@ -870,8 +1186,9 @@ export async function connectProject(
   console.log(
     `Signed in as ${selected.me.user.name || selected.me.user.email} to ${selected.me.org.name} (${selected.me.org.id}).`,
   );
-  const priorIds = prior?.connectorIds ?? [];
-  const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds);
+  const priorIds = priorCandidateIds(projectRoot, { userId: selected.me.user.id });
+  const owner: LinkOwner = { userId: selected.me.user.id, projectKey: prior?.projectKey ?? randomUUID() };
+  const resolvedPrior = await priorLinks(selected.profileId, gateway, priorIds, owner.userId);
   const available = await listWorkspaces(selected.profileId, gateway);
   const environment = environmentLabel(control);
 
@@ -891,25 +1208,43 @@ export async function connectProject(
   if (prior?.controlUrl && prior.controlUrl !== control) {
     console.log(`This project is moving from ${environmentLabel(prior.controlUrl)} to ${environment}.`);
   }
+  if (prior && isTrackedByGit(projectRoot, ".augenta/config.json")) {
+    console.log(
+      "Git tracks this project's .augenta/config.json, so the set you choose changes the Workspaces for everyone who pulls it.",
+    );
+  }
 
+  // Pre-selected: the Workspaces the project records, and any this person still
+  // links into. The answer must still re-affirm them.
   const workspaces = await selectedWorkspaces(
     selected.profileId,
     gateway,
     selected.me.org.name,
-    resolvedPrior.map((link) => link.workspaceId),
+    [
+      ...(prior?.workspaces ?? []).map((workspace) => workspace.workspaceId),
+      ...resolvedPrior.links.map((link) => link.workspaceId),
+    ],
     available,
   );
   if (workspaces.length === 0) {
     throw new Error("choose at least one Workspace");
   }
+  const autoRecall = args.autoRecall ?? (await askAutoRecall(loadProjectConfig(projectRoot)?.autoRecall));
 
-  const { results, removed, unresolvedConnectorIds, configPath: written } =
+  const { results, removed, unresolvedConnectorIds, configPath: written, unsentFromAnotherSignIn: unsent } =
     await establishConnectors(
       projectRoot,
-      args,
+      { ...args, autoRecall },
       selected.profileId,
       gateway,
-      { controlUrl: control, org: selected.me.org, discoveredGateway },
+      {
+        controlUrl: control,
+        org: selected.me.org,
+        discoveredGateway,
+        owner,
+        knownProject: Boolean(prior?.projectKey),
+        recorded: prior?.workspaces,
+      },
       workspaces,
       priorIds,
       available,
@@ -928,6 +1263,7 @@ export async function connectProject(
         "Each of those receives the full record, so the audience is the union of everyone with access to any of them.",
       );
     }
+    console.log(`Automatic recall is ${autoRecall ? "on" : "off"} for this project.`);
   } else {
     console.log("No destination could be linked. No config was written.");
   }
@@ -943,12 +1279,19 @@ export async function connectProject(
   if (written) {
     for (const entry of removed) {
       console.log(
-        `No longer sending to ${entry.workspaceName ?? entry.workspaceId}. Its Connector ${entry.connectorId} is left in place and idle — remove it in Augenta if you want it gone.`,
+        entry.connectorId
+          ? `No longer sending to ${entry.workspaceName ?? entry.workspaceId}. Its Connector ${entry.connectorId} is left in place and idle — remove it in Augenta if you want it gone.`
+          : `No longer sending to ${entry.workspaceName ?? entry.workspaceId}.`,
       );
     }
     if (unresolvedConnectorIds.length > 0) {
       console.log(
         `Dropped ${unresolvedConnectorIds.join(", ")}: this project listed ${unresolvedConnectorIds.length === 1 ? "that Connector" : "those Connectors"} but ${unresolvedConnectorIds.length === 1 ? "it is" : "they are"} no longer readable with this sign-in.`,
+      );
+    }
+    if (unsent) {
+      console.log(
+        `${unsent} bytes of records captured here under another person's sign-in were not sent and will not be: they could go only through that person's own Connectors.`,
       );
     }
   }
@@ -999,34 +1342,60 @@ async function workspaceStep(
  * The destinations this project currently feeds, resolved to Workspace names so
  * the caller can pre-select them.
  *
+ * For a browser config these are the Workspaces it RECORDS, whether or not this
+ * checkout has joined: that is the set the answer re-affirms. This person's own
+ * link into each is named when they have one here, and checked live.
+ *
  * Ids that cannot be resolved are reported in `unresolvedConnectorIds` rather
  * than dropped: the project is still SHIPPING to them, so silently omitting one
  * would quietly drop a live destination out of the pre-selection — and, because
  * the answer is the complete set, out of the project's config on the next
  * reconnect. Read-only; `currentConnector` already treats 403/404 as "not
- * visible" instead of an error.
+ * visible" instead of an error. A link that resolves to someone else's is
+ * skipped without being named.
  */
 async function priorDestinations(
   profileId: string,
   gateway: string,
+  userId: string,
+  prior: ProjectConfig | undefined,
   ids: readonly string[],
   workspaces: readonly Workspace[],
 ): Promise<{
-  destinations: Array<{ connectorId: string; workspaceId: string; workspaceName?: string }>;
+  destinations: Array<{ connectorId?: string; workspaceId: string; workspaceName?: string }>;
   unresolvedConnectorIds: string[];
 }> {
   const destinations: Array<{
-    connectorId: string;
+    connectorId?: string;
     workspaceId: string;
     workspaceName?: string;
   }> = [];
   const unresolvedConnectorIds: string[] = [];
+  if (prior?.workspaces) {
+    for (const recorded of prior.workspaces) {
+      const name = workspaces.find((n) => n.id === recorded.workspaceId)?.name;
+      const mine = prior.destinations?.find((destination) => destination.workspaceId === recorded.workspaceId);
+      let connectorId: string | undefined;
+      if (mine) {
+        const link = await currentConnector(profileId, gateway, mine.connectorId).catch(() => undefined);
+        if (link?.ownerUserId === userId) connectorId = link.id;
+        else unresolvedConnectorIds.push(mine.connectorId);
+      }
+      destinations.push({
+        ...(connectorId ? { connectorId } : {}),
+        workspaceId: recorded.workspaceId,
+        ...(name ? { workspaceName: name } : {}),
+      });
+    }
+    return { destinations, unresolvedConnectorIds };
+  }
   for (const id of ids) {
     const link = await currentConnector(profileId, gateway, id).catch(() => undefined);
     if (!link) {
       unresolvedConnectorIds.push(id);
       continue;
     }
+    if (link.ownerUserId !== userId) continue;
     const name = workspaces.find((n) => n.id === link.workspaceId)?.name;
     destinations.push({
       connectorId: link.id,
@@ -1054,8 +1423,12 @@ export async function probeConnection(
   const change = environmentChange(cfg, args);
   const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
   const prior = priorConnection(resolved.projectRoot);
-  const priorIds = prior?.connectorIds ?? [];
-  const alreadyConnected = { alreadyConnected: Boolean(cfg), ...(current ? { current } : {}), ...change };
+  const alreadyConnected = {
+    alreadyConnected: Boolean(cfg),
+    ...(current ? { current } : {}),
+    ...change,
+    ...(cfg ? joinedState(cfg) : {}),
+  };
   const usable = await usableProfiles(oauth, prior?.profileId);
   if (usable.length === 0) return { status: "need_login", ...alreadyConnected };
   if (usable.length > 1) {
@@ -1076,7 +1449,9 @@ export async function probeConnection(
     ...(await priorDestinations(
       usable[0]!.profileId,
       gateway,
-      priorIds,
+      usable[0]!.me.user.id,
+      prior,
+      priorCandidateIds(resolved.projectRoot, { userId: usable[0]!.me.user.id }),
       step.workspaces as Workspace[],
     )),
   };
@@ -1301,14 +1676,21 @@ export async function connectToWorkspaces(
   // Iterate in LIVE-LIST order rather than flag order, so the config is
   // byte-deterministic however the caller happened to order its arguments.
   const workspaces = available.filter((item) => requested.includes(item.id));
-  const { results, removed, unresolvedConnectorIds, configPath } = await establishConnectors(
+  const { results, removed, unresolvedConnectorIds, configPath, unsentFromAnotherSignIn: unsent } = await establishConnectors(
     resolved.projectRoot,
     args,
     picked.profileId,
     gateway,
-    { controlUrl: control, org: picked.me.org, discoveredGateway },
+    {
+      controlUrl: control,
+      org: picked.me.org,
+      discoveredGateway,
+      owner: { userId: picked.me.user.id, projectKey: prior?.projectKey ?? randomUUID() },
+      knownProject: Boolean(prior?.projectKey),
+      recorded: prior?.workspaces,
+    },
     workspaces,
-    prior?.connectorIds ?? [],
+    priorCandidateIds(resolved.projectRoot, { userId: picked.me.user.id }),
     available,
   );
   const destinations = results.filter((result) => result.connectorId);
@@ -1346,8 +1728,10 @@ export async function connectToWorkspaces(
     // caller can say they are gone instead of them vanishing from the config
     // unmentioned.
     ...(unresolvedConnectorIds.length > 0 ? { unresolvedConnectorIds } : {}),
+    ...(unsent ? { unsentFromAnotherSignIn: unsent } : {}),
     organization: picked.me.org.name,
     ...environmentChange(prior, args),
+    autoRecall: loadProjectConfig(resolved.projectRoot)?.autoRecall ? "on" : "off",
     configPath,
   };
 }
@@ -1359,13 +1743,34 @@ function environmentChange(cfg: ProjectConfig | undefined, args: Args): { enviro
     : {};
 }
 
+/**
+ * Whether THIS checkout has joined its config's connection, and whether the
+ * config is a file git tracks (so changing destinations changes them for everyone
+ * who pulls). An API-key config is its own connection and never needs joining.
+ */
+function joinedState(cfg: ProjectConfig): { adopted: boolean; configTracked: boolean } {
+  return {
+    adopted: cfg.authMode === "oauth" ? cfg.join === "joined" : true,
+    configTracked: isTrackedByGit(cfg.projectRoot, ".augenta/config.json"),
+  };
+}
+
+/** How the project answered the automatic-recall question. `on_by_default` is a
+ *  config written before connect asked: it still runs, but nobody chose it. */
+function autoRecallSetting(cfg: ProjectConfig): "on" | "off" | "on_by_default" {
+  return cfg.autoRecall === undefined ? "on_by_default" : cfg.autoRecall ? "on" : "off";
+}
+
 function savedConnection(cfg: ProjectConfig | undefined) {
   if (!cfg) return undefined;
   return {
     authMode: cfg.authMode,
     environment: environmentLabel(cfg.controlUrl),
     organization: cfg.org?.name ?? cfg.org?.id,
-    destinations: cfg.destinations ?? [],
+    // A browser config's recorded Workspaces, whether or not this checkout has
+    // joined: the full-record and union-audience disclosure names these.
+    destinations: cfg.authMode === "oauth" ? cfg.workspaces ?? [] : cfg.destinations ?? [],
+    autoRecall: autoRecallSetting(cfg),
   };
 }
 
@@ -1378,10 +1783,32 @@ export async function runJsonVerb(
     environment: environmentLabel(args.repairHarness ? cfg?.controlUrl : controlUrl(cfg, args.controlUrl)),
     ...(args.repairHarness ? {} : environmentChange(cfg, args)),
     ...(args.probe && cfg ? { current: savedConnection(cfg) } : {}),
+    // Always on a probe: a sign-in made in a throwaway session lasts only as
+    // long as that session, and the user should hear it before signing in.
+    ...(args.probe ? { session: sessionEnvironment() } : {}),
   };
   try {
     return { ...(await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot })), ...metadata };
   } catch (error) {
+    // A failure that could be the network refusing Augenta is checked host by
+    // host before it is reported, so the answer names what to allow instead of
+    // "Request was cancelled.". Only a confirmed block is reported as
+    // one; if every host answers as Augenta does, the original failure stands.
+    if (classifyNetworkError(error)) {
+      const hosts = await diagnoseHosts(controlUrl(cfg, args.controlUrl));
+      const blocked = hosts.filter((host) => !host.ok);
+      if (blocked.length > 0) {
+        return {
+          status: "error",
+          code: "network_blocked",
+          hosts,
+          message:
+            `this network does not let connect reach ${blocked.map((host) => `${host.host} (${host.reason})`).join(", ")}; ` +
+            `connect needs ${hosts.map((host) => host.host).join(", ")}, so allow them in this environment's network settings`,
+          ...metadata,
+        };
+      }
+    }
     return { status: "error", code: "failed", message: describeError(error), ...metadata };
   }
 }
@@ -1392,6 +1819,9 @@ async function repairHarness(projectRoot: string, args: Args): Promise<JsonPaylo
   if (!args.harness) return { status: "error", code: "harness_required", message: "--repair-harness requires an explicit --harness codex or --harness claude-code" };
   const cfg = loadProjectConfig(projectRoot);
   if (cfg?.authMode !== "oauth") return { status: "error", code: "oauth_connection_required", message: "repair requires a readable browser-connected project config" };
+  // Only this person's own links, which exist only once this checkout joined.
+  const owner = cfg.destinations?.length ? storedProfileUserId(cfg.profileId!) : undefined;
+  if (!owner) return { status: "error", code: "not_joined", message: "this checkout has not joined its project's connection; join it with connect first" };
   // Use the saved endpoint only: ambient overrides must not select another
   // environment while repairing ids taken from this configuration.
   const savedGateway = cfg.endpoint || cfg.discoveredGateway;
@@ -1405,8 +1835,8 @@ async function repairHarness(projectRoot: string, args: Args): Promise<JsonPaylo
       const url = `${gateway}/v1/connectors/${encodeURIComponent(connectorId)}`;
       const { connector } = await bearerJson<{ connector: Connector }>(cfg.profileId!, url);
       if (connector.id !== connectorId || connector.kind !== "agent" || connector.status !== "active" ||
-          connector.workspaceId !== destination.workspaceId || !connector._etag) {
-        throw new Error("Connector must be an active agent in the recorded Workspace with a current revision; nothing changed");
+          connector.workspaceId !== destination.workspaceId || connector.ownerUserId !== owner || !connector._etag) {
+        throw new Error("Connector must be your active agent in the recorded Workspace with a current revision; nothing changed");
       }
       const { connector: updated }: { connector: Connector } = await bearerJson<{ connector: Connector }>(cfg.profileId!, url, {
         method: "PATCH", headers: { "if-match": connector._etag },
@@ -1424,6 +1854,187 @@ async function repairHarness(projectRoot: string, args: Args): Promise<JsonPaylo
     harness: args.harness, repaired, failed };
 }
 
+/**
+ * Join this checkout to the connection its config already records, without
+ * choosing destinations again: a teammate's clone of a committed config, an
+ * agent's worktree, a fresh cloud checkout. The caller has shown the recorded
+ * Workspaces and the user chose to use them; this links the user's OWN
+ * Connector in each and records them for this checkout (capture/links.ts).
+ *
+ * Refused unless the sign-in is the one the config was connected under — same
+ * environment, same organization — and the user can access every recorded
+ * Workspace. All or nothing: the config routes to every destination, so joining
+ * a subset would ship to fewer places than the project records while looking
+ * joined. Access is checked, and every existing link looked up, before anything
+ * is created; a link created before a later one failed is kept, idle, and found
+ * again by the next join. The shared config itself never changes here.
+ */
+async function adoptProject(resolved: ResolvedProject, args: Args): Promise<JsonPayload> {
+  const cfg = loadProjectConfig(resolved.projectRoot);
+  if (!cfg) {
+    return { status: "error", code: "not_connected", message: "this project has no readable connection to join; connect it instead" };
+  }
+  if (cfg.authMode !== "oauth") {
+    return { status: "error", code: "oauth_connection_required", message: "an API-key project has nothing to join: its key is its connection" };
+  }
+  const recorded = cfg.controlUrl ?? DEFAULT_CONTROL_URL;
+  if (controlUrl(cfg) !== recorded) {
+    return {
+      status: "error",
+      code: "environment_mismatch",
+      message: `this project's config records the ${environmentLabel(recorded)} environment, but this session is pointed at ${environmentLabel(controlUrl(cfg))}; unset AUGENTA_CONTROL_URL to join it`,
+    };
+  }
+  const { oauth, gateway } = await resolveOAuth(args, resolved.projectRoot);
+  const usable = await usableProfiles(oauth, cfg.profileId);
+  const organization = cfg.org?.name ?? cfg.org?.id;
+  if (usable.length === 0) {
+    return { status: "need_login", message: "sign in to Augenta, then join again", organization };
+  }
+  const picked = usable.find((item) => item.profileId === cfg.profileId);
+  // The right organization's sign-in is saved but no longer works (expired or
+  // revoked): that needs a new sign-in, not a different organization.
+  if (!picked && reusableProfiles(oauth).some((item) => item.profileId === cfg.profileId)) {
+    return { status: "need_login", message: `the sign-in to ${organization ?? "this project's organization"} needs renewing; sign in again, then join`, organization };
+  }
+  if (!picked) {
+    return {
+      status: "error",
+      code: "org_mismatch",
+      organization,
+      signedInTo: [...new Set(usable.map((item) => item.me.org.name))],
+      message: `this project was connected in ${organization ?? "another organization"}, and this sign-in is not; sign in to that organization, or choose different Workspaces`,
+    };
+  }
+  const owner: LinkOwner = { userId: picked.me.user.id, projectKey: cfg.projectKey! };
+  // Access first: a Workspace this person cannot use would refuse their link, so
+  // say so before creating a link in any of the others.
+  const available = await listWorkspaces(picked.profileId, gateway);
+  const workspaces: Workspace[] = [];
+  const unreachable: RecordedWorkspace[] = [];
+  for (const entry of cfg.workspaces!) {
+    const live = available.find((workspace) => workspace.id === entry.workspaceId);
+    if (live) workspaces.push(live);
+    else unreachable.push({ ...entry });
+  }
+  if (unreachable.length > 0) {
+    return {
+      status: "error",
+      code: "destinations_unreachable",
+      reachable: workspaces.map(({ id, name }) => ({ workspaceId: id, workspaceName: name })),
+      unreachable,
+      organization,
+      message: `this sign-in cannot use ${unreachable.map((item) => item.workspaceName ?? item.workspaceId).join(", ")}; you may need to be added to ${unreachable.length === 1 ? "that Workspace" : "those Workspaces"}. Nothing was created, and capture stays off in this checkout`,
+    };
+  }
+  const previous = readLinks(resolved.projectRoot)?.links.map((link) => link.connectorId) ?? [];
+  const prior = await priorLinks(
+    picked.profileId,
+    gateway,
+    priorCandidateIds(resolved.projectRoot, { userId: owner.userId }),
+    owner.userId,
+  );
+  const candidates = await adoptionCandidates(picked.profileId, gateway, owner, workspaces, prior.links, true);
+  const unchecked = workspaces.filter((workspace) => candidates.get(workspace.id) instanceof Error);
+  if (unchecked.length > 0) {
+    return {
+      status: "error",
+      code: "join_failed",
+      failed: unchecked.map((workspace) => ({
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
+        message: describeError(candidates.get(workspace.id)),
+      })),
+      organization,
+      message: `could not check this sign-in's existing links into ${unchecked.map((workspace) => workspace.name).join(", ")}; nothing was created, and capture stays off in this checkout`,
+    };
+  }
+  const results = await linkWorkspaces(resolved.projectRoot, args, picked.profileId, gateway, owner, workspaces, candidates);
+  const failed = results.filter((result) => !result.connectorId);
+  if (failed.length > 0) {
+    return {
+      status: "error",
+      code: "join_failed",
+      failed: failed.map(({ workspaceId, workspaceName, message }) => ({ workspaceId, workspaceName, message })),
+      organization,
+      message: `could not link ${failed.map((result) => result.workspaceName).join(", ")}; capture stays off in this checkout. Any link already made is kept and reused when you join again`,
+    };
+  }
+  const destinations = results.map(({ connectorId, workspaceId, workspaceName, action }) => ({
+    connectorId: connectorId!,
+    workspaceId,
+    workspaceName,
+    action: action!,
+  }));
+  const unsent = unsentFromAnotherSignIn(resolved.projectRoot, owner.userId);
+  writeLinks(resolved.projectRoot, {
+    profileId: picked.profileId,
+    userId: owner.userId,
+    projectKey: owner.projectKey,
+    joinedAt: new Date().toISOString(),
+    links: destinations.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId })),
+  });
+  // Links new to this checkout start at the end of its spool, never inheriting
+  // records captured before they were affirmed here — including another
+  // person's, after a different sign-in joined on this machine.
+  const ids = destinations.map((destination) => destination.connectorId);
+  try {
+    new Outbox(resolved.projectRoot).registerDestinations(ids, { freshKeys: ids.filter((id) => !previous.includes(id)) });
+  } catch {
+    /* the shipper reconciles the set on its own; never fail a join over this */
+  }
+  return {
+    status: "adopted",
+    destinations,
+    ...(unsent > 0 ? { unsentFromAnotherSignIn: unsent } : {}),
+    organization,
+    autoRecall: autoRecallSetting(cfg),
+    captureHealth: captureHealth(resolved.projectRoot),
+  };
+}
+
+/**
+ * Change only the project's automatic-recall answer. It neither reconnects nor
+ * touches the destinations, `captureSince` or any other field, so the Codex
+ * capture boundary and every cursor stay where they are.
+ *
+ * Patched at the JSON level and replaced atomically: a torn write here would
+ * leave a config that drops destinations the user consented to, which the
+ * whole-file writer's contract exists to prevent. Allowed for either auth mode,
+ * because the patch never reads or rewrites the credential itself.
+ */
+function setAutoRecall(projectRoot: string, autoRecall: boolean): JsonPayload {
+  const cfg = loadProjectConfig(projectRoot);
+  if (!cfg) {
+    return {
+      status: "error",
+      code: "not_connected",
+      message: "this project has no readable connection; connect it first, then change automatic recall",
+    };
+  }
+  // The answer lives in the shared file, so it changes for everyone who pulls
+  // it; a checkout that never joined the connection has not agreed to it either.
+  if (cfg.authMode === "oauth" && cfg.join !== "joined") {
+    return {
+      status: "error",
+      code: "not_joined",
+      message: "this checkout has not joined its project's connection; join it with connect first, then change automatic recall",
+    };
+  }
+  const path = configPath(projectRoot);
+  const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  raw.autoRecall = autoRecall;
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(raw, null, 2)}\n`, { mode: 0o600 });
+    renameSync(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+  chmodSync(path, 0o600);
+  return { status: "auto_recall_updated", autoRecall: autoRecall ? "on" : "off" };
+}
+
 async function dispatchJsonVerb(
   resolved: ResolvedProject,
   args: Args,
@@ -1431,12 +2042,12 @@ async function dispatchJsonVerb(
   if (args.repairHarness) {
     if (args.health || args.probe || args.login || args.awaitLogin || args.verifyOnly ||
         args.workspaces !== undefined || args.createWorkspace !== undefined || args.apiKey ||
-        args.endpoint || args.controlUrl || args.profile) {
+        args.endpoint || args.controlUrl || args.profile || args.autoRecall !== undefined || args.adopt) {
       return { status: "error", code: "conflicting_verbs", message: "--repair-harness uses the saved project connection; combine it only with --json, --project and --harness" };
     }
     return repairHarness(resolved.projectRoot, args);
   }
-  if (args.health && (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe)) {
+  if (args.health && (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe || args.autoRecall !== undefined || args.adopt)) {
     return { status: "error", code: "conflicting_verbs", message: "--health is a local read-only operation; run it by itself with --json" };
   }
   // The platform-key path writes a secret given on the command line, so it stays
@@ -1462,6 +2073,48 @@ async function dispatchJsonVerb(
         "--create-workspace and --workspace are separate steps; create first, then ask for the complete destination set again and pass it with --workspace",
     };
   }
+  // A throwaway machine with no checkout to carry the config: refuse before any
+  // sign-in starts or any link is made, rather than write a config no later
+  // session will ever read (and leave Connectors behind for it).
+  if ((args.probe || args.workspaces?.length || args.adopt) && ephemeralProject(resolved.projectRoot)) {
+    const session = sessionEnvironment();
+    return {
+      status: "error",
+      code: "ephemeral_project",
+      session,
+      message:
+        `this session's machine is discarded when the session ends (${session.signals.join(", ")}), and ` +
+        `${resolved.projectRoot} is not inside a Git checkout, so a connection written here could not outlast it; ` +
+        "connect from a local session instead (in Cowork, a local session with the project folder attached)",
+    };
+  }
+  // Joining uses the recorded connection exactly as it is, so nothing that
+  // would choose, create or re-point anything may ride along with it.
+  if (args.adopt) {
+    if (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin ||
+        args.probe || args.verifyOnly || args.autoRecall !== undefined || args.endpoint || args.controlUrl || args.profile) {
+      return {
+        status: "error",
+        code: "conflicting_verbs",
+        message: "--adopt joins the connection this project's config already records; run it alone with --json",
+      };
+    }
+    return adoptProject(resolved, args);
+  }
+  // Alone, --auto-recall changes one setting of an existing connection. With
+  // --workspace it rides along in that call's single config write instead.
+  if (args.autoRecall !== undefined && !args.workspaces?.length) {
+    if (args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe ||
+        args.verifyOnly || args.endpoint || args.controlUrl || args.profile) {
+      return {
+        status: "error",
+        code: "conflicting_verbs",
+        message:
+          "--auto-recall changes only this project's setting; run it alone with --json, or pass it with --workspace while connecting",
+      };
+    }
+    return setAutoRecall(resolved.projectRoot, args.autoRecall);
+  }
   if (args.createWorkspace !== undefined) {
     return createWorkspaceForSelection(resolved, args);
   }
@@ -1474,7 +2127,7 @@ async function dispatchJsonVerb(
     status: "error",
     code: "no_verb",
     message:
-      "--json requires one of --probe, --login, --await-login, --create-workspace <name>, or --workspace <id> (repeatable)",
+      "--json requires one of --probe, --login, --await-login, --create-workspace <name>, --workspace <id> (repeatable), --adopt, or --auto-recall on|off",
   };
 }
 
@@ -1595,6 +2248,8 @@ export async function connectWithApiKey(
   projectRoot: string,
   apiKey: string,
   endpoint?: string,
+  /** An explicit `--auto-recall` answer; otherwise the prior one carries forward. */
+  autoRecall?: boolean,
 ): Promise<{ path: string; connector: Connector }> {
   const prior = loadProjectConfig(projectRoot);
   const gateway = gatewayBase(prior, endpoint);
@@ -1607,6 +2262,10 @@ export async function connectWithApiKey(
       {
         org: { id: connector.orgId },
         destinations: [{ connectorId: connector.id, workspaceId: connector.workspaceId }],
+        // An explicit flag wins. Otherwise a key rotation must not revert an
+        // earlier `--auto-recall off`; the whole-file write would otherwise drop
+        // the answer and turn it back on.
+        autoRecall: autoRecall ?? prior?.autoRecall ?? false,
         ...(prior?.controlUrl ? { controlUrl: prior.controlUrl } : {}),
         ...(prior?.ingestUrl ? { ingestUrl: prior.ingestUrl } : {}),
       },
@@ -1616,6 +2275,8 @@ export async function connectWithApiKey(
 }
 
 if (isMain(import.meta.url)) {
+  // Before anything else: in a proxied sandbox, re-run with Node told to use it.
+  reexecForEnvProxy();
   const argv = process.argv.slice(2);
   // Read straight off argv: parseArgs itself can throw, and a caller that asked
   // for JSON must get JSON back even for a bad flag.
@@ -1671,6 +2332,7 @@ if (isMain(import.meta.url)) {
         projectRoot,
         args.apiKey.trim(),
         args.endpoint,
+        args.autoRecall,
       );
       console.log(
         `${existed ? "Updated" : "Wrote"} ${path} (0600). Platform-key capture is enabled through Connector ${connector.id}.`,

@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { captureEnabled, loadProjectConfig } from "./config";
+import { captureGate, loadProjectConfig } from "./config";
 import { ensureAugentaDir } from "./augenta-dir";
 import { Outbox } from "./outbox";
 
@@ -38,15 +38,19 @@ export function recordHealth(projectRoot: string, stage: Stage, outcome: Outcome
 export function captureHealth(projectRoot: string) {
   const cfg = loadProjectConfig(projectRoot);
   const activity = Object.fromEntries(STAGES.map(stage => [stage, read(projectRoot, stage) ?? null])) as Record<Stage, Activity | null>;
-  return { configured: !!cfg, enabled: captureEnabled(cfg),
+  // Why capture is off matters more than that it is: signing in and joining a
+  // committed config are different fixes from the kill switch.
+  const gate = cfg ? captureGate(cfg) : undefined;
+  return { configured: !!cfg, enabled: gate === "live", ...(gate ? { gate } : {}),
     configuration: cfg ? "valid" : existsSync(join(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
     activityScope: "project", hostDispatch: "unverified",
-    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds!.length : cfg ? 1 : 0,
+    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg ? 1 : 0,
     pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
     ...activity,
     // Local plugin state cannot establish host approval or lake persistence.
     hostApproval: "unknown", ingestion: "unverified",
-    nextStep: !cfg ? "connect" : !captureEnabled(cfg) ? "capture_disabled" : !activity.dispatch
+    nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in"
+      : gate === "not_adopted" ? "adopt" : !activity.dispatch
       ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript"
       ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity" };
 }

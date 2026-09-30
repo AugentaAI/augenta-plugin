@@ -369,8 +369,26 @@ export function parseCodexTaskGroups(text: string, projectRoot: string): MemoryC
   return documents;
 }
 
-function scanCodexMemory(projectRoot: string, codexHome: string | undefined): ScanResult {
-  const root = codexHome ?? process.env.CODEX_HOME ?? join(homedir(), ".codex");
+/**
+ * The Codex home a rollout transcript lives under,
+ * `<home>/sessions/YYYY/MM/DD/rollout-*.jsonl`. Used only when the hook's
+ * environment has no CODEX_HOME: a cloud image can keep Codex under a
+ * non-default home (/opt/codex) without the hook process inheriting the
+ * variable, and the transcript is the one place that still names it.
+ */
+export function codexHomeFromRollout(transcriptPath: string | undefined): string | undefined {
+  if (!transcriptPath) return undefined;
+  const match = /^(.+)[\\/]sessions[\\/]\d{4}[\\/]\d{2}[\\/]\d{2}[\\/]rollout-[^\\/]*\.jsonl$/i.exec(transcriptPath);
+  return match?.[1];
+}
+
+function scanCodexMemory(
+  projectRoot: string,
+  codexHome: string | undefined,
+  transcriptPath: string | undefined,
+): ScanResult {
+  const root = codexHome ?? process.env.CODEX_HOME ?? codexHomeFromRollout(transcriptPath) ??
+    join(homedir(), ".codex");
   const path = join(root, "memories", "MEMORY.md");
   try {
     if (!existsSync(path)) return { complete: false, documents: [] };
@@ -526,7 +544,7 @@ function makeTombstone(
  */
 export function captureAgentMemory(opts: CaptureMemoryOptions): CaptureMemoryResult {
   const scan = opts.harness === "codex"
-    ? scanCodexMemory(opts.projectRoot, opts.codexHome)
+    ? scanCodexMemory(opts.projectRoot, opts.codexHome, opts.transcriptPath)
     : scanClaudeMemory(opts.transcriptPath);
   const empty: CaptureMemoryResult = { spooled: 0, changed: 0, tombstones: 0, complete: scan.complete };
   if (scan.documents.length === 0 && !scan.complete) return empty;

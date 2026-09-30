@@ -5,7 +5,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DocumentRecord } from "./event";
-import { captureAgentMemory, MAX_DOCUMENT_EXPERIENCE_BYTES, parseCodexTaskGroups } from "./memory";
+import { captureAgentMemory, codexHomeFromRollout, MAX_DOCUMENT_EXPERIENCE_BYTES, parseCodexTaskGroups } from "./memory";
 import { isDocumentRecord, Outbox } from "./outbox";
 
 function docs(project: string): DocumentRecord[] {
@@ -145,6 +145,28 @@ describe("Codex Task Group memory", () => {
   afterEach(() => {
     rmSync(project, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
+  });
+
+  test("the Codex home is read from a rollout path only when CODEX_HOME is unset", () => {
+    expect(codexHomeFromRollout("/opt/codex/sessions/2026/09/29/rollout-2026-09-29T15-38-38-abc.jsonl")).toBe("/opt/codex");
+    expect(codexHomeFromRollout("C:\\Users\\x\\.codex\\sessions\\2026\\06\\24\\rollout-abc.jsonl")).toBe("C:\\Users\\x\\.codex");
+    expect(codexHomeFromRollout("/tmp/rollout-2026.jsonl")).toBeUndefined();
+    expect(codexHomeFromRollout("/root/.claude/projects/-home-claude/abc.jsonl")).toBeUndefined();
+    expect(codexHomeFromRollout(undefined)).toBeUndefined();
+
+    // A cloud-style home the hook's environment does not name.
+    writeFileSync(join(codexHome, "memories", "MEMORY.md"), `# Task Group: Cloud\napplies_to: cwd=${project}\nFrom the rollout's own home.`);
+    const transcript = join(codexHome, "sessions", "2026", "09", "29", "rollout-2026-09-29T15-38-38-abc.jsonl");
+    const previous = process.env.CODEX_HOME;
+    try {
+      delete process.env.CODEX_HOME;
+      const result = captureAgentMemory({ projectRoot: project, harness: "codex", transcriptPath: transcript });
+      expect(result).toMatchObject({ changed: 1, complete: true });
+      expect(docs(project)[0]!.data.text).toContain("From the rollout's own home.");
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previous;
+    }
   });
 
   test("parses only scoped Task Groups for the project or a descendant", () => {

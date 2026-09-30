@@ -35,7 +35,7 @@ var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // runtime/node.ts
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { accessSync, constants, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 async function readStdin() {
@@ -59,14 +59,59 @@ function canonical(path) {
     return absolute;
   }
 }
-function openBrowser(command) {
-  const opener = command[0];
-  if (!opener)
+var SANDBOX_PROXY_CA = "/usr/local/share/ca-certificates/mitm-proxy-ca.crt";
+var SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt";
+function nodeHonorsEnvProxy(version) {
+  const [major = 0, minor = 0] = version.split(".").map(Number);
+  return major >= 24 || major === 22 && minor >= 21;
+}
+function readable(path) {
+  try {
+    accessSync(path, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function envProxyReexecEnv(env, nodeVersion, runningUnderBun, isReadable = readable) {
+  if (env.AUGENTA_PROXY_REEXEC || runningUnderBun)
     return;
-  const url = command[command.length - 1];
-  if (!url || !isHttpsUrl(url))
+  const proxied = Boolean(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy);
+  const useProxy = proxied && !env.NODE_USE_ENV_PROXY && nodeHonorsEnvProxy(nodeVersion);
+  const ca = env.NODE_EXTRA_CA_CERTS ? undefined : isReadable(SANDBOX_PROXY_CA) ? SANDBOX_PROXY_CA : (useProxy || env.NODE_USE_ENV_PROXY) && isReadable(SYSTEM_CA_BUNDLE) ? SYSTEM_CA_BUNDLE : undefined;
+  if (!useProxy && !ca)
     return;
-  spawnSync(opener, command.slice(1), { stdio: "ignore" });
+  return {
+    ...env,
+    AUGENTA_PROXY_REEXEC: "1",
+    ...useProxy ? { NODE_USE_ENV_PROXY: "1", NODE_NO_WARNINGS: env.NODE_NO_WARNINGS ?? "1" } : {},
+    ...ca ? { NODE_EXTRA_CA_CERTS: ca } : {}
+  };
+}
+function reexecForEnvProxy() {
+  const next = envProxyReexecEnv(process.env, process.versions.node, Boolean(process.versions.bun));
+  if (!next)
+    return;
+  const result = spawnSync(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
+    stdio: "inherit",
+    env: next
+  });
+  if (result.error)
+    return;
+  process.exit(result.status ?? 1);
+}
+function urlOpener(platform = process.platform) {
+  if (platform === "darwin")
+    return ["open"];
+  if (platform === "win32")
+    return ["rundll32", "url.dll,FileProtocolHandler"];
+  return ["xdg-open"];
+}
+function openBrowser(url) {
+  if (!isHttpsUrl(url))
+    return;
+  const [file, ...args] = urlOpener();
+  spawnSync(file, [...args, url], { stdio: "ignore" });
 }
 function isHttpsUrl(value) {
   try {
@@ -81,7 +126,7 @@ import {
   chmodSync as chmodSync2,
   existsSync as existsSync2,
   mkdirSync as mkdirSync2,
-  readFileSync,
+  readFileSync as readFileSync2,
   renameSync,
   statSync,
   unlinkSync,
@@ -93,7 +138,13 @@ import { join as join2 } from "node:path";
 
 // capture/augenta-dir.ts
 import { join } from "node:path";
-import { chmodSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+var LOCAL_IGNORE = `*
+`;
+var SHARED_IGNORE = `*
+!/.gitignore
+!/config.json
+`;
 function ensureAugentaDir(projectRoot) {
   const dir = join(projectRoot, ".augenta");
   try {
@@ -103,10 +154,102 @@ function ensureAugentaDir(projectRoot) {
     } catch {}
     const ignore = join(dir, ".gitignore");
     if (!existsSync(ignore))
-      writeFileSync(ignore, `*
-`);
+      writeFileSync(ignore, LOCAL_IGNORE);
   } catch {}
   return dir;
+}
+function setAugentaIgnore(projectRoot, form) {
+  const path = join(ensureAugentaDir(projectRoot), ".gitignore");
+  const wanted = form === "shared" ? SHARED_IGNORE : LOCAL_IGNORE;
+  try {
+    const current = readFileSync(path, "utf8");
+    if (current === wanted || current !== LOCAL_IGNORE && current !== SHARED_IGNORE)
+      return;
+    writeFileSync(path, wanted);
+  } catch {}
+}
+
+// capture/network.ts
+class DiscoveryError extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+    this.name = "DiscoveryError";
+  }
+}
+var TLS_CODES = /^(CERT_|UNABLE_TO_|SELF_SIGNED_CERT|DEPTH_ZERO_SELF_SIGNED_CERT|ERR_TLS_)/;
+function* causes(error) {
+  let current = error;
+  for (let depth = 0;current && typeof current === "object" && depth < 8; depth++) {
+    yield current;
+    current = current.cause;
+  }
+}
+function classifyNetworkError(error) {
+  for (const link of causes(error)) {
+    if (link instanceof DiscoveryError) {
+      return link.status === 404 ? undefined : { kind: "proxy_refused", status: link.status };
+    }
+    const proxy = /^Proxy response \((\d{3})\)/.exec(String(link.message ?? ""));
+    if (proxy)
+      return { kind: "proxy_refused", status: Number(proxy[1]) };
+    const code = typeof link.code === "string" ? link.code : undefined;
+    if (code === "ENOTFOUND" || code === "EAI_AGAIN")
+      return { kind: "dns", code };
+    if (code === "ECONNREFUSED")
+      return { kind: "refused", code };
+    if (code === "ECONNRESET" || code === "EPIPE" || code === "UND_ERR_SOCKET")
+      return { kind: "reset", code };
+    if (code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT" || link.name === "TimeoutError") {
+      return { kind: "timeout", ...code ? { code } : {} };
+    }
+    if (code && TLS_CODES.test(code))
+      return { kind: "tls", code };
+  }
+  return;
+}
+var PRODUCTION = { control: "https://augenta.ai", issuer: "https://auth.augenta.ai", gateway: "https://api.augenta.ai" };
+async function check(fetcher, url, timeoutMs, isAugenta) {
+  const host = new URL(url).host;
+  try {
+    const response = await fetcher(url, { signal: AbortSignal.timeout(timeoutMs) });
+    const body = await response.json().catch(() => {
+      return;
+    });
+    return isAugenta(response, body) ? { host, ok: true } : { host, ok: false, reason: `answered ${response.status}, not as Augenta does` };
+  } catch (error) {
+    const failure = classifyNetworkError(error);
+    return {
+      host,
+      ok: false,
+      reason: !failure ? "no answer" : failure.kind === "proxy_refused" ? `a proxy refused it (${failure.status})` : failure.kind === "dns" ? "the name did not resolve" : failure.kind === "refused" ? "the connection was refused" : failure.kind === "reset" ? "the connection was cut" : failure.kind === "timeout" ? "no answer in time" : "its TLS certificate was not trusted"
+    };
+  }
+}
+async function diagnoseHosts(controlUrl, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 3000;
+  const fetcher = options.fetcher ?? ((url, init) => fetch(url, { ...init, signal: init.signal }));
+  const control = controlUrl.replace(/\/+$/, "");
+  let issuer;
+  let gateway;
+  const discovery = await check(fetcher, `${control}/.well-known/augenta.json`, timeoutMs, (response, body) => {
+    const document = body;
+    if (!response.ok || typeof document?.issuer !== "string")
+      return false;
+    issuer = document.issuer;
+    gateway = typeof document.gateway === "string" ? document.gateway : undefined;
+    return true;
+  });
+  if (!discovery.ok && control === PRODUCTION.control) {
+    issuer = PRODUCTION.issuer;
+    gateway = PRODUCTION.gateway;
+  }
+  const rest = await Promise.all([
+    issuer ? check(fetcher, `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`, timeoutMs, (response, body) => response.ok && typeof body?.issuer === "string") : undefined,
+    gateway ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) => response.status === 401 && typeof body?.error === "string") : undefined
+  ]);
+  return [discovery, ...rest.filter((item) => Boolean(item))];
 }
 
 // capture/auth.ts
@@ -133,7 +276,7 @@ function readAuthStore() {
     ensureAuthRoot();
     if (existsSync2(authPath()))
       chmodSync2(authPath(), 384);
-    const parsed = JSON.parse(readFileSync(authPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object") {
       return { version: 1, profiles: {} };
     }
@@ -220,10 +363,15 @@ async function refreshTokens(profile) {
 }
 async function augentaOAuthConfig(controlUrl) {
   const response = await fetch(`${controlUrl.replace(/\/+$/, "")}/.well-known/augenta.json`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  const host = new URL(controlUrl).host;
   if (!response.ok) {
-    throw new Error("Augenta sign-in is not configured for this environment");
+    if (response.status === 404)
+      throw new Error("Augenta sign-in is not configured for this environment");
+    throw new DiscoveryError(response.status, `${host} answered ${response.status} instead of Augenta's sign-in discovery; a proxy or network allowlist may be answering for it`);
   }
-  const value = await response.json();
+  const value = await response.json().catch(() => {
+    throw new DiscoveryError(response.status, `${host} did not answer with Augenta's sign-in discovery; a proxy or captive page may be answering for it`);
+  });
   if (!value.issuer || !value.clientId || !value.gateway) {
     throw new Error("Augenta returned incomplete sign-in configuration");
   }
@@ -232,13 +380,6 @@ async function augentaOAuthConfig(controlUrl) {
     clientId: value.clientId,
     gateway: value.gateway.replace(/\/+$/, "")
   };
-}
-function browserCommand(url) {
-  if (process.platform === "darwin")
-    return ["open", url];
-  if (process.platform === "win32")
-    return ["cmd", "/c", "start", "", url];
-  return ["xdg-open", url];
 }
 var pendingLoginPath = () => join2(authRoot(), "pending-login.json");
 function savePendingLogin(pending) {
@@ -250,7 +391,7 @@ function savePendingLogin(pending) {
 }
 function readPendingLogin() {
   try {
-    const parsed = JSON.parse(readFileSync(pendingLoginPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(pendingLoginPath(), "utf8"));
     if (typeof parsed.deviceCode !== "string" || typeof parsed.clientId !== "string" || typeof parsed.issuer !== "string" || typeof parsed.expiresAt !== "number" || parsed.expiresAt <= Date.now()) {
       return;
     }
@@ -290,7 +431,7 @@ async function beginDeviceLogin(config, opts = {}) {
   };
   if (opts.openBrowser !== false) {
     try {
-      openBrowser(browserCommand(pending.verificationUri));
+      openBrowser(pending.verificationUri);
     } catch {}
   }
   return pending;
@@ -428,9 +569,16 @@ function storedProfileUpdatedAt(profileId) {
   const ms = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN;
   return Number.isFinite(ms) ? ms : undefined;
 }
+function hasStoredProfile(profileId) {
+  return storedProfile(profileId) !== undefined;
+}
+function storedProfileUserId(profileId) {
+  const userId = storedProfile(profileId)?.userId;
+  return typeof userId === "string" && userId ? userId : undefined;
+}
 function storedProfile(profileId) {
   try {
-    const parsed = JSON.parse(readFileSync(authPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync2(authPath(), "utf8"));
     if (parsed.version !== 1 || !parsed.profiles || typeof parsed.profiles !== "object")
       return;
     return Object.hasOwn(parsed.profiles, profileId) ? parsed.profiles[profileId] : undefined;
@@ -489,13 +637,77 @@ function takeAuthNotice(projectRoot) {
 }
 
 // capture/config.ts
-import { readFileSync as readFileSync2 } from "node:fs";
-import { join as join4 } from "node:path";
+import { readFileSync as readFileSync4 } from "node:fs";
+import { join as join5 } from "node:path";
+
+// capture/links.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
+function linksPath(projectRoot) {
+  return join3(projectRoot, ".augenta", "state", "links.json");
+}
+function legacyAdoptionPath(projectRoot) {
+  return join3(projectRoot, ".augenta", "state", "adopted.json");
+}
+var nonEmpty = (value) => typeof value === "string" && value.length > 0;
+function readLinks(projectRoot) {
+  try {
+    const value = JSON.parse(readFileSync3(linksPath(projectRoot), "utf8"));
+    if (value.version !== 1)
+      return;
+    if (!nonEmpty(value.profileId) || !nonEmpty(value.userId) || !nonEmpty(value.projectKey))
+      return;
+    if (!nonEmpty(value.joinedAt) || !Number.isFinite(Date.parse(value.joinedAt)))
+      return;
+    if (!Array.isArray(value.links) || value.links.length === 0)
+      return;
+    const links = [];
+    for (const item of value.links) {
+      const link = item;
+      if (!link || !nonEmpty(link.workspaceId) || !nonEmpty(link.connectorId))
+        return;
+      if (links.some((seen) => seen.workspaceId === link.workspaceId || seen.connectorId === link.connectorId)) {
+        return;
+      }
+      links.push({ workspaceId: link.workspaceId, connectorId: link.connectorId });
+    }
+    return {
+      profileId: value.profileId,
+      userId: value.userId,
+      projectKey: value.projectKey,
+      joinedAt: new Date(value.joinedAt).toISOString(),
+      links
+    };
+  } catch {
+    return;
+  }
+}
+function writeLinks(projectRoot, links) {
+  const dir = join3(ensureAugentaDir(projectRoot), "state");
+  mkdirSync3(dir, { recursive: true });
+  const path = join3(dir, "links.json");
+  const tmp = `${path}.${randomUUID2()}.tmp`;
+  try {
+    writeFileSync3(tmp, JSON.stringify({
+      version: 1,
+      profileId: links.profileId,
+      userId: links.userId,
+      projectKey: links.projectKey,
+      joinedAt: links.joinedAt,
+      links: links.links.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId }))
+    }), { mode: 384 });
+    renameSync2(tmp, path);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+  rmSync(legacyAdoptionPath(projectRoot), { force: true });
+}
 
 // capture/project.ts
 import { execFileSync } from "node:child_process";
 import { existsSync as existsSync3, realpathSync as realpathSync2 } from "node:fs";
-import { dirname, join as join3, resolve as resolve2 } from "node:path";
+import { dirname, join as join4, resolve as resolve2 } from "node:path";
 function gitRevParse(cwd, arg) {
   try {
     const value = execFileSync("git", ["rev-parse", arg], {
@@ -505,6 +717,17 @@ function gitRevParse(cwd, arg) {
     return value || undefined;
   } catch {
     return;
+  }
+}
+function isTrackedByGit(projectRoot, relativePath) {
+  try {
+    execFileSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {
+      cwd: projectRoot,
+      stdio: "ignore"
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 function resolveProjectRoot(cwd) {
@@ -517,9 +740,9 @@ function resolveProjectRoot(cwd) {
     return;
   }
   while (true) {
-    if (existsSync3(join3(dir, ".augenta", "config.json")))
+    if (existsSync3(join4(dir, ".augenta", "config.json")))
       return dir;
-    if (existsSync3(join3(dir, ".git")))
+    if (existsSync3(join4(dir, ".git")))
       return;
     const parent = dirname(dir);
     if (parent === dir)
@@ -565,12 +788,48 @@ function parseDestinations(raw) {
   }
   return destinations;
 }
+function parseWorkspaces(raw) {
+  if (!Array.isArray(raw) || raw.length === 0)
+    return;
+  const workspaces = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object")
+      return;
+    const workspaceId = typeof item.workspaceId === "string" ? item.workspaceId.trim() : "";
+    if (!workspaceId)
+      return;
+    if (item.workspaceName !== undefined && typeof item.workspaceName !== "string")
+      return;
+    if (workspaces.some((workspace) => workspace.workspaceId === workspaceId))
+      continue;
+    const workspaceName = item.workspaceName?.trim();
+    workspaces.push({ workspaceId, ...workspaceName ? { workspaceName } : {} });
+  }
+  return workspaces;
+}
+function joinedRoutes(projectRoot, profileId, projectKey, workspaces) {
+  const links = readLinks(projectRoot);
+  if (!links || links.projectKey !== projectKey)
+    return { join: "none" };
+  if (links.profileId !== profileId || storedProfileUserId(profileId) !== links.userId)
+    return { join: "signin" };
+  const destinations = [];
+  for (const workspace of workspaces) {
+    const link = links.links.find((entry) => entry.workspaceId === workspace.workspaceId);
+    if (!link)
+      return { join: "workspaces" };
+    destinations.push({ connectorId: link.connectorId, ...workspace });
+  }
+  if (links.links.length !== workspaces.length)
+    return { join: "workspaces" };
+  return { join: "joined", destinations, joinedAt: links.joinedAt };
+}
 function configPath(projectRoot) {
-  return join4(projectRoot, ".augenta", "config.json");
+  return join5(projectRoot, ".augenta", "config.json");
 }
 function loadProjectConfig(projectRoot) {
   try {
-    const value = JSON.parse(readFileSync2(configPath(projectRoot), "utf8"));
+    const value = JSON.parse(readFileSync4(configPath(projectRoot), "utf8"));
     if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
       return;
     const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
@@ -583,6 +842,10 @@ function loadProjectConfig(projectRoot) {
         settings[key] = raw.trim().replace(/\/+$/, "");
       }
     }
+    if (value.autoRecall !== undefined && typeof value.autoRecall !== "boolean")
+      return;
+    if (typeof value.autoRecall === "boolean")
+      settings.autoRecall = value.autoRecall;
     if (value.org !== undefined) {
       if (!value.org || typeof value.org.id !== "string" || !value.org.id.trim())
         return;
@@ -590,24 +853,36 @@ function loadProjectConfig(projectRoot) {
         return;
       settings.org = { id: value.org.id.trim(), ...value.org.name?.trim() ? { name: value.org.name.trim() } : {} };
     }
+    if (value.authMode === "oauth") {
+      if (value.destinations !== undefined)
+        return;
+      const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
+      const projectKey = typeof value.projectKey === "string" ? value.projectKey.trim() : "";
+      const workspaces = parseWorkspaces(value.workspaces);
+      if (!profileId || !projectKey || !workspaces)
+        return;
+      const routes = joinedRoutes(projectRoot, profileId, projectKey, workspaces);
+      return {
+        ...settings,
+        authMode: "oauth",
+        profileId,
+        projectKey,
+        workspaces,
+        join: routes.join,
+        ...routes.destinations ? {
+          destinations: routes.destinations,
+          connectorIds: routes.destinations.map((destination) => destination.connectorId),
+          captureSince: routes.joinedAt
+        } : {},
+        projectRoot
+      };
+    }
     const destinations = value.destinations === undefined ? undefined : parseDestinations(value.destinations);
     if (value.destinations !== undefined && !destinations)
       return;
     if (destinations) {
       settings.destinations = destinations;
       settings.connectorIds = destinations.map((destination) => destination.connectorId);
-    }
-    if (value.authMode === "oauth") {
-      const profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
-      if (!profileId || !destinations)
-        return;
-      return {
-        ...settings,
-        authMode: "oauth",
-        ...captureSince ? { captureSince } : {},
-        profileId,
-        projectRoot
-      };
     }
     if (value.authMode === "api-key") {
       const apiKey = typeof value.apiKey === "string" ? value.apiKey.trim() : "";
@@ -643,10 +918,22 @@ function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
   return value === "0" || value === "false";
 }
+function captureGate(cfg) {
+  if (captureKilled())
+    return "killed";
+  if (cfg.authMode !== "oauth")
+    return cfg.apiKey ? "live" : "signed_out";
+  if (!cfg.profileId || !hasStoredProfile(cfg.profileId))
+    return "signed_out";
+  if (!cfg.connectorIds?.length)
+    return "not_adopted";
+  return "live";
+}
 function captureEnabled(cfg) {
-  if (!cfg || captureKilled())
-    return false;
-  return cfg.authMode === "oauth" ? Boolean(cfg.profileId) && (cfg.connectorIds?.length ?? 0) > 0 : Boolean(cfg.apiKey);
+  return Boolean(cfg) && captureGate(cfg) === "live";
+}
+function effectiveCaptureSince(cfg) {
+  return cfg.captureSince;
 }
 
 // capture/platform.ts
@@ -706,25 +993,32 @@ function environmentLabel(controlUrl2) {
 }
 function describeError(error) {
   const message = error?.message ?? String(error);
+  if (error instanceof DiscoveryError)
+    return message;
+  const failure = classifyNetworkError(error);
+  switch (failure?.kind) {
+    case "proxy_refused":
+      return `cannot reach Augenta: a proxy refused the connection (${failure.status}). This network's allowlist may block Augenta's hosts.`;
+    case "dns":
+      return "cannot reach Augenta: the host name did not resolve. Check your network or DNS.";
+    case "refused":
+      return "cannot reach Augenta: the connection was refused. Check the URL, and any proxy or firewall.";
+    case "reset":
+      return "cannot reach Augenta: the connection was cut. Check any proxy or firewall.";
+    case "timeout":
+      return "cannot reach Augenta: no answer in time. Check your network, and any proxy or firewall.";
+    case "tls":
+      return "cannot reach Augenta: the TLS certificate could not be verified. Check for a TLS-intercepting proxy.";
+  }
   if (message !== "fetch failed")
     return message;
   const cause = error.cause;
-  const code = cause?.code;
-  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
-    return "cannot reach Augenta: the host name did not resolve. Check your network or DNS.";
-  }
-  if (code === "ECONNREFUSED") {
-    return "cannot reach Augenta: the connection was refused. Check the URL, and any proxy or firewall.";
-  }
-  if (code === "CERT_HAS_EXPIRED" || code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE") {
-    return "cannot reach Augenta: the TLS certificate could not be verified. Check for a TLS-intercepting proxy.";
-  }
-  const detail = cause?.message ?? code;
+  const detail = cause?.message ?? cause?.code;
   return detail ? `cannot reach Augenta: ${detail}` : "cannot reach Augenta: the network request failed. Check your connection.";
 }
 
 // capture/recall-client.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { randomUUID as randomUUID3 } from "node:crypto";
 var MAX_QUERY_CHARS = 4096;
 var MIN_ATTEMPT_MS = 200;
 var RETRY_BACKOFF_MS = [150, 300];
@@ -898,7 +1192,7 @@ async function askOnce(ctx, destination) {
     return { outcome: outOfTime(), transient: false };
   const headers = {
     "content-type": "application/json",
-    "idempotency-key": randomUUID2()
+    "idempotency-key": randomUUID3()
   };
   const body = JSON.stringify(destination.workspaceId ? { query: ctx.query, workspace: destination.workspaceId } : { query: ctx.query });
   try {
@@ -1065,6 +1359,9 @@ async function askWorkspaces(searchRoot, request) {
     const bearer = typeof request.auth === "object" ? request.auth.bearer : undefined;
     if (bearer === undefined && !getAuthProfile(profileId)) {
       return bail("need_login", "need_login", "this project's Augenta sign-in is missing; sign in again with the connect skill");
+    }
+    if (!cfg.destinations?.length) {
+      return bail("not_joined", "not_joined", "this checkout has not joined its project's Augenta connection; run the connect skill here to confirm its Workspaces first");
     }
     fetcher = bearer !== undefined ? (target, init) => fetch(target, {
       ...init,
@@ -1274,6 +1571,7 @@ function printPayload(payload) {
   }
 }
 if (isMain(import.meta.url)) {
+  reexecForEnvProxy();
   const argv = process.argv.slice(2);
   const wantsJson = argv.includes("--json");
   try {

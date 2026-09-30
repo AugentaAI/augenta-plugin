@@ -46,6 +46,40 @@ try_node() {
   return 1
 }
 
+# A sandbox that allows egress only through a proxy it names in the environment
+# (cloud sessions, Cowork's VM) is invisible to Node's fetch unless Node is told
+# to use it: without NODE_USE_ENV_PROXY, Node ignores HTTPS_PROXY and connects
+# directly, which such a sandbox refuses. Node 22.21+ and 24+ honor it; older
+# versions ignore an unknown variable, so exporting it is harmless there.
+# NODE_NO_WARNINGS hides 22.x's "EnvHttpProxyAgent is experimental" notice. A
+# CA is added only when none is configured, and only from a readable file (Node
+# warns on a missing one). Environment variables
+# only, never CLI flags, so no Node version can reject them. Everything a hook
+# spawns, the detached shipper included, inherits these. runtime/node.ts does
+# the same for the CLIs the skills run.
+if [ -n "${HTTPS_PROXY:-}${https_proxy:-}${HTTP_PROXY:-}${http_proxy:-}" ]; then
+  if [ -z "${NODE_USE_ENV_PROXY:-}" ]; then
+    NODE_USE_ENV_PROXY=1
+    export NODE_USE_ENV_PROXY
+  fi
+  if [ -z "${NODE_NO_WARNINGS:-}" ]; then
+    NODE_NO_WARNINGS=1
+    export NODE_NO_WARNINGS
+  fi
+fi
+# A sandbox's own proxy CA is trusted whenever the sandbox left it, proxy variable
+# or not: a TLS-intercepting proxy can be transparent and name itself nowhere. The
+# system bundle is added only alongside a proxy Node was told to use.
+if [ -z "${NODE_EXTRA_CA_CERTS:-}" ]; then
+  if [ -r /usr/local/share/ca-certificates/mitm-proxy-ca.crt ]; then
+    NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/mitm-proxy-ca.crt
+    export NODE_EXTRA_CA_CERTS
+  elif [ -n "${NODE_USE_ENV_PROXY:-}" ] && [ -r /etc/ssl/certs/ca-certificates.crt ]; then
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+    export NODE_EXTRA_CA_CERTS
+  fi
+fi
+
 # An explicit override is authoritative. It is useful when diagnosing a host
 # whose normal shell and hook subprocess expose different runtimes.
 if [ -n "${AUGENTA_NODE:-}" ]; then

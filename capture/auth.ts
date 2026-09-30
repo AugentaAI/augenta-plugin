@@ -26,6 +26,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ensureAugentaDir } from "./augenta-dir";
+import { DiscoveryError } from "./network";
 import { openBrowser } from "../runtime/node";
 
 export interface OAuthConfig {
@@ -210,10 +211,17 @@ export async function augentaOAuthConfig(
     `${controlUrl.replace(/\/+$/, "")}/.well-known/augenta.json`,
     { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
   );
+  const host = new URL(controlUrl).host;
   if (!response.ok) {
-    throw new Error("Augenta sign-in is not configured for this environment");
+    // 404 is an environment with no sign-in. Anything else means something
+    // other than Augenta answered for this host: an allowlisting proxy's 403 or
+    // 407, or a captive page. Keep the status, so it can be told apart.
+    if (response.status === 404) throw new Error("Augenta sign-in is not configured for this environment");
+    throw new DiscoveryError(response.status, `${host} answered ${response.status} instead of Augenta's sign-in discovery; a proxy or network allowlist may be answering for it`);
   }
-  const value = (await response.json()) as Partial<OAuthConfig>;
+  const value = (await response.json().catch(() => {
+    throw new DiscoveryError(response.status, `${host} did not answer with Augenta's sign-in discovery; a proxy or captive page may be answering for it`);
+  })) as Partial<OAuthConfig>;
   if (!value.issuer || !value.clientId || !value.gateway) {
     throw new Error("Augenta returned incomplete sign-in configuration");
   }
@@ -222,15 +230,6 @@ export async function augentaOAuthConfig(
     clientId: value.clientId,
     gateway: value.gateway.replace(/\/+$/, ""),
   };
-}
-
-/** Per-platform "open this URL" command. Best effort — the caller always has the
- *  URL and code to show, so a wrong or missing opener costs nothing. `start`'s
- *  first quoted argument is the window title, hence the empty one. */
-export function browserCommand(url: string): string[] {
-  if (process.platform === "darwin") return ["open", url];
-  if (process.platform === "win32") return ["cmd", "/c", "start", "", url];
-  return ["xdg-open", url];
 }
 
 /**
@@ -335,7 +334,7 @@ export async function beginDeviceLogin(
   };
   if (opts.openBrowser !== false) {
     try {
-      openBrowser(browserCommand(pending.verificationUri));
+      openBrowser(pending.verificationUri);
     } catch {
       // The URL and code remain usable on headless systems.
     }
@@ -584,6 +583,27 @@ export function storedProfileUpdatedAt(profileId: string): number | undefined {
   const updatedAt = storedProfile(profileId)?.updatedAt;
   const ms = typeof updatedAt === "string" ? Date.parse(updatedAt) : Number.NaN;
   return Number.isFinite(ms) ? ms : undefined;
+}
+
+/**
+ * Whether this machine has ever saved a sign-in for `profileId`, read the same
+ * side-effect-free way as {@link freshStoredAccessToken}. Presence only: a
+ * revoked or expired sign-in keeps its profile, so capture keeps queueing and
+ * the re-login notice stays the remedy. Safe on every hook fire.
+ */
+export function hasStoredProfile(profileId: string): boolean {
+  return storedProfile(profileId) !== undefined;
+}
+
+/**
+ * Who the stored sign-in for `profileId` belongs to, read the same
+ * side-effect-free way. A profile keys on the organization, not the person, so
+ * two people signing in to one organization on this machine share a profile id;
+ * this is what tells a checkout joined by one of them from the other.
+ */
+export function storedProfileUserId(profileId: string): string | undefined {
+  const userId = storedProfile(profileId)?.userId;
+  return typeof userId === "string" && userId ? userId : undefined;
 }
 
 /** One profile off auth.json, lock-free and with no side effects (see above). */

@@ -46,14 +46,16 @@
 import { recordHealth } from "../capture/health";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { isCodexHarness } from "./harness";
-import { captureEnabled, controlUrl, loadProjectConfig, resolveProjectRoot } from "../capture/config";
+import { ephemeralProject } from "../capture/environment";
+import { captureEnabled, captureGate, configPath, controlUrl, loadProjectConfig, resolveProjectRoot } from "../capture/config";
 import { environmentLabel } from "../capture/platform";
 import { Outbox } from "../capture/outbox";
 import { spawnShipper } from "../capture/shipper";
 import { captureAgentMemory } from "../capture/memory";
-import { takeAuthNotice } from "../capture/auth";
+import { storedProfileUserId, takeAuthNotice } from "../capture/auth";
 import { readStdin } from "../runtime/node";
 
 // SessionStart passes a JSON payload on stdin; we need the transcript path (to
@@ -79,6 +81,55 @@ const codex = isCodexHarness(transcriptPath);
 const connectAction = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
 const projectPath = cwd || process.cwd();
 
+// --- Once-per-key prompts, remembered in the user's home ---------------------
+const home = process.env.AUGENTA_HOME ?? homedir();
+const stateDir = join(home, ".augenta", "state");
+const markerPath = join(stateDir, "connect-prompted.json");
+// The pre-0.3.0 map, written when this hook prompted for `/augenta:init`. Read,
+// never written: renaming the skill must not re-prompt projects the user has
+// already dismissed once.
+const legacyMarkerPath = join(stateDir, "init-prompted.json");
+
+function readMarkers(path: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * True exactly once per key, recording it as it answers. If the record cannot be
+ * persisted it answers false: better silent than a prompt loop on every session.
+ * In a cloud session the home is new each time, so "once" is once per session.
+ */
+function firstTime(key: string): boolean {
+  const markers = readMarkers(markerPath);
+  if (markers[key]) return false;
+  try {
+    mkdirSync(stateDir, { recursive: true });
+    markers[key] = new Date().toISOString();
+    const tmp = markerPath + ".tmp";
+    writeFileSync(tmp, JSON.stringify(markers));
+    renameSync(tmp, markerPath);
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+/** A short digest of the unreadable config's bytes (empty when it cannot be read). */
+function staleConfigDigest(): string {
+  let bytes: Buffer | string = "";
+  try {
+    bytes = readFileSync(configPath(configuredRoot!));
+  } catch {
+    /* an unreadable file still prompts, once */
+  }
+  return createHash("sha256").update(bytes).digest("hex").slice(0, 16);
+}
+
 // --- Connected? An ancestor has a .augenta/config.json the parser ACCEPTS. ----
 const configuredRoot = resolveProjectRoot(projectPath);
 const cfg = configuredRoot ? loadProjectConfig(configuredRoot) : undefined;
@@ -97,7 +148,7 @@ if (connectedRoot) {
     const notices: string[] = [];
     const environment = environmentLabel(controlUrl(cfg));
     if (environment !== "prod") {
-      const names = cfg?.destinations?.map((destination) => destination.workspaceName || destination.workspaceId).join(", ");
+      const names = (cfg?.workspaces ?? cfg?.destinations)?.map((workspace) => workspace.workspaceName || workspace.workspaceId).join(", ");
       notices.push(`Augenta: this project is connected to the ${environment} environment, not production${names ? `, feeding ${names}` : ""}.`);
     }
     const authNotice = takeAuthNotice(connectedRoot);
@@ -154,50 +205,67 @@ if (connectedRoot) {
       /* memory discovery is best-effort and this hook must remain silent */
     }
     if (new Outbox(connectedRoot).hasPendingBytes()) spawnShipper(connectedRoot);
+  } else {
+    // Connected, but capture is off HERE for a reason connect fixes: this machine
+    // has no sign-in for the config's profile, or this checkout has not joined a
+    // (typically committed) config, or joined it as someone else, or its
+    // Workspaces changed since it did. Said once per exact connection and person,
+    // so a pulled change to the Workspaces, or a different sign-in, is raised
+    // again. The kill switch stays silent, as above.
+    const gate = captureGate(cfg!);
+    if (gate === "signed_out" || gate === "not_adopted") {
+      const identity = createHash("sha256")
+        .update([
+          cfg!.profileId ?? "",
+          cfg!.projectKey ?? "",
+          ...(cfg!.workspaces ?? []).map((workspace) => workspace.workspaceId).sort(),
+          (cfg!.profileId && storedProfileUserId(cfg!.profileId)) || "",
+        ].join("\0"))
+        .digest("hex")
+        .slice(0, 16);
+      if (firstTime(`join:${connectedRoot}:${identity}`)) {
+        const names = (cfg!.workspaces ?? cfg!.destinations ?? []).map((workspace) => workspace.workspaceName || workspace.workspaceId).join(", ");
+        const environment = environmentLabel(controlUrl(cfg));
+        const where = [cfg!.org?.name, environment === "prod" ? undefined : `the ${environment} environment`]
+          .filter(Boolean)
+          .join(", ");
+        const reason = gate === "signed_out"
+          ? "this machine is not signed in to Augenta for it"
+          : cfg!.join === "signin"
+            ? "this checkout joined it under a different sign-in"
+            : cfg!.join === "workspaces"
+              ? "its Workspaces changed since this checkout joined"
+              : "this checkout has not joined it";
+        const additionalContext = codex
+          ? `Augenta: this project is set up to send capture to ${names}${where ? ` (${where})` : ""}, but capture is off in this checkout because ${reason}. Run ${connectAction} to join it.`
+          : `[Augenta] This project's .augenta/config.json sends Augenta capture to ${names}${where ? ` (${where})` : ""}, ` +
+            `but capture is off in this checkout because ${reason}. Tell the user, and offer to run the augenta ` +
+            "connect skill (/augenta:connect): it signs in if needed and asks them to confirm those Workspaces " +
+            "before capture starts. Do not start a sign-in without their go-ahead. Tokens and API keys must " +
+            "never be pasted into the chat.";
+        process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }));
+      }
+    }
   }
   process.exit(0);
-}
-
-// --- Prompted before? Check the once-per-project marker map. ------------------
-const home = process.env.AUGENTA_HOME ?? homedir();
-const stateDir = join(home, ".augenta", "state");
-const markerPath = join(stateDir, "connect-prompted.json");
-// The pre-0.3.0 map, written when this hook prompted for `/augenta:init`. Read,
-// never written: renaming the skill must not re-prompt projects the user has
-// already dismissed once.
-const legacyMarkerPath = join(stateDir, "init-prompted.json");
-
-function readMarkers(path: string): Record<string, string> {
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
-  } catch {
-    return {};
-  }
 }
 
 // A stale config is a DIFFERENT prompt from "you never connected this project":
 // the user did connect, and their config stopped being readable. It gets its own
 // one-shot key, and deliberately ignores the pre-0.3.0 marker — every project
 // with a legacy config has one, and honoring it here would re-silence exactly
-// the users this prompt exists for.
-const markerKey = staleConfig ? `reconnect:${projectPath}` : projectPath;
-const markers = readMarkers(markerPath);
-if (markers[markerKey]) process.exit(0);
+// the users this prompt exists for. Recording the key is what makes this the
+// project's only automatic fire ever — for that file. The key carries a hash of
+// the unreadable bytes, because a project that already reconnected through an
+// earlier format change holds the bare key, and a later change that makes its
+// config unreadable again must still say so rather than turn capture off in silence.
+const markerKey = staleConfig ? `reconnect:${projectPath}:${staleConfigDigest()}` : projectPath;
 if (!staleConfig && readMarkers(legacyMarkerPath)[projectPath]) process.exit(0);
-
-// Record that we've auto-prompted this project, so this is its only automatic
-// fire ever. If the marker can't be persisted, don't fire — better silent than
-// a prompt loop on every session.
-try {
-  mkdirSync(stateDir, { recursive: true });
-  markers[markerKey] = new Date().toISOString();
-  const tmp = markerPath + ".tmp";
-  writeFileSync(tmp, JSON.stringify(markers));
-  renameSync(tmp, markerPath);
-} catch {
-  process.exit(0);
-}
+// A throwaway session outside any checkout cannot keep a connection (connect
+// refuses it), and its home, where this marker lives, is new every time: the
+// prompt could never succeed and would come back every session.
+if (ephemeralProject(projectPath)) process.exit(0);
+if (!firstTime(markerKey)) process.exit(0);
 
 // Codex may show additionalContext verbatim, so its wording stays clean and
 // user-facing; Claude Code's is agent-directed and may carry scaffolding.

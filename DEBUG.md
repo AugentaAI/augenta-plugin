@@ -160,10 +160,11 @@ dev with no variable set at runtime. Both are recorded in the config.
 
 | Path | Written by | Reset effect |
 | --- | --- | --- |
-| `~/.augenta/auth.json` | completed sign-in | removes every stored profile; all connected projects need a fresh sign-in |
+| `~/.augenta/auth.json` | completed sign-in | removes every stored profile; browser-connected projects stop capturing until you sign in again, and session start says so |
 | `~/.augenta/pending-login.json` | `--login` | abandons an in-flight grant |
-| `~/.augenta/state/connect-prompted.json` | SessionStart | the one-time connect offer fires again for that project |
-| `<project>/.augenta/config.json` | connect | disconnects the project from all destinations; capture returns to a silent no-op |
+| `~/.augenta/state/connect-prompted.json` | SessionStart | the one-time connect offer, and the join notice for a connected checkout that is not capturing, fire again |
+| `<project>/.augenta/config.json` | connect | disconnects the project from all destinations; capture returns to a silent no-op. If it is committed, the next pull brings it back |
+| `<project>/.augenta/state/links.json` | connect (`--workspace`, `--adopt`) | this checkout stops capturing until it joins again; the shared config is untouched, and joining again reuses your Connectors for the project |
 
 A stale `pending-login.json` from another environment is self-healing: the next
 `--await-login` recognizes the foreign issuer, clears it, and asks for a fresh
@@ -173,8 +174,9 @@ Two different variables relocate the two global roots, and an isolated sandbox
 needs **both**:
 
 - `AUGENTA_AUTH_HOME` → `auth.json`, `auth.lock`, `pending-login.json`
-  (`capture/auth.ts:79`)
-- `AUGENTA_HOME` → `state/connect-prompted.json` (`hooks/session-start.ts:109`)
+  (`authRoot` in `capture/auth.ts`). The capture gate reads the sign-in here too,
+  so a test that writes a browser config must point this at a temporary directory.
+- `AUGENTA_HOME` → `state/connect-prompted.json` (`home` in `hooks/session-start.ts`)
 
 Setting only one leaves half your state in the real `~/.augenta`, which reads as
 a bug in whichever half you were not watching.
@@ -189,6 +191,29 @@ a hand-set `ingestUrl` on reconnect. None opts a project into capture — captur
 requires `.augenta/config.json`. `AUGENTA_CAPTURE_ENABLED=0` is the global kill
 switch, and it also stops automatic recall. `AUGENTA_AUTO_RECALL=0` stops only
 automatic recall.
+
+`AUGENTA_EPHEMERAL=1` declares that this session's machine is discarded when the
+session ends, and `=0` that it is not; either overrides detection
+(`capture/environment.ts`), which otherwise reads `CLAUDE_CODE_REMOTE=true` and,
+as a heuristic, `CODEX_HOME=/opt/codex`.
+When `HTTPS_PROXY`/`HTTP_PROXY` (either case) is set, `scripts/run-node-hook.sh`
+exports `NODE_USE_ENV_PROXY=1` and `NODE_NO_WARNINGS=1`, each only if unset. It
+sets `NODE_EXTRA_CA_CERTS`, if unset, to `/usr/local/share/ca-certificates/mitm-proxy-ca.crt`
+whenever that file is readable, proxy variable or not (a transparent interceptor
+names none), and otherwise to `/etc/ssl/certs/ca-certificates.crt` only alongside
+a proxy Node was told to use.
+The connect and recall CLIs re-run themselves once with the same variables
+(`reexecForEnvProxy` in `runtime/node.ts`), because the skills start them with a
+bare `node`. Only Node 22.21+ and 24+ honor `NODE_USE_ENV_PROXY`. Without it,
+Node ignores the proxy and connects directly. A refused tunnel surfaces as
+`UND_ERR_ABORTED` "Proxy response (403) !== 200 when HTTP Tunneling", two
+causes below "Request was cancelled."; `capture/network.ts` reads the whole chain,
+and on such a failure connect checks each host and returns `network_blocked`.
+
+In such a session, `--probe`, `--workspace` and `--adopt` refuse a project folder
+that is not inside a Git checkout (`ephemeral_project`), and session start stays
+quiet there. The test suites pin `=0` so they behave the same when run inside a
+cloud session.
 
 ## Fire the prompt hook by hand
 
@@ -302,8 +327,10 @@ node <plugin-root>/dist/scripts/connect.mjs --json --repair-harness --harness co
 
 Use `claude-code` for a verified Claude Code project. The explicit value is
 required; the command uses the saved profile and endpoint, ignoring ambient URL
-overrides, and checks each link's recorded Workspace and revision before PATCH.
-It never reconnects, changes routes, rewrites config, or resets `captureSince`.
+overrides, and checks each link's recorded Workspace, owner and revision before
+PATCH: it repairs only this checkout's own links, so it needs a checkout that has
+joined. It never reconnects, changes routes, rewrites config, or resets
+`captureSince`.
 Partial failure returns an error with separate `repaired` and `failed` lists;
 successful repairs remain applied. A missing or obsolete config must be connected
 through the normal consent flow first. For new connections, pass `--harness`

@@ -30,6 +30,7 @@ import {
   isCodexAutoRecallRecord,
 } from "../capture/auto-recall-marker";
 import { markAuthNotice, saveDeviceProfile } from "../capture/auth";
+import { writeOAuthProject } from "../__tests__/fixtures";
 import { askWorkspaces, type RecallPayload } from "../capture/recall-client";
 
 const ISSUER = "https://auth.example.com";
@@ -84,11 +85,11 @@ async function oauthProject(expiresAt = Date.now() + 3_600_000) {
     { accessToken: "access-live", refreshToken: "refresh-live", expiresAt },
     { userId: "user_1", orgId: "org_1" },
   );
-  writeConfig({
-    authMode: "oauth",
+  // Joined, as connect leaves a checkout: capture (and so this hook) needs it.
+  writeOAuthProject(project, {
     profileId,
     destinations: [{ connectorId: "connector_a", workspaceId: "ws-default", workspaceName: "Default Workspace" }],
-    endpoint: GATEWAY,
+    extra: { endpoint: GATEWAY },
   });
   return profileId;
 }
@@ -178,6 +179,17 @@ describe("runAutoRecall: gated like capture, asked like recall", () => {
     expect(JSON.parse(call!.body!)).toEqual({ query: PROMPT });
     expect(call!.headers.get("authorization")).toBe("AugentaKey platform-test-key");
     expect(context).not.toContain("platform-test-key");
+  });
+
+  test("a project that answered off asks nothing; one that never answered still asks", async () => {
+    writeConfig({ authMode: "api-key", apiKey: "platform-test-key", endpoint: GATEWAY, autoRecall: false });
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => memory("we chose device sign-in") });
+    expect(await run()).toBeUndefined();
+    expect(recallCalls()).toHaveLength(0);
+
+    // Absent predates the question: it keeps the behaviour it was connected with.
+    apiKeyProject();
+    expect(await run()).toStartWith(AUTO_RECALL_SENTINEL);
   });
 
   test("a signed-in project checks its link live, then asks with the stored token and never refreshes", async () => {
