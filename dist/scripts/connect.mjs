@@ -1423,7 +1423,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.12.1";
+var PLUGIN_VERSION = "0.12.2";
 
 // capture/platform.ts
 class AugentaRequestError extends Error {

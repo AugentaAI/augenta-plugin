@@ -228,6 +228,16 @@ describe("groupIntoExperiences", () => {
     expect("data" in g).toBe(false);
   });
 
+  test("strips a large legacy PDF raw before bounding so the turn's tail survives", () => {
+    const content = Buffer.alloc(450_000, 65).toString("base64");
+    const g = trajectories([ev(0), rawJson(JSON.stringify({ type: "pdf", file: { base64: content } })),
+      rawJson(JSON.stringify({ note: "end of turn" }))])[0]!;
+    const bounded = boundExperienceSize(g)[0]!;
+    expect(bounded.data).toHaveLength(2);
+    expect(bounded.data![1]).toContain("end of turn");
+    expect(JSON.stringify(bounded)).not.toContain(content);
+  });
+
   test("groups by turn, preserving first-seen order and intra-group step order", () => {
     const groups = trajectories([
       ev(0, { turn: 1 }),

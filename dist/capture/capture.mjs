@@ -99,6 +99,21 @@ function stripCodexAutoRecallHistory(value) {
 }
 
 // capture/sanitize.ts
+import { createHash } from "node:crypto";
+var REFERENCE_PREFIX = "[augenta attachment sha256:";
+function mediaType(value, fallback = "application/octet-stream") {
+  return typeof value === "string" && value.length <= 128 && /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i.test(value) ? value.toLowerCase() : fallback;
+}
+function removePayload(content, mime, payloads) {
+  if (content.startsWith(REFERENCE_PREFIX))
+    return content;
+  const clean = content.replace(/\s/g, "");
+  const valid = clean.length > 0 && clean.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(clean);
+  const bytes = valid ? Buffer.from(clean, "base64") : Buffer.from(content, "utf8");
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  payloads.set(hash, { hash, content: valid ? bytes.toString("base64") : "", mediaType: mime, bytes: bytes.length, valid });
+  return `${REFERENCE_PREFIX}${hash} ${bytes.length}B ${mime}]`;
+}
 function normalizedKey(key) {
   return key.replace(/[_-]/g, "").toLowerCase();
 }
@@ -115,17 +130,27 @@ function isEmptyReasoningValue(value) {
     return value.length === 0;
   return typeof value === "object" && Object.keys(value).length === 0;
 }
-function sanitizeTelemetryValue(value) {
+function sanitize(value, payloads, inheritedMime) {
   if (Array.isArray(value))
-    return value.map(sanitizeTelemetryValue);
+    return value.map((child) => sanitize(child, payloads, inheritedMime));
   if (!value || typeof value !== "object")
     return value;
+  const object = value;
+  const mime = mediaType(object.media_type ?? object.mediaType, object.type === "pdf" ? "application/pdf" : inheritedMime);
   const sanitized = [];
   for (const [key, child] of Object.entries(value)) {
     const normalized = normalizedKey(key);
     if (isOpaqueKey(key))
       continue;
-    const sanitizedChild = sanitizeTelemetryValue(child);
+    let sanitizedChild;
+    const dataUrl = typeof child === "string" && ["image_url", "url", "file_data"].includes(key) ? /^data:([^;,]+);base64,([\s\S]*)$/i.exec(child) : null;
+    if (dataUrl) {
+      sanitizedChild = removePayload(dataUrl[2], mediaType(dataUrl[1]), payloads);
+    } else if (typeof child === "string" && (key === "base64" || key === "data" && object.type === "base64")) {
+      sanitizedChild = removePayload(child, mime, payloads);
+    } else {
+      sanitizedChild = sanitize(child, payloads, mime);
+    }
     if ((normalized === "thinking" || normalized === "reasoning") && isEmptyReasoningValue(sanitizedChild))
       continue;
     sanitized.push([key, sanitizedChild]);
@@ -134,9 +159,10 @@ function sanitizeTelemetryValue(value) {
 }
 function sanitizeTelemetryRecord(raw) {
   try {
-    const value = sanitizeTelemetryValue(JSON.parse(raw));
+    const payloads = new Map;
+    const value = sanitize(JSON.parse(raw), payloads);
     const json = JSON.stringify(value);
-    return json === undefined ? undefined : { value, json };
+    return json === undefined ? undefined : { value, json, payloads };
   } catch {
     return;
   }
@@ -1083,7 +1109,7 @@ import {
   unlinkSync as unlinkSync3,
   writeFileSync as writeFileSync5
 } from "node:fs";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash as createHash2, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join as join5 } from "node:path";
 
@@ -1529,7 +1555,7 @@ function profileIdFor(config, orgId) {
     config.gateway.replace(/\/+$/, ""),
     orgId
   ].join("\x00");
-  const digest = createHash("sha256").update(coordinates).digest("hex").slice(0, 24);
+  const digest = createHash2("sha256").update(coordinates).digest("hex").slice(0, 24);
   return `profile_${digest}`;
 }
 async function saveDeviceProfile(config, tokens, identity) {
@@ -2144,7 +2170,7 @@ class TurnState {
 }
 
 // capture/memory.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 import {
   existsSync as existsSync9,
   lstatSync,
@@ -2164,7 +2190,7 @@ function sameSnapshot(before, after) {
   return before.dev === after.dev && before.ino === after.ino && before.mode === after.mode && before.size === after.size && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs;
 }
 function sha256(input) {
-  return createHash2("sha256").update(input).digest("hex");
+  return createHash3("sha256").update(input).digest("hex");
 }
 function memoryStatePath(projectRoot) {
   return join12(projectRoot, ".augenta", "state", "memory.json");

@@ -8,7 +8,7 @@
  * buffered trajectory records by (src, sid, proj, turn) into trajectory
  * `Experience` envelopes — CaptureEvents fill `events` (scrubbed, applied
  * before they reached the outbox), RawRecords fill `data` (otherwise-raw
- * transcript lines structurally sanitized for opaque reasoning artifacts).
+ * transcript lines structurally sanitized for opaque reasoning and file bytes).
  * Standalone scrubbed memory documents pass
  * through as `type: "doc"` envelopes with no `events` field. The shipper sends
  * them together as `{ experiences: [...] }`; the server owns everything

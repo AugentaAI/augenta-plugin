@@ -30,6 +30,17 @@ function item(payload: unknown, type = "response_item"): string {
   return JSON.stringify({ timestamp: "2026-06-28T17:15:11.000Z", type, payload });
 }
 
+test("Codex image data URLs become references while the image placeholder survives", () => {
+  const content = Buffer.from("fixture image").toString("base64");
+  const result = normalizeCodexRollout({ ctx: codexCtx, startSeq: 0, startOffset: 0,
+    lines: [item({ type: "message", role: "user", content: [
+      { type: "input_image", image_url: `data:image/png;base64,${content}` },
+    ] })] });
+  expect(result.events[0]!.text).toBe("[input_image]");
+  expect(result.raws[0]!.raw).toContain("[augenta attachment sha256:");
+  expect(result.raws[0]!.raw).not.toContain(content);
+});
+
 describe("normalizeCodexRollout — out-of-band model and token usage", () => {
   // Codex reports neither the model nor token usage on the item lines
   // themselves: the model arrives on a `turn_context` line and usage on an
