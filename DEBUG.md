@@ -49,7 +49,10 @@ terminal flow). Pass it on every `--json` verb of one connection: a pending
 sign-in is redeemed only for the gateway it was started for, and is cancelled
 otherwise. With `--endpoint`, leave `AUGENTA_API_URL` unset or equal to it — a
 different value would win in every hook, so connect refuses
-(`gateway_override_conflict`). Connect writes the gateway as `endpoint`, marked
+(`gateway_override_conflict`). The same refusal covers `AUGENTA_INGEST_URL` off
+the chosen gateway's origin, with or without `--endpoint`: it never chooses the
+gateway, but it wins over the file's `ingestUrl` in every hook and would leave
+the checkout unjoined. Connect writes the gateway as `endpoint`, marked
 with `discoveredGateway` whenever it is discovery's, however chosen: the marker's
 one reader is the production label, and an unmarked production gateway reads as
 "not production". An override is written without it, its config keeps the local

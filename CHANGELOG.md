@@ -29,7 +29,9 @@ No reconnect is required, except for the one case in the first item.
   nothing sent, and you start again.
 - **`--endpoint` is refused while `AUGENTA_API_URL` is set to a different
   gateway.** The variable wins in every hook, so that checkout would never have
-  captured.
+  captured. Connecting with a browser sign-in is likewise refused while
+  `AUGENTA_INGEST_URL` points off the gateway's own origin, which left the same
+  checkout connected but silent.
 - **An `--endpoint` connection, or a platform-key config, is refused for a
   `config.json` that git may be tracking** when git cannot be run to check,
   rather than written anyway.

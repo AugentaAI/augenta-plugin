@@ -974,7 +974,17 @@ async function resolveOAuth(
   // (gatewayBase), so the checkout this run connects would never route.
   const variable = process.env.AUGENTA_API_URL?.trim().replace(/\/+$/, "");
   if (args.endpoint?.trim() && variable && variable !== gateway) {
-    throw new GatewayOverrideError("gateway_override_conflict", gateway, discovered.gateway, variable);
+    throw new GatewayOverrideError("gateway_override_conflict", gateway, discovered.gateway, variable, "AUGENTA_API_URL");
+  }
+  // The same never-routes outcome through the other variable. AUGENTA_INGEST_URL
+  // never chooses the gateway, so unlike the one above this is refused with or
+  // without --endpoint: it wins over the file's `ingestUrl` in every hook, and
+  // routesOnlyTo requires the capture URL to stay on the gateway's own origin —
+  // the same rule connect already applies to a hand-set `ingestUrl`. A platform
+  // key, which is how a local fixture receiver is pointed at, never comes here.
+  const ingest = process.env.AUGENTA_INGEST_URL?.trim();
+  if (ingest && !sameOrigin(ingest, gateway)) {
+    throw new GatewayOverrideError("gateway_override_conflict", gateway, discovered.gateway, ingest, "AUGENTA_INGEST_URL");
   }
   // Marked whenever the gateway is discovery's, however it was chosen: an
   // unmarked production gateway reads as "not production" (recallEnvironment).
@@ -1006,13 +1016,14 @@ class GatewayOverrideError extends Error {
     gateway: string,
     discovered: string,
     variable?: string,
+    variableName?: "AUGENTA_API_URL" | "AUGENTA_INGEST_URL",
   ) {
     super(
       code === "gateway_override_unconfirmed"
         ? `AUGENTA_API_URL points connect at ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, the gateway this environment's sign-in names, and connect does not sign in or send to a gateway the environment alone chose; nothing was sent. Unset AUGENTA_API_URL (check any committed .claude/settings.json), or pass --endpoint to choose that gateway yourself`
         : code === "override_config_tracked"
           ? `this connection would use the gateway ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, and git tracks this project's .augenta/config.json (or could not be run to confirm it does not), so the override would reach everyone who pulls it and stop their capture; nothing was sent. Connect without --endpoint, or untrack the config first`
-          : `--endpoint chooses ${displayOrigin(gateway)}, but AUGENTA_API_URL is set to ${displayOrigin(variable!)}, and the variable would win in every hook, so this checkout would never capture; nothing was sent. Unset AUGENTA_API_URL, or make it the same gateway`,
+          : `this connection would use the gateway ${displayOrigin(gateway)}, but ${variableName} is set to ${displayOrigin(variable!)}, and the variable would win in every hook, so this checkout would never capture; nothing was sent. Unset ${variableName} (check any committed .claude/settings.json), or make it the same gateway`,
     );
   }
 }

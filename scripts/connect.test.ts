@@ -408,6 +408,15 @@ describe("project config writers", () => {
     expect(readFileSync(join(project, ".augenta", "config.json"), "utf8")).not.toContain("sk-aug-test");
   });
 
+  test("the API-key writer fails closed when git cannot answer inside a checkout", () => {
+    // A container or CI checkout git refuses over safe.directory, or a harness
+    // with a smaller PATH: no answer is the same verdict as "tracked", because a
+    // missing git must not open the guard that keeps the key out of a commit.
+    writeFileSync(join(project, ".git"), "gitdir: /nonexistent/augenta-test\n");
+    expect(() => writeApiKeyConfig(project, "sk-aug-test.secret")).toThrow("git could not be run");
+    expect(existsSync(join(project, ".augenta", "config.json"))).toBe(false);
+  });
+
   test("a user-authored .augenta/.gitignore is left exactly as it is", () => {
     mkdirSync(join(project, ".augenta"), { recursive: true });
     writeFileSync(join(project, ".augenta", ".gitignore"), "outbox/\n");
@@ -1203,6 +1212,32 @@ describe("JSON verbs", () => {
     process.env.AUGENTA_API_URL = GATEWAY;
     expect((await runJsonVerb({ projectRoot: project }, { ...baseArgs, workspaces: ["ws-default"] })).status).toBe("connected");
     expect(loadProjectConfig(project)?.discoveredGateway).toBe(GATEWAY);
+    // The other half: a gateway that is NOT discovery's is written unmarked, so
+    // the production label cannot be minted for a dev or attacker-chosen one.
+    delete process.env.AUGENTA_API_URL;
+    route({ [`GET ${CONTROL}/.well-known/augenta.json`]: () =>
+      Response.json({ issuer: ISSUER, clientId: "client_public", gateway: "https://discovered.example.com" }) });
+    expect((await runJsonVerb({ projectRoot: project }, { ...baseArgs, endpoint: GATEWAY, workspaces: ["ws-default"] })).status).toBe("connected");
+    expect(loadProjectConfig(project)?.discoveredGateway).toBeUndefined();
+  });
+
+  test("an AUGENTA_INGEST_URL off the gateway's origin is refused, with or without --endpoint", async () => {
+    // It never chooses the gateway, but it wins over the file's ingestUrl in
+    // every hook, so the checkout this run connects would never route: the same
+    // never-captures outcome AUGENTA_API_URL is refused for.
+    await signIn();
+    route();
+    process.env.AUGENTA_INGEST_URL = "https://evil.example.com/v1/experiences";
+    const bare = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true });
+    expect(bare).toMatchObject({ status: "error", code: "gateway_override_conflict" });
+    expect(String(bare.message)).toContain("AUGENTA_INGEST_URL");
+    expect(String(bare.message)).toContain("https://evil.example.com");
+    const flagged = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true, endpoint: GATEWAY });
+    expect(flagged).toMatchObject({ status: "error", code: "gateway_override_conflict" });
+    expect(requests.filter((request) => !request.includes("/.well-known/"))).toEqual([]);
+    // Another path on the gateway's own origin is the documented lever, and stays allowed.
+    process.env.AUGENTA_INGEST_URL = `${GATEWAY}/v3/experiences`;
+    expect((await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true })).status).toBe("need_workspace");
   });
 
   test("probe identifies a platform-key connection without exposing or replacing its key", async () => {
