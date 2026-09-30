@@ -166,6 +166,8 @@ async function diagnoseHosts(controlUrl, options = {}) {
     issuer = PRODUCTION.issuer;
     gateway = PRODUCTION.gateway;
   }
+  if (options.gateway)
+    gateway = options.gateway;
   const rest = await Promise.all([
     issuer ? check(fetcher, `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`, timeoutMs, (response, body) => response.ok && typeof body?.issuer === "string") : undefined,
     gateway ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) => response.status === 401 && typeof body?.error === "string") : undefined
@@ -2122,13 +2124,13 @@ if (connectedRoot) {
     if (gate === "key_tracked") {
       const tracked = cfg.keyTracked === "tracked";
       if (firstTime(`key-${cfg.keyTracked}:${connectedRoot}`)) {
-        const fact = tracked ? "this project's .augenta/config.json holds a platform key and git tracks it, so Augenta capture and recall are off in this checkout: " + "a committed key would send everyone's capture to that key's Workspace." : "this project's .augenta/config.json holds a platform key, and git could not be run here to confirm the repository does not track it, " + "so Augenta capture and recall are off in this checkout: a committed key would send everyone's capture to that key's Workspace.";
+        const fact = tracked ? "this project's .augenta/config.json holds a platform key and git tracks it, so Augenta capture and recall are off in this checkout: " + "a committed key would send everyone's capture to that key's Workspace." : "this project's .augenta/config.json holds a platform key, and git gave no answer here on whether the repository tracks it, " + "so Augenta capture and recall are off in this checkout: a committed key would send everyone's capture to that key's Workspace.";
         const remedy = tracked ? {
           codex: "If the key is yours, untrack the file with git rm --cached .augenta/config.json; if it is not, remove it.",
           claude: "If the key is theirs, the fix is `git rm --cached .augenta/config.json`; if they do not recognize it, it should be removed."
         } : {
-          codex: "Make git available to the coding app (on its PATH), then start a new session.",
-          claude: "The fix is making `git` available on the PATH the coding app gives hooks, then starting a new session."
+          codex: "Either git is not on the coding app's PATH, or git refuses this repository (for a checkout owned by another user, see git's safe.directory). Fix whichever it is, then start a new session.",
+          claude: "Either `git` is not on the PATH the coding app gives hooks, or git refuses this repository — usually a checkout " + "owned by another user, which `git config --global --add safe.directory <path>` allows. Running `git status` there shows which. " + "Fixing it and starting a new session turns capture back on."
         };
         const additionalContext = codex ? `Augenta: ${fact} ${remedy.codex}` : `[Augenta] ${fact[0].toUpperCase()}${fact.slice(1)} Tell the user. ${remedy.claude} Do not run the ` + "connect skill to fix this, and never ask for the key in the chat.";
         process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }));

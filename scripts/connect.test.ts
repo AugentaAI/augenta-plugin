@@ -413,7 +413,9 @@ describe("project config writers", () => {
     // with a smaller PATH: no answer is the same verdict as "tracked", because a
     // missing git must not open the guard that keeps the key out of a commit.
     writeFileSync(join(project, ".git"), "gitdir: /nonexistent/augenta-test\n");
-    expect(() => writeApiKeyConfig(project, "sk-aug-test.secret")).toThrow("git could not be run");
+    expect(() => writeApiKeyConfig(project, "sk-aug-test.secret")).toThrow("git gave no answer");
+    // Names both causes, not only a missing git: here git runs and refuses.
+    expect(() => writeApiKeyConfig(project, "sk-aug-test.secret")).toThrow("safe.directory");
     expect(existsSync(join(project, ".augenta", "config.json"))).toBe(false);
   });
 
@@ -1090,6 +1092,9 @@ describe("JSON verbs", () => {
       const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, ...verb });
       expect(payload).toMatchObject({ status: "error", code: "gateway_override_unconfirmed" });
       expect(String(payload.message)).toContain("https://evil.example.com");
+      // Not in effect, so not disclosed as the gateway this run uses; the
+      // message names what was refused.
+      expect(payload).not.toHaveProperty("gatewayOverride");
     }
     // Discovery only: no token, no sign-in, nothing to the override.
     expect(requests.filter((request) => !request.includes("/.well-known/"))).toEqual([]);
@@ -1277,6 +1282,26 @@ describe("JSON verbs", () => {
     // The same gateway in both is fine.
     process.env.AUGENTA_API_URL = GATEWAY;
     expect((await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true, endpoint: GATEWAY })).status).toBe("need_workspace");
+  });
+
+  test("a network failure under --endpoint still names that gateway, and diagnoses it rather than discovery's", async () => {
+    const DOWN = "https://down.example.com";
+    // A sign-in made for the override, so connect reaches for it at /v1/me.
+    await saveDeviceProfile(
+      { issuer: ISSUER, clientId: "client_public", gateway: DOWN },
+      { accessToken: "access-live", refreshToken: "refresh-live", expiresAt: Date.now() + 3_600_000 },
+      { userId: TEST_USER_ID, orgId: "org_1" },
+    );
+    const refused = () => {
+      throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+    };
+    route({ [`GET ${DOWN}/v1/me`]: refused, [`GET ${ISSUER}/.well-known/openid-configuration`]: () => Response.json({ issuer: ISSUER }) });
+    const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, endpoint: DOWN, probe: true });
+    expect(payload).toMatchObject({ status: "error", code: "network_blocked", gatewayOverride: DOWN });
+    const hosts = (payload.hosts as Array<{ host: string; ok: boolean }>);
+    expect(hosts.find((host) => host.host === "down.example.com")).toMatchObject({ ok: false });
+    // Discovery's own gateway is not what was being reached, so not what is checked.
+    expect(hosts.some((host) => host.host === new URL(GATEWAY).host)).toBe(false);
   });
 
   test("a pending sign-in is redeemed only for the gateway it was started for", async () => {

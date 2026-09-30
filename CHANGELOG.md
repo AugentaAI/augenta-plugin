@@ -33,10 +33,15 @@ No reconnect is required, except for the one case in the first item.
   `AUGENTA_INGEST_URL` points off the gateway's own origin, which left the same
   checkout connected but silent.
 - **An `--endpoint` connection, or a platform-key config, is refused for a
-  `config.json` that git may be tracking** when git cannot be run to check,
-  rather than written anyway.
+  `config.json` that git may be tracking** when git gives no answer, rather than
+  written anyway. The messages now name both causes: `git` missing from the
+  coding app's PATH, or git refusing the repository, usually a checkout owned by
+  another user (git's `safe.directory`).
 - **The gateway-override warning before sign-in is shown only when the gateway
-  really differs** from the environment's own.
+  really differs** from the environment's own, and never on a refusal.
+- **When connect cannot reach an `--endpoint` gateway, it says which one**, and
+  checks that gateway rather than the environment's, instead of reporting Augenta
+  itself as unreachable.
 
 ## [0.12.0] — 2026-09-30
 

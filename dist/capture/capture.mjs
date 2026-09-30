@@ -1163,6 +1163,8 @@ async function diagnoseHosts(controlUrl, options = {}) {
     issuer = PRODUCTION.issuer;
     gateway = PRODUCTION.gateway;
   }
+  if (options.gateway)
+    gateway = options.gateway;
   const rest = await Promise.all([
     issuer ? check(fetcher, `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`, timeoutMs, (response, body) => response.ok && typeof body?.issuer === "string") : undefined,
     gateway ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) => response.status === 401 && typeof body?.error === "string") : undefined

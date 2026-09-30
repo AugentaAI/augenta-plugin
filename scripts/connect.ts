@@ -92,6 +92,10 @@ interface Args {
   apiKey?: string;
   project?: string;
   endpoint?: string;
+  /** Internal, never parsed from the command line: where resolveOAuth records
+   *  what this one verb must disclose. runJsonVerb makes a fresh one per call,
+   *  so verbs in flight together never share it. */
+  disclosures?: Disclosures;
   controlUrl?: string;
   harness?: "claude-code" | "codex";
   json?: boolean;
@@ -219,7 +223,7 @@ export function writeApiKeyConfig(
     throw new Error(
       tracking === "tracked"
         ? ".augenta/config.json is tracked by git, and an API-key config would put the key in it; untrack it first (git rm --cached .augenta/config.json)"
-        : "git could not be run to confirm .augenta/config.json is not committed, and an API-key config would put the key in it; make git available and try again",
+        : "git gave no answer on whether .augenta/config.json is committed, and an API-key config would put the key in it; either git is not on PATH or it refuses this repository (see git's safe.directory for a checkout owned by another user) — `git status` here shows which",
     );
   }
   const dir = ensureAugentaDir(projectRoot);
@@ -939,7 +943,7 @@ async function linkForWorkspace(
  * otherwise — never the config file's `endpoint`, and never `AUGENTA_API_URL`
  * alone. Both can arrive in a commit, and whoever wrote them would choose where
  * this person signs in to and sends their token. Another gateway is stated before
- * any sign-in ({@link disclosedOverride}). `discovered` is what discovery named;
+ * any sign-in ({@link Disclosures}). `discovered` is what discovery named;
  * `discoveredGateway` marks a gateway that IS discovery's, whatever chose it —
  * the production label (recallEnvironment) is its only reader.
  */
@@ -951,8 +955,6 @@ async function resolveOAuth(
   const control = controlUrl(prior, args.controlUrl);
   const discovered = await augentaOAuthConfig(control);
   const gateway = gatewayBase({ endpoint: discovered.gateway }, args.endpoint);
-  // Set before any refusal, so an error payload names the gateway it refused.
-  disclosedOverride = gateway !== discovered.gateway ? gateway : undefined;
   if (gateway !== discovered.gateway) {
     // The variable alone never picks where a browser sign-in goes. It can come
     // from a committed .claude/settings.json, and signing in sends the new token
@@ -986,6 +988,10 @@ async function resolveOAuth(
   if (ingest && !sameOrigin(ingest, gateway)) {
     throw new GatewayOverrideError("gateway_override_conflict", gateway, discovered.gateway, ingest, "AUGENTA_INGEST_URL");
   }
+  // Recorded only now, past every refusal: `gatewayOverride` means this run IS
+  // signing in for and sending to that gateway, which a refused one is not (its
+  // message names it instead).
+  if (args.disclosures && gateway !== discovered.gateway) args.disclosures.gatewayOverride = gateway;
   // Marked whenever the gateway is discovery's, however it was chosen: an
   // unmarked production gateway reads as "not production" (recallEnvironment).
   const discoveredGateway = gateway === discovered.gateway ? discovered.gateway : undefined;
@@ -993,20 +999,25 @@ async function resolveOAuth(
 }
 
 /**
- * The gateway the last resolveOAuth chose that is not discovery's, for the
- * `gatewayOverride` payload field. Known only after discovery, so runJsonVerb
- * resets it before each verb and reads it after; a verb that never resolves an
- * environment discloses nothing.
+ * What a verb must tell the user before any sign-in that discovery alone
+ * reveals: the gateway this run uses instead of discovery's. Filled by
+ * resolveOAuth and spread into the verb's payload, whatever it returns.
  */
-let disclosedOverride: string | undefined;
+interface Disclosures {
+  gatewayOverride?: string;
+}
 
-/** Whether a pending device grant was started for exactly this environment and
- *  gateway. A grant is redeemed by the verb that finishes it, which sends the
- *  new token to the gateway at once: the gateway named when the sign-in began
- *  must be the one it goes to. */
-function grantMatches(pending: { issuer: string; clientId: string; gateway?: string }, oauth: OAuthConfig): boolean {
-  return pending.issuer === oauth.issuer && pending.clientId === oauth.clientId &&
-    typeof pending.gateway === "string" && pending.gateway.replace(/\/+$/, "") === oauth.gateway;
+/** What differs between a pending device grant and this run — its
+ *  environment (issuer or client) or its gateway — or undefined when it was
+ *  started for exactly this one. A grant is redeemed by the verb that finishes
+ *  it, which sends the new token to the gateway at once: the gateway named when
+ *  the sign-in began must be the one it goes to. The one rule; callers word it. */
+function grantMismatch(
+  pending: { issuer: string; clientId: string; gateway?: string },
+  oauth: OAuthConfig,
+): "environment" | "gateway" | undefined {
+  if (pending.issuer !== oauth.issuer || pending.clientId !== oauth.clientId) return "environment";
+  return typeof pending.gateway === "string" && pending.gateway.replace(/\/+$/, "") === oauth.gateway ? undefined : "gateway";
 }
 
 /** A gateway override connect will not act on; nothing was sent to it. */
@@ -1022,7 +1033,7 @@ class GatewayOverrideError extends Error {
       code === "gateway_override_unconfirmed"
         ? `AUGENTA_API_URL points connect at ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, the gateway this environment's sign-in names, and connect does not sign in or send to a gateway the environment alone chose; nothing was sent. Unset AUGENTA_API_URL (check any committed .claude/settings.json), or pass --endpoint to choose that gateway yourself`
         : code === "override_config_tracked"
-          ? `this connection would use the gateway ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, and git tracks this project's .augenta/config.json (or could not be run to confirm it does not), so the override would reach everyone who pulls it and stop their capture; nothing was sent. Connect without --endpoint, or untrack the config first`
+          ? `this connection would use the gateway ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, and git tracks this project's .augenta/config.json (or gave no answer on whether it does), so the override would reach everyone who pulls it and stop their capture; nothing was sent. Connect without --endpoint, or untrack the config first`
           : `this connection would use the gateway ${displayOrigin(gateway)}, but ${variableName} is set to ${displayOrigin(variable!)}, and the variable would win in every hook, so this checkout would never capture; nothing was sent. Unset ${variableName} (check any committed .claude/settings.json), or make it the same gateway`,
     );
   }
@@ -1592,7 +1603,7 @@ export async function probeConnection(
 export async function startLogin(args: Args): Promise<JsonPayload> {
   const { oauth } = await resolveOAuth(args);
   const live = readPendingLogin();
-  const pending = live && grantMatches(live, oauth) ? live : await beginDeviceLogin(oauth);
+  const pending = live && !grantMismatch(live, oauth) ? live : await beginDeviceLogin(oauth);
   savePendingLogin(pending);
   return {
     status: "login_started",
@@ -1617,7 +1628,8 @@ export async function awaitLogin(args: Args): Promise<JsonPayload> {
       message: "no sign-in is in progress; start one with --login",
     };
   }
-  if (!grantMatches(pending, oauth)) {
+  const mismatch = grantMismatch(pending, oauth);
+  if (mismatch) {
     // A grant from another environment can never be redeemed here, and one
     // started for another gateway must not be: redeeming it sends the new token
     // to this run's gateway, which is not the one named when it began.
@@ -1625,7 +1637,7 @@ export async function awaitLogin(args: Args): Promise<JsonPayload> {
     return {
       status: "error",
       code: "no_pending_login",
-      message: pending.issuer !== oauth.issuer || pending.clientId !== oauth.clientId
+      message: mismatch === "environment"
         ? "the pending sign-in belongs to a different Augenta environment; start a new one with --login"
         : "the pending sign-in was started for a different Augenta gateway, so it was cancelled and nothing was sent; start a new one with --login",
     };
@@ -1904,21 +1916,23 @@ export async function runJsonVerb(
   };
   // Stated before any sign-in, like a non-production environment: this run
   // signs in for, and sends to, that gateway instead of discovery's. Known only
-  // once discovery answered, so it is read after the verb.
-  disclosedOverride = undefined;
-  const disclosure = () => (disclosedOverride ? { gatewayOverride: disclosedOverride } : {});
+  // once discovery answered, so it is read after the verb — on every payload,
+  // a failure's included, since a failure is when the user most needs to know
+  // which gateway was being reached.
+  const disclosures: Disclosures = {};
   try {
-    return { ...(await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot })), ...metadata, ...disclosure() };
+    return { ...(await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot, disclosures })), ...metadata, ...disclosures };
   } catch (error) {
     if (error instanceof GatewayOverrideError) {
-      return { status: "error", code: error.code, message: error.message, ...metadata, ...disclosure() };
+      return { status: "error", code: error.code, message: error.message, ...metadata, ...disclosures };
     }
     // A failure that could be the network refusing Augenta is checked host by
     // host before it is reported, so the answer names what to allow instead of
     // "Request was cancelled.". Only a confirmed block is reported as
     // one; if every host answers as Augenta does, the original failure stands.
+    // Under an override the gateway checked is the one this run was reaching.
     if (classifyNetworkError(error)) {
-      const hosts = await diagnoseHosts(controlUrl(cfg, args.controlUrl));
+      const hosts = await diagnoseHosts(controlUrl(cfg, args.controlUrl), { gateway: disclosures.gatewayOverride });
       const blocked = hosts.filter((host) => !host.ok);
       if (blocked.length > 0) {
         return {
@@ -1929,10 +1943,11 @@ export async function runJsonVerb(
             `this network does not let connect reach ${blocked.map((host) => `${host.host} (${host.reason})`).join(", ")}; ` +
             `connect needs ${hosts.map((host) => host.host).join(", ")}, so allow them in this environment's network settings`,
           ...metadata,
+          ...disclosures,
         };
       }
     }
-    return { status: "error", code: "failed", message: describeError(error), ...metadata };
+    return { status: "error", code: "failed", message: describeError(error), ...metadata, ...disclosures };
   }
 }
 

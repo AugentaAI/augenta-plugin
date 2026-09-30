@@ -434,7 +434,7 @@ its target is that sign-in's gateway (`assertSignInTarget`); a new one must too.
 The one request that carries a token before it is stored — `verifyFreshLogin`'s
 `/v1/me` as a sign-in completes — goes to the gateway `resolveOAuth` vetted, and
 a pending sign-in is redeemed only for the gateway it was started for
-(`grantMatches`), so the gateway named when a sign-in began is the one it goes
+(`grantMismatch`), so the gateway named when a sign-in began is the one it goes
 to. `discoveredGateway` marks a gateway that is discovery's, however it was
 chosen; the production label is its only reader.
 
