@@ -47,6 +47,13 @@ describe("native transcript attachment fixtures", () => {
     expect(normalize([JSON.stringify(wrong)], first.attachmentContext).documents).toEqual([]);
     expect(normalize(lines.slice(1)).documents).toEqual([]);
   });
+  test("a native PDF Read identifies embedded bytes even with a temporary name without a PDF extension", () => {
+    const x = JSON.parse(fixture("sdk-read-resume")[2]!);
+    x.toolUseResult.file.filePath = "/scratch/generated-output";
+    const result = normalize([JSON.stringify(x)]);
+    expect(result.documents).toHaveLength(1);
+    expect(result.documents[0]!.payload?.content).toBe(pdf.toString("base64"));
+  });
   test("compaction restoration stays excluded across fires until a fresh harness prompt", () => {
     const lines = fixture("compaction");
     const first = normalize(lines.slice(0, 5));

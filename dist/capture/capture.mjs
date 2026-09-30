@@ -441,7 +441,7 @@ function extractClaudeAttachments(value, payloads, project, prior) {
   const r = x.toolUseResult;
   if (x.type === "user" && toolResult && object(r) && (r.type === "pdf" || r.type === "parts")) {
     const path = filePath(r.file?.filePath, project);
-    if (path && extname(path).toLowerCase() === ".pdf") {
+    if (path && (r.type === "pdf" || extname(path).toLowerCase() === ".pdf")) {
       documents.push({
         origin: "read",
         format: "application/pdf",
