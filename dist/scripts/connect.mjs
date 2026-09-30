@@ -674,53 +674,15 @@ function takeAuthNotice(projectRoot) {
   return found;
 }
 
-// capture/environment.ts
-import { existsSync as existsSync3 } from "node:fs";
-import { dirname, join as join3, resolve as resolve2 } from "node:path";
-function sessionEnvironment(env = process.env) {
-  const declared = env.AUGENTA_EPHEMERAL?.trim().toLowerCase();
-  if (declared === "0" || declared === "false")
-    return { ephemeral: false, signals: ["AUGENTA_EPHEMERAL=0"] };
-  const signals = [];
-  let kind;
-  if (env.CLAUDE_CODE_REMOTE === "true") {
-    signals.push("CLAUDE_CODE_REMOTE");
-    kind ??= "claude-cloud";
-  }
-  if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {
-    signals.push("CODEX_HOME=/opt/codex (heuristic)");
-    kind ??= "codex-cloud";
-  }
-  if (declared === "1" || declared === "true") {
-    signals.push("AUGENTA_EPHEMERAL=1");
-    kind ??= "declared";
-  }
-  return { ephemeral: signals.length > 0, ...kind ? { kind } : {}, signals };
-}
-function insideGitCheckout(dir) {
-  let current = resolve2(dir);
-  while (true) {
-    if (existsSync3(join3(current, ".git")))
-      return true;
-    const parent = dirname(current);
-    if (parent === current)
-      return false;
-    current = parent;
-  }
-}
-function ephemeralProject(projectRoot, env = process.env) {
-  return sessionEnvironment(env).ephemeral && !insideGitCheckout(projectRoot);
-}
-
 // capture/links.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join4 } from "node:path";
+import { join as join3 } from "node:path";
 function linksPath(projectRoot) {
-  return join4(projectRoot, ".augenta", "state", "links.json");
+  return join3(projectRoot, ".augenta", "state", "links.json");
 }
 function legacyAdoptionPath(projectRoot) {
-  return join4(projectRoot, ".augenta", "state", "adopted.json");
+  return join3(projectRoot, ".augenta", "state", "adopted.json");
 }
 var nonEmpty = (value) => typeof value === "string" && value.length > 0;
 function readLinks(projectRoot) {
@@ -756,9 +718,9 @@ function readLinks(projectRoot) {
   }
 }
 function writeLinks(projectRoot, links) {
-  const dir = join4(ensureAugentaDir(projectRoot), "state");
+  const dir = join3(ensureAugentaDir(projectRoot), "state");
   mkdirSync3(dir, { recursive: true });
-  const path = join4(dir, "links.json");
+  const path = join3(dir, "links.json");
   const tmp = `${path}.${randomUUID2()}.tmp`;
   try {
     writeFileSync3(tmp, JSON.stringify({
@@ -780,6 +742,46 @@ function writeLinks(projectRoot, links) {
 import { execFileSync } from "node:child_process";
 import { existsSync as existsSync4, realpathSync as realpathSync2 } from "node:fs";
 import { dirname as dirname2, join as join5, resolve as resolve3 } from "node:path";
+
+// capture/environment.ts
+import { existsSync as existsSync3 } from "node:fs";
+import { dirname, join as join4, resolve as resolve2 } from "node:path";
+function sessionEnvironment(env = process.env) {
+  const declared = env.AUGENTA_EPHEMERAL?.trim().toLowerCase();
+  if (declared === "0" || declared === "false")
+    return { ephemeral: false, signals: ["AUGENTA_EPHEMERAL=0"] };
+  const signals = [];
+  let kind;
+  if (env.CLAUDE_CODE_REMOTE === "true") {
+    signals.push("CLAUDE_CODE_REMOTE");
+    kind ??= "claude-cloud";
+  }
+  if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {
+    signals.push("CODEX_HOME=/opt/codex (heuristic)");
+    kind ??= "codex-cloud";
+  }
+  if (declared === "1" || declared === "true") {
+    signals.push("AUGENTA_EPHEMERAL=1");
+    kind ??= "declared";
+  }
+  return { ephemeral: signals.length > 0, ...kind ? { kind } : {}, signals };
+}
+function insideGitCheckout(dir) {
+  let current = resolve2(dir);
+  while (true) {
+    if (existsSync3(join4(current, ".git")))
+      return true;
+    const parent = dirname(current);
+    if (parent === current)
+      return false;
+    current = parent;
+  }
+}
+function ephemeralProject(projectRoot, env = process.env) {
+  return sessionEnvironment(env).ephemeral && !insideGitCheckout(projectRoot);
+}
+
+// capture/project.ts
 function gitRevParse(cwd, arg) {
   try {
     const value = execFileSync("git", ["rev-parse", arg], {
@@ -793,6 +795,12 @@ function gitRevParse(cwd, arg) {
 }
 function isTrackedByGit(projectRoot, relativePath) {
   return gitTracks(projectRoot, relativePath) === true;
+}
+function gitTracking(projectRoot, relativePath) {
+  const tracked = gitTracks(projectRoot, relativePath);
+  if (tracked === true)
+    return "tracked";
+  return tracked === undefined && insideGitCheckout(projectRoot) ? "unverified" : undefined;
 }
 function gitTracks(projectRoot, relativePath) {
   try {
@@ -941,7 +949,7 @@ function loadProjectConfig(projectRoot) {
       const gatewayMismatch = joined.join !== "joined" || own && routesOnlyTo(own, settings) ? undefined : {
         sendsTo: own ? routeOutside(own, settings) : displayOrigin(gatewayBase(settings)),
         ...own ? { signedInFor: own } : {},
-        cause: own && fileRoutesOnlyTo(own, settings) ? "environment" : "file"
+        cause: own && routesOnlyTo(own, settings, {}) ? "environment" : "file"
       };
       const routes = gatewayMismatch ? { join: "gateway" } : joined;
       return {
@@ -992,18 +1000,14 @@ function projectConfig(cwd) {
 function controlUrl(cfg, flag) {
   return (flag?.trim() || process.env.AUGENTA_CONTROL_URL?.trim() || cfg?.controlUrl || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
 }
-function gatewayBase(cfg, flag) {
-  return (flag?.trim() || process.env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+function gatewayBase(cfg, flag, env = process.env) {
+  return (flag?.trim() || env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
 }
-function experiencesUrl(cfg) {
-  return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
+function experiencesUrl(cfg, env = process.env) {
+  return env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg, undefined, env)}/v1/experiences`;
 }
-function routesOnlyTo(gateway, cfg) {
-  return gatewayBase(cfg) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg), gateway);
-}
-function fileRoutesOnlyTo(gateway, cfg) {
-  const base = (cfg.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
-  return base === gateway.replace(/\/+$/, "") && sameOrigin(cfg.ingestUrl || `${base}/v1/experiences`, gateway);
+function routesOnlyTo(gateway, cfg, env = process.env) {
+  return gatewayBase(cfg, undefined, env) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg, env), gateway);
 }
 function routeOutside(gateway, cfg) {
   if (routesOnlyTo(gateway, cfg))
@@ -1016,12 +1020,8 @@ function describeGatewayMismatch(mismatch) {
   return mismatch.signedInFor ? `${mismatch.sendsTo}, not ${displayOrigin(mismatch.signedInFor)}, the gateway this checkout's sign-in was made for` : `${mismatch.sendsTo}, which this checkout's sign-in does not record as its gateway`;
 }
 function keyTracking(projectRoot) {
-  const tracked = gitTracks(projectRoot, ".augenta/config.json");
-  if (tracked === true)
-    return { keyTracked: "tracked" };
-  if (tracked === undefined && insideGitCheckout(projectRoot))
-    return { keyTracked: "unverified" };
-  return {};
+  const keyTracked = gitTracking(projectRoot, ".augenta/config.json");
+  return keyTracked ? { keyTracked } : {};
 }
 function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
@@ -1421,7 +1421,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.12.0";
+var PLUGIN_VERSION = "0.12.1";
 
 // capture/platform.ts
 class AugentaRequestError extends Error {
@@ -1570,8 +1570,9 @@ function parseArgs(argv) {
   return args;
 }
 function writeApiKeyConfig(projectRoot, apiKey, endpoint2, details = {}) {
-  if (isTrackedByGit(projectRoot, ".augenta/config.json")) {
-    throw new Error(".augenta/config.json is tracked by git, and an API-key config would put the key in it; untrack it first (git rm --cached .augenta/config.json)");
+  const tracking = gitTracking(projectRoot, ".augenta/config.json");
+  if (tracking) {
+    throw new Error(tracking === "tracked" ? ".augenta/config.json is tracked by git, and an API-key config would put the key in it; untrack it first (git rm --cached .augenta/config.json)" : "git could not be run to confirm .augenta/config.json is not committed, and an API-key config would put the key in it; make git available and try again");
   }
   const dir = ensureAugentaDir(projectRoot);
   setAugentaIgnore(projectRoot, "local");
@@ -1921,25 +1922,30 @@ async function resolveOAuth(args, projectRoot = args.project ?? process.cwd()) {
   const control = controlUrl(prior, args.controlUrl);
   const discovered = await augentaOAuthConfig(control);
   const gateway = gatewayBase({ endpoint: discovered.gateway }, args.endpoint);
+  disclosedOverride = gateway !== discovered.gateway ? gateway : undefined;
   if (gateway !== discovered.gateway) {
     if (!args.endpoint?.trim())
       throw new GatewayOverrideError("gateway_override_unconfirmed", gateway, discovered.gateway);
-    if (isTrackedByGit(projectRoot, ".augenta/config.json")) {
+    if (gitTracking(projectRoot, ".augenta/config.json")) {
       throw new GatewayOverrideError("override_config_tracked", gateway, discovered.gateway);
     }
   }
-  const discoveredGateway = gatewayOverride(args) || process.env.AUGENTA_API_URL?.trim() ? undefined : discovered.gateway;
+  const variable = process.env.AUGENTA_API_URL?.trim().replace(/\/+$/, "");
+  if (args.endpoint?.trim() && variable && variable !== gateway) {
+    throw new GatewayOverrideError("gateway_override_conflict", gateway, discovered.gateway, variable);
+  }
+  const discoveredGateway = gateway === discovered.gateway ? discovered.gateway : undefined;
   return { oauth: { ...discovered, gateway }, gateway, control, discovered: discovered.gateway, discoveredGateway };
 }
-function gatewayOverride(args) {
-  const override = args.endpoint?.trim();
-  return override ? override.replace(/\/+$/, "") : undefined;
+var disclosedOverride;
+function grantMatches(pending, oauth) {
+  return pending.issuer === oauth.issuer && pending.clientId === oauth.clientId && typeof pending.gateway === "string" && pending.gateway.replace(/\/+$/, "") === oauth.gateway;
 }
 
 class GatewayOverrideError extends Error {
   code;
-  constructor(code, gateway, discovered) {
-    super(code === "gateway_override_unconfirmed" ? `AUGENTA_API_URL points connect at ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, the gateway this environment's sign-in names, and connect does not sign in or send to a gateway the environment alone chose; nothing was sent. Unset AUGENTA_API_URL (check any committed .claude/settings.json), or pass --endpoint to choose that gateway yourself` : `this connection would use the gateway ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, and git tracks this project's .augenta/config.json, so the override would reach everyone who pulls it and stop their capture; nothing was sent. Connect without --endpoint, or untrack the config first`);
+  constructor(code, gateway, discovered, variable) {
+    super(code === "gateway_override_unconfirmed" ? `AUGENTA_API_URL points connect at ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, the gateway this environment's sign-in names, and connect does not sign in or send to a gateway the environment alone chose; nothing was sent. Unset AUGENTA_API_URL (check any committed .claude/settings.json), or pass --endpoint to choose that gateway yourself` : code === "override_config_tracked" ? `this connection would use the gateway ${displayOrigin(gateway)} instead of ${displayOrigin(discovered)}, and git tracks this project's .augenta/config.json (or could not be run to confirm it does not), so the override would reach everyone who pulls it and stop their capture; nothing was sent. Connect without --endpoint, or untrack the config first` : `--endpoint chooses ${displayOrigin(gateway)}, but AUGENTA_API_URL is set to ${displayOrigin(variable)}, and the variable would win in every hook, so this checkout would never capture; nothing was sent. Unset AUGENTA_API_URL, or make it the same gateway`);
     this.code = code;
   }
 }
@@ -2202,7 +2208,7 @@ async function probeConnection(resolved, args) {
 async function startLogin(args) {
   const { oauth } = await resolveOAuth(args);
   const live = readPendingLogin();
-  const pending = live && live.issuer === oauth.issuer && live.clientId === oauth.clientId ? live : await beginDeviceLogin(oauth);
+  const pending = live && grantMatches(live, oauth) ? live : await beginDeviceLogin(oauth);
   savePendingLogin(pending);
   return {
     status: "login_started",
@@ -2221,12 +2227,12 @@ async function awaitLogin(args) {
       message: "no sign-in is in progress; start one with --login"
     };
   }
-  if (pending.issuer !== oauth.issuer || pending.clientId !== oauth.clientId) {
+  if (!grantMatches(pending, oauth)) {
     clearPendingLogin();
     return {
       status: "error",
       code: "no_pending_login",
-      message: "the pending sign-in belongs to a different Augenta environment; start a new one with --login"
+      message: pending.issuer !== oauth.issuer || pending.clientId !== oauth.clientId ? "the pending sign-in belongs to a different Augenta environment; start a new one with --login" : "the pending sign-in was started for a different Augenta gateway, so it was cancelled and nothing was sent; start a new one with --login"
     };
   }
   try {
@@ -2418,15 +2424,16 @@ async function runJsonVerb(resolved, args) {
   const metadata = {
     environment: environmentLabel(args.repairHarness ? cfg?.controlUrl : controlUrl(cfg, args.controlUrl)),
     ...args.repairHarness ? {} : environmentChange(cfg, args),
-    ...!args.repairHarness && gatewayOverride(args) ? { gatewayOverride: gatewayOverride(args) } : {},
     ...args.probe && cfg ? { current: savedConnection(cfg) } : {},
     ...args.probe ? { session: sessionEnvironment() } : {}
   };
+  disclosedOverride = undefined;
+  const disclosure = () => disclosedOverride ? { gatewayOverride: disclosedOverride } : {};
   try {
-    return { ...await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot }), ...metadata };
+    return { ...await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot }), ...metadata, ...disclosure() };
   } catch (error) {
     if (error instanceof GatewayOverrideError) {
-      return { status: "error", code: error.code, message: error.message, ...metadata };
+      return { status: "error", code: error.code, message: error.message, ...metadata, ...disclosure() };
     }
     if (classifyNetworkError(error)) {
       const hosts = await diagnoseHosts(controlUrl(cfg, args.controlUrl));

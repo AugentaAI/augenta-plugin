@@ -44,12 +44,18 @@ it, and a committed `.claude/settings.json` `env` block reaches every process
 Claude Code starts, so an `AUGENTA_API_URL` that differs from discovery makes
 connect refuse (`gateway_override_unconfirmed`) with nothing sent. `--endpoint`
 cannot arrive in a commit; it is stated before any sign-in (`gatewayOverride` in
-`--json` payloads, and a line in the terminal flow). Connect writes the gateway
-as `endpoint`, marked with `discoveredGateway` when discovery chose it; an
-override is written without the marker, and its config keeps the local ignore
-form so it is not committed, and connect refuses one git already tracks
-(`override_config_tracked`), since teammates' sign-ins were made for discovery's
-gateway. A hand-edited `endpoint` no longer survives a reconnect, and until one,
+`--json` payloads, only when it differs from discovery, and a line in the
+terminal flow). Pass it on every `--json` verb of one connection: a pending
+sign-in is redeemed only for the gateway it was started for, and is cancelled
+otherwise. With `--endpoint`, leave `AUGENTA_API_URL` unset or equal to it — a
+different value would win in every hook, so connect refuses
+(`gateway_override_conflict`). Connect writes the gateway as `endpoint`, marked
+with `discoveredGateway` whenever it is discovery's, however chosen: the marker's
+one reader is the production label, and an unmarked production gateway reads as
+"not production". An override is written without it, its config keeps the local
+ignore form so it is not committed, and connect refuses one git tracks or cannot
+confirm it does not (`override_config_tracked`), since teammates' sign-ins were
+made for discovery's gateway. A hand-edited `endpoint` no longer survives a reconnect, and until one,
 it stops capture (below). A hand-set `ingestUrl` survives only on the gateway's
 own origin.
 

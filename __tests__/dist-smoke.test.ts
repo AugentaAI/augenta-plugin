@@ -53,7 +53,9 @@ function run(
 ) {
   const proc = Bun.spawnSync(["node", join(DIST, bundle), ...args], {
     stdin: opts.stdin === undefined ? undefined : Buffer.from(opts.stdin),
-    env: { ...(process.env as Record<string, string>), AUGENTA_HOME: home, ...(opts.env ?? {}) },
+    // The gateway variables are DEBUG.md's levers; one a contributor exported
+    // would point a joined checkout away from its sign-in's gateway.
+    env: { ...(process.env as Record<string, string>), AUGENTA_HOME: home, AUGENTA_API_URL: "", AUGENTA_INGEST_URL: "", ...(opts.env ?? {}) },
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
     stdout: "pipe",
     stderr: "pipe",

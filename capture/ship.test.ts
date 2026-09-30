@@ -1138,6 +1138,9 @@ describe("the shipper process renews a stale sign-in even when another drain hol
       expect(acquireLock(project)).toBe(true); // the other, still-running drain
       const env: Record<string, string> = { ...(process.env as Record<string, string>), AUGENTA_AUTH_HOME: authHome };
       delete env.AUGENTA_CAPTURE_ENABLED;
+      // A contributor's exported gateway variables would leave this checkout unjoined.
+      delete env.AUGENTA_API_URL;
+      delete env.AUGENTA_INGEST_URL;
       const child = Bun.spawn(["bun", join(import.meta.dir, "ship.ts"), project], { env, stdout: "ignore", stderr: "ignore" });
       expect(await child.exited).toBe(0);
       expect(refreshes).toBe(1);

@@ -118,8 +118,8 @@ in the environment that started the coding app points connect at another
 gateway, and connect does not sign in or send to a gateway the environment alone
 chose. If the user did not set it, say it may come from a committed
 `.claude/settings.json` (an `env` block) and that its history is worth checking.
-Do not work around it with `--endpoint`. On `override_config_tracked`, report
-`message` and stop.
+Do not work around it with `--endpoint`. On `override_config_tracked` or
+`gateway_override_conflict`, report `message` and stop.
 
 A Git worktree is a separate project consent boundary. Connect writes to the
 current worktree, not the main checkout or its siblings. Name `projectRoot`

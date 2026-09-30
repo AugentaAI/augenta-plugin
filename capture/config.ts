@@ -49,9 +49,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { hasStoredProfile, storedProfileGateway, storedProfileUserId } from "./auth";
-import { insideGitCheckout } from "./environment";
 import { readLinks } from "./links";
-import { gitTracks, resolveProjectRoot } from "./project";
+import { gitTracking, resolveProjectRoot } from "./project";
 import { displayOrigin, sameOrigin } from "./url";
 export { resolveProjectRoot } from "./project";
 
@@ -276,7 +275,7 @@ export function loadProjectConfig(
             ...(own ? { signedInFor: own } : {}),
             // The file as written, without the environment: if it alone routes to
             // the sign-in's gateway, only a variable is pointing elsewhere.
-            cause: own && fileRoutesOnlyTo(own, settings) ? "environment" : "file",
+            cause: own && routesOnlyTo(own, settings, {}) ? "environment" : "file",
           };
       const routes: ReturnType<typeof joinedRoutes> = gatewayMismatch ? { join: "gateway" } : joined;
       return {
@@ -333,18 +332,20 @@ export function controlUrl(cfg?: ProjectConfig, flag?: string): string {
   ).replace(/\/+$/, "");
 }
 
-export function gatewayBase(cfg?: Pick<ProjectConfig, "endpoint">, flag?: string): string {
-  return (flag?.trim() || process.env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(
+/** `env` is the process environment unless a caller asks what the file alone
+ *  resolves to (`{}`), as the gateway check does to tell its causes apart. */
+export function gatewayBase(cfg?: Pick<ProjectConfig, "endpoint">, flag?: string, env: NodeJS.ProcessEnv = process.env): string {
+  return (flag?.trim() || env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(
     /\/+$/,
     "",
   );
 }
 
-export function experiencesUrl(cfg?: Pick<ProjectConfig, "endpoint" | "ingestUrl">): string {
+export function experiencesUrl(cfg?: Pick<ProjectConfig, "endpoint" | "ingestUrl">, env: NodeJS.ProcessEnv = process.env): string {
   return (
-    process.env.AUGENTA_INGEST_URL ||
+    env.AUGENTA_INGEST_URL ||
     cfg?.ingestUrl ||
-    `${gatewayBase(cfg)}/v1/experiences`
+    `${gatewayBase(cfg, undefined, env)}/v1/experiences`
   );
 }
 
@@ -360,14 +361,12 @@ export function experiencesUrl(cfg?: Pick<ProjectConfig, "endpoint" | "ingestUrl
  * when running connect, which then signs in for that gateway, so this still
  * holds (DEBUG.md).
  */
-export function routesOnlyTo(gateway: string, cfg: Pick<ProjectConfig, "endpoint" | "ingestUrl">): boolean {
-  return gatewayBase(cfg) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg), gateway);
-}
-
-/** {@link routesOnlyTo} for the file as written, leaving the environment out. */
-function fileRoutesOnlyTo(gateway: string, cfg: Pick<ProjectConfig, "endpoint" | "ingestUrl">): boolean {
-  const base = (cfg.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
-  return base === gateway.replace(/\/+$/, "") && sameOrigin(cfg.ingestUrl || `${base}/v1/experiences`, gateway);
+export function routesOnlyTo(
+  gateway: string,
+  cfg: Pick<ProjectConfig, "endpoint" | "ingestUrl">,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return gatewayBase(cfg, undefined, env) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg, env), gateway);
 }
 
 /**
@@ -397,16 +396,10 @@ export function describeGatewayMismatch(mismatch: GatewayMismatch): string {
     : `${mismatch.sendsTo}, which this checkout's sign-in does not record as its gateway`;
 }
 
-/**
- * A platform-key config's standing with git: tracked, or — inside a checkout
- * where git could not answer — unverified, which is treated the same. Outside
- * any checkout there is nothing to commit it to.
- */
+/** A platform-key config's standing with git ({@link gitTracking}). */
 function keyTracking(projectRoot: string): Pick<ProjectConfig, "keyTracked"> {
-  const tracked = gitTracks(projectRoot, ".augenta/config.json");
-  if (tracked === true) return { keyTracked: "tracked" };
-  if (tracked === undefined && insideGitCheckout(projectRoot)) return { keyTracked: "unverified" };
-  return {};
+  const keyTracked = gitTracking(projectRoot, ".augenta/config.json");
+  return keyTracked ? { keyTracked } : {};
 }
 
 export function captureKilled(): boolean {

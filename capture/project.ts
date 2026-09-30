@@ -10,6 +10,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { insideGitCheckout } from "./environment";
 
 export interface ResolvedProject {
   projectRoot: string;
@@ -50,6 +51,18 @@ export function isTrackedByGit(projectRoot: string, relativePath: string): boole
  * no answer. A caller guarding something git would reveal decides what an
  * unanswered question means. Never throws.
  */
+/**
+ * For a file that must never be committed: `tracked` when git tracks it, and
+ * `unverified` inside a checkout where git could not answer — the same verdict,
+ * so a missing `git` cannot open a guard. Outside any checkout (a `.git`
+ * marker, found without git) there is nothing to commit it to: undefined.
+ */
+export function gitTracking(projectRoot: string, relativePath: string): "tracked" | "unverified" | undefined {
+  const tracked = gitTracks(projectRoot, relativePath);
+  if (tracked === true) return "tracked";
+  return tracked === undefined && insideGitCheckout(projectRoot) ? "unverified" : undefined;
+}
+
 export function gitTracks(projectRoot: string, relativePath: string): boolean | undefined {
   try {
     execFileSync("git", ["ls-files", "--error-unmatch", "--", relativePath], {

@@ -15961,53 +15961,15 @@ function takeAuthNotice(projectRoot) {
   return found;
 }
 
-// capture/environment.ts
-import { existsSync as existsSync3 } from "node:fs";
-import { dirname, join as join3, resolve as resolve2 } from "node:path";
-function sessionEnvironment(env = process.env) {
-  const declared = env.AUGENTA_EPHEMERAL?.trim().toLowerCase();
-  if (declared === "0" || declared === "false")
-    return { ephemeral: false, signals: ["AUGENTA_EPHEMERAL=0"] };
-  const signals = [];
-  let kind;
-  if (env.CLAUDE_CODE_REMOTE === "true") {
-    signals.push("CLAUDE_CODE_REMOTE");
-    kind ??= "claude-cloud";
-  }
-  if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {
-    signals.push("CODEX_HOME=/opt/codex (heuristic)");
-    kind ??= "codex-cloud";
-  }
-  if (declared === "1" || declared === "true") {
-    signals.push("AUGENTA_EPHEMERAL=1");
-    kind ??= "declared";
-  }
-  return { ephemeral: signals.length > 0, ...kind ? { kind } : {}, signals };
-}
-function insideGitCheckout(dir) {
-  let current = resolve2(dir);
-  while (true) {
-    if (existsSync3(join3(current, ".git")))
-      return true;
-    const parent = dirname(current);
-    if (parent === current)
-      return false;
-    current = parent;
-  }
-}
-function ephemeralProject(projectRoot, env = process.env) {
-  return sessionEnvironment(env).ephemeral && !insideGitCheckout(projectRoot);
-}
-
 // capture/links.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
 import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join4 } from "node:path";
+import { join as join3 } from "node:path";
 function linksPath(projectRoot) {
-  return join4(projectRoot, ".augenta", "state", "links.json");
+  return join3(projectRoot, ".augenta", "state", "links.json");
 }
 function legacyAdoptionPath(projectRoot) {
-  return join4(projectRoot, ".augenta", "state", "adopted.json");
+  return join3(projectRoot, ".augenta", "state", "adopted.json");
 }
 var nonEmpty = (value) => typeof value === "string" && value.length > 0;
 function readLinks(projectRoot) {
@@ -16043,9 +16005,9 @@ function readLinks(projectRoot) {
   }
 }
 function writeLinks(projectRoot, links) {
-  const dir = join4(ensureAugentaDir(projectRoot), "state");
+  const dir = join3(ensureAugentaDir(projectRoot), "state");
   mkdirSync3(dir, { recursive: true });
-  const path = join4(dir, "links.json");
+  const path = join3(dir, "links.json");
   const tmp = `${path}.${randomUUID2()}.tmp`;
   try {
     writeFileSync3(tmp, JSON.stringify({
@@ -16067,6 +16029,46 @@ function writeLinks(projectRoot, links) {
 import { execFileSync } from "node:child_process";
 import { existsSync as existsSync4, realpathSync as realpathSync2 } from "node:fs";
 import { dirname as dirname2, join as join5, resolve as resolve3 } from "node:path";
+
+// capture/environment.ts
+import { existsSync as existsSync3 } from "node:fs";
+import { dirname, join as join4, resolve as resolve2 } from "node:path";
+function sessionEnvironment(env = process.env) {
+  const declared = env.AUGENTA_EPHEMERAL?.trim().toLowerCase();
+  if (declared === "0" || declared === "false")
+    return { ephemeral: false, signals: ["AUGENTA_EPHEMERAL=0"] };
+  const signals = [];
+  let kind;
+  if (env.CLAUDE_CODE_REMOTE === "true") {
+    signals.push("CLAUDE_CODE_REMOTE");
+    kind ??= "claude-cloud";
+  }
+  if (env.CODEX_HOME?.trim().replace(/\/+$/, "") === "/opt/codex") {
+    signals.push("CODEX_HOME=/opt/codex (heuristic)");
+    kind ??= "codex-cloud";
+  }
+  if (declared === "1" || declared === "true") {
+    signals.push("AUGENTA_EPHEMERAL=1");
+    kind ??= "declared";
+  }
+  return { ephemeral: signals.length > 0, ...kind ? { kind } : {}, signals };
+}
+function insideGitCheckout(dir) {
+  let current = resolve2(dir);
+  while (true) {
+    if (existsSync3(join4(current, ".git")))
+      return true;
+    const parent = dirname(current);
+    if (parent === current)
+      return false;
+    current = parent;
+  }
+}
+function ephemeralProject(projectRoot, env = process.env) {
+  return sessionEnvironment(env).ephemeral && !insideGitCheckout(projectRoot);
+}
+
+// capture/project.ts
 function gitRevParse(cwd, arg) {
   try {
     const value = execFileSync("git", ["rev-parse", arg], {
@@ -16080,6 +16082,12 @@ function gitRevParse(cwd, arg) {
 }
 function isTrackedByGit(projectRoot, relativePath) {
   return gitTracks(projectRoot, relativePath) === true;
+}
+function gitTracking(projectRoot, relativePath) {
+  const tracked = gitTracks(projectRoot, relativePath);
+  if (tracked === true)
+    return "tracked";
+  return tracked === undefined && insideGitCheckout(projectRoot) ? "unverified" : undefined;
 }
 function gitTracks(projectRoot, relativePath) {
   try {
@@ -16228,7 +16236,7 @@ function loadProjectConfig(projectRoot) {
       const gatewayMismatch = joined.join !== "joined" || own && routesOnlyTo(own, settings) ? undefined : {
         sendsTo: own ? routeOutside(own, settings) : displayOrigin(gatewayBase(settings)),
         ...own ? { signedInFor: own } : {},
-        cause: own && fileRoutesOnlyTo(own, settings) ? "environment" : "file"
+        cause: own && routesOnlyTo(own, settings, {}) ? "environment" : "file"
       };
       const routes = gatewayMismatch ? { join: "gateway" } : joined;
       return {
@@ -16279,18 +16287,14 @@ function projectConfig(cwd) {
 function controlUrl(cfg, flag) {
   return (flag?.trim() || process.env.AUGENTA_CONTROL_URL?.trim() || cfg?.controlUrl || DEFAULT_CONTROL_URL).replace(/\/+$/, "");
 }
-function gatewayBase(cfg, flag) {
-  return (flag?.trim() || process.env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
+function gatewayBase(cfg, flag, env = process.env) {
+  return (flag?.trim() || env.AUGENTA_API_URL?.trim() || cfg?.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
 }
-function experiencesUrl(cfg) {
-  return process.env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg)}/v1/experiences`;
+function experiencesUrl(cfg, env = process.env) {
+  return env.AUGENTA_INGEST_URL || cfg?.ingestUrl || `${gatewayBase(cfg, undefined, env)}/v1/experiences`;
 }
-function routesOnlyTo(gateway, cfg) {
-  return gatewayBase(cfg) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg), gateway);
-}
-function fileRoutesOnlyTo(gateway, cfg) {
-  const base = (cfg.endpoint || DEFAULT_GATEWAY).replace(/\/+$/, "");
-  return base === gateway.replace(/\/+$/, "") && sameOrigin(cfg.ingestUrl || `${base}/v1/experiences`, gateway);
+function routesOnlyTo(gateway, cfg, env = process.env) {
+  return gatewayBase(cfg, undefined, env) === gateway.replace(/\/+$/, "") && sameOrigin(experiencesUrl(cfg, env), gateway);
 }
 function routeOutside(gateway, cfg) {
   if (routesOnlyTo(gateway, cfg))
@@ -16303,12 +16307,8 @@ function describeGatewayMismatch(mismatch) {
   return mismatch.signedInFor ? `${mismatch.sendsTo}, not ${displayOrigin(mismatch.signedInFor)}, the gateway this checkout's sign-in was made for` : `${mismatch.sendsTo}, which this checkout's sign-in does not record as its gateway`;
 }
 function keyTracking(projectRoot) {
-  const tracked = gitTracks(projectRoot, ".augenta/config.json");
-  if (tracked === true)
-    return { keyTracked: "tracked" };
-  if (tracked === undefined && insideGitCheckout(projectRoot))
-    return { keyTracked: "unverified" };
-  return {};
+  const keyTracked = gitTracking(projectRoot, ".augenta/config.json");
+  return keyTracked ? { keyTracked } : {};
 }
 function captureKilled() {
   const value = process.env.AUGENTA_CAPTURE_ENABLED;
@@ -16690,7 +16690,7 @@ function captureHealth(projectRoot) {
 }
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.12.0";
+var PLUGIN_VERSION = "0.12.1";
 
 // capture/ship.ts
 import { join as join9, dirname as dirname3 } from "node:path";
