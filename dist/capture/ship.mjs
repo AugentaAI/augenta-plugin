@@ -16866,7 +16866,7 @@ function mediaType(value, fallback = "application/octet-stream") {
   return typeof value === "string" && value.length <= 128 && /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i.test(value) ? value.toLowerCase() : fallback;
 }
 function removePayload(content, mime, payloads) {
-  if (content.startsWith(REFERENCE_PREFIX))
+  if (attachmentHash(content))
     return content;
   const clean = content.replace(/\s/g, "");
   const valid = clean.length > 0 && clean.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(clean);
@@ -16892,22 +16892,23 @@ function isEmptyReasoningValue(value) {
   return typeof value === "object" && Object.keys(value).length === 0;
 }
 function sanitize(value, payloads, inheritedMime) {
+  if (typeof value === "string") {
+    const dataUrl = /^data:([^;,]+);base64,([\s\S]*)$/i.exec(value);
+    return dataUrl ? removePayload(dataUrl[2], mediaType(dataUrl[1]), payloads) : value;
+  }
   if (Array.isArray(value))
     return value.map((child) => sanitize(child, payloads, inheritedMime));
   if (!value || typeof value !== "object")
     return value;
   const object = value;
-  const mime = mediaType(object.media_type ?? object.mediaType, object.type === "pdf" ? "application/pdf" : inheritedMime);
+  const mime = mediaType(object.media_type ?? object.mediaType ?? object.mimeType, object.type === "pdf" ? "application/pdf" : inheritedMime);
   const sanitized = [];
   for (const [key, child] of Object.entries(value)) {
     const normalized = normalizedKey(key);
     if (isOpaqueKey(key))
       continue;
     let sanitizedChild;
-    const dataUrl = typeof child === "string" && ["image_url", "url", "file_data"].includes(key) ? /^data:([^;,]+);base64,([\s\S]*)$/i.exec(child) : null;
-    if (dataUrl) {
-      sanitizedChild = removePayload(dataUrl[2], mediaType(dataUrl[1]), payloads);
-    } else if (typeof child === "string" && (key === "base64" || key === "data" && object.type === "base64")) {
+    if (typeof child === "string" && (key === "base64" || key === "data" && ["base64", "image"].includes(object.type))) {
       sanitizedChild = removePayload(child, mime, payloads);
     } else {
       sanitizedChild = sanitize(child, payloads, mime);

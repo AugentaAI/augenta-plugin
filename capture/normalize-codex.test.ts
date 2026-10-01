@@ -41,6 +41,26 @@ test("Codex image data URLs become references while the image placeholder surviv
   expect(result.raws[0]!.raw).not.toContain(content);
 });
 
+test("Codex UI image copies and nested MCP results are sanitized before either channel sees them", () => {
+  const content = Buffer.alloc(450_000, 65).toString("base64");
+  const lines = [
+    item({ type: "message", role: "user", content: [{ type: "input_image", image_url: `data:image/png;base64,${content}` }] }),
+    item({ type: "user_message", message: "Inspect the image", images: [`data:image/png;base64,${content}`], local_images: [] }, "event_msg"),
+    item({ type: "function_call_output", call_id: "mcp-image", output: { content: [{ type: "image", data: content, mimeType: "image/png" }] } }),
+    item({ type: "message", role: "assistant", content: [{ type: "output_text", text: "turn tail survives" }] }),
+  ];
+  const seen: string[] = [];
+  const result = normalizeCodexRollout({ ctx: codexCtx, startSeq: 0, startOffset: 0, lines, scrub: text => { seen.push(text); return text; } });
+  expect(result.events).toHaveLength(3);
+  expect(result.events[0]!.text).toBe("[input_image]");
+  expect(result.events.at(-1)!.text).toBe("turn tail survives");
+  expect(result.raws).toHaveLength(4);
+  expect(result.raws[1]!.raw).toContain("[augenta attachment sha256:");
+  expect(seen.every(text => !text.includes(content))).toBe(true);
+  expect(JSON.stringify(result)).not.toContain(content);
+  expect(result.nextOffset).toBe(Buffer.byteLength(lines.join("\n") + "\n"));
+});
+
 describe("normalizeCodexRollout — out-of-band model and token usage", () => {
   // Codex reports neither the model nor token usage on the item lines
   // themselves: the model arrives on a `turn_context` line and usage on an

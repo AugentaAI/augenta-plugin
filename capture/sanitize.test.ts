@@ -81,6 +81,29 @@ describe("embedded attachment sanitation", () => {
     expect(values[0].source.data).toBe(values[1].image_url);
     expect(values[1].image_url).toBe(values[2].image_url.url);
   });
+  test("strips Codex UI image arrays and MCP image data with the same content identity", () => {
+    const image = Buffer.from("fixture image bytes").toString("base64");
+    const record = sanitizeTelemetryRecord(JSON.stringify({
+      payload: { type: "user_message", images: [`data:image/png;base64,${image}`], local_images: ["/project/image.png"] },
+      result: { content: [{ type: "image", data: image, mimeType: "image/png" }, { type: "text", text: "keep this result" }] },
+    }))!;
+    const value = record.value as any;
+    const reference = value.payload.images[0];
+    expect(record.json).not.toContain(image);
+    expect(value.result.content[0].data).toBe(reference);
+    expect(value.result.content[1].text).toBe("keep this result");
+    expect(value.payload.local_images).toEqual(["/project/image.png"]);
+    expect(record.payloads.get(attachmentHash(reference)!)).toMatchObject({ mediaType: "image/png", content: image, valid: true });
+    expect(sanitizeTelemetryRecord(record.json)!.json).toBe(record.json);
+    expect(sanitizeTelemetryRecord(record.json)!.payloads.size).toBe(0);
+  });
+  test("a malformed reference prefix cannot bypass removal of a declared binary field", () => {
+    const value = "[augenta attachment sha256:malformed]" + content;
+    const record = sanitizeTelemetryRecord(JSON.stringify({ type: "image", data: value, mimeType: "image/png" }))!;
+    expect(record.json).not.toContain(content);
+    expect(record.payloads.size).toBe(1);
+    expect([...record.payloads.values()][0]!.valid).toBe(false);
+  });
   test("preserves text sources, ordinary data and remote URLs", () => {
     const value = { source: { type: "text", data: "complete document" }, data: content,
       image_url: "https://example.invalid/photo.png" };

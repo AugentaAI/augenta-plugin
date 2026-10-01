@@ -41,6 +41,19 @@ test("embedded PDF bytes are removed before tool-result text is scrubbed", () =>
   expect(result.raws[0]!.raw).not.toContain(content);
 });
 
+test("MCP image bytes in nested Claude tool results are removed before scrubbing", () => {
+  const content = Buffer.from("fixture MCP image").toString("base64");
+  const seen: string[] = [];
+  const result = normalizeClaudeTranscript({ ctx, startSeq: 0, startOffset: 0,
+    lines: [lineFor({ type: "user", message: { content: [{ type: "tool_result", content: [
+      { type: "image", data: content, mimeType: "image/png" }, { type: "text", text: "image result" },
+    ] }] } })], scrub: text => { seen.push(text); return text; } });
+  expect(seen[0]).toContain("[augenta attachment sha256:");
+  expect(seen[0]).toContain("image result");
+  expect(JSON.stringify(result.events)).not.toContain(content);
+  expect(result.raws[0]!.raw).not.toContain(content);
+});
+
 describe("extractText", () => {
   test("returns plain strings unchanged", () => {
     expect(extractText("hello")).toBe("hello");
