@@ -617,6 +617,17 @@ describe("renderRecallContext", () => {
     expect(text).not.toContain("note one");
   });
 
+  test("one note too long for its share, with no summary, is cut and marked rather than left out", () => {
+    const note = `the only note ${"n".repeat(20_000)}`;
+    const text = renderRecallContext(payload([{
+      workspaceName: "A", mode: "context", answer: note, memory: { summaries: [], notes: [note] },
+    }]));
+    expect(text.length).toBeLessThanOrEqual(MAX_CONTEXT_CHARS);
+    expect(text).toContain("## A: remembered notes (a selection of its notes)\nthe only note ");
+    expect(text).toContain("cut by the Augenta plugin");
+    expect(text).not.toContain("left out by the Augenta plugin");
+  });
+
   test("dropped notes leave room for another Workspace's section", () => {
     const notes = Array.from({ length: 20 }, (_, i) => `a-note-${i} ${"a".repeat(600)}`);
     const text = renderRecallContext(payload([

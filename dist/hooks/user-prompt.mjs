@@ -3428,6 +3428,8 @@ function fitNotes(summaries, notes, share) {
 `);
   for (let dropped = 0;dropped <= notes.length; dropped++) {
     const kept = notes.slice(dropped);
+    if (!summary && !kept.length)
+      return;
     const body = [summary, ...kept].filter(Boolean).join(`
 
 `) + (dropped ? droppedLine(dropped) : "");

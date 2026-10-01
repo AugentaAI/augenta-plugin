@@ -201,13 +201,15 @@ const droppedLine = (dropped: number) =>
 /**
  * `memory` within `share` characters: the summaries whole, then as many of the
  * NEWEST notes as fit, and a line saying how many older ones were left out. No
- * note is ever cut. Undefined when the summaries alone do not fit, which leaves
- * the caller its cut-text fallback.
+ * note is ever cut. Undefined when the summaries alone do not fit, or when
+ * nothing but the left-out line would, which leaves the caller its cut-text
+ * fallback.
  */
 function fitNotes(summaries: string[], notes: string[], share: number): string | undefined {
   const summary = summaries.join("\n\n");
   for (let dropped = 0; dropped <= notes.length; dropped++) {
     const kept = notes.slice(dropped);
+    if (!summary && !kept.length) return undefined;
     const body = [summary, ...kept].filter(Boolean).join("\n\n") + (dropped ? droppedLine(dropped) : "");
     if (body.length <= share) return body;
   }
