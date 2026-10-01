@@ -1,36 +1,29 @@
 /**
- * Project-memory capture.
+ * Project-memory capture, separate from consented transcript attachments.
  *
  * Memory is deliberately a second capture path: it is scanned only at session
  * boundaries, scrubbed before it reaches the durable outbox, and emitted as
  * standalone `type: "doc"` experiences. It never becomes a trajectory event
  * and is never placed in the raw transcript `data` channel.
  */
-import { createHash } from "node:crypto";
 import {
   type Dirent,
   type Stats,
   existsSync,
   lstatSync,
-  mkdirSync,
   readFileSync,
   readdirSync,
-  readlinkSync,
   realpathSync,
-  renameSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AgentMemoryDocument, DocumentRecord, EventSource } from "./event";
-import { ensureAugentaDir } from "./augenta-dir";
+import { sha256, chunkText, physicalPath, isScopedToProject, boundedTitle, normalizeLogicalPath, sameSnapshot, readDocumentIndex, writeDocumentIndex } from "./documents";
+export { MAX_DOCUMENT_EXPERIENCE_BYTES } from "./documents";
 import { Outbox } from "./outbox";
 import { scrub as defaultScrub } from "./scrub";
 import type { Scrubber } from "./normalize";
-
-/** The same per-experience wire cap the shipper enforces for trajectories. */
-export const MAX_DOCUMENT_EXPERIENCE_BYTES = 512 * 1024;
 
 type MemoryHarness = EventSource;
 
@@ -87,23 +80,6 @@ interface ScanResult {
   documents: MemoryCandidate[];
 }
 
-function sameSnapshot(before: Stats, after: Stats): boolean {
-  return before.dev === after.dev &&
-    before.ino === after.ino &&
-    before.mode === after.mode &&
-    before.size === after.size &&
-    before.mtimeMs === after.mtimeMs &&
-    before.ctimeMs === after.ctimeMs;
-}
-
-function sha256(input: string): string {
-  return createHash("sha256").update(input).digest("hex");
-}
-
-function memoryStatePath(projectRoot: string): string {
-  return join(projectRoot, ".augenta", "state", "memory.json");
-}
-
 function validEntry(value: unknown): value is MemoryStateEntry {
   const e = value as Record<string, unknown> | null;
   return !!e &&
@@ -117,39 +93,11 @@ function validEntry(value: unknown): value is MemoryStateEntry {
 }
 
 function readMemoryIndex(projectRoot: string): MemoryIndex {
-  try {
-    const parsed = JSON.parse(readFileSync(memoryStatePath(projectRoot), "utf8")) as Record<string, unknown>;
-    const rawDocuments = parsed.documents as Record<string, unknown> | undefined;
-    if (!parsed || parsed.version !== 1 || !rawDocuments || typeof rawDocuments !== "object") {
-      return { version: 1, documents: {} };
-    }
-    const documents: Record<string, MemoryStateEntry> = {};
-    for (const [id, entry] of Object.entries(rawDocuments)) {
-      if (validEntry(entry) && entry.documentId === id) documents[id] = entry;
-    }
-    return { version: 1, documents };
-  } catch {
-    return { version: 1, documents: {} };
-  }
+  return { version: 1, documents: readDocumentIndex(projectRoot, "memory.json", validEntry) };
 }
 
-/** Atomically persist state only after every record for a revision reached the outbox. */
 function writeMemoryIndex(projectRoot: string, index: MemoryIndex): boolean {
-  const stateDir = join(ensureAugentaDir(projectRoot), "state");
-  const path = join(stateDir, "memory.json");
-  const tmp = path + ".tmp";
-  try {
-    mkdirSync(stateDir, { recursive: true });
-    writeFileSync(tmp, JSON.stringify(index));
-    renameSync(tmp, path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function boundedTitle(title: string): string {
-  return [...title].slice(0, 512).join("");
+  return writeDocumentIndex(projectRoot, "memory.json", index.documents);
 }
 
 function markdownTitle(text: string, fallback: string): string {
@@ -157,10 +105,6 @@ function markdownTitle(text: string, fallback: string): string {
   // Keep document metadata comfortably below the envelope cap even if a source
   // contains a deliberately enormous heading.
   return boundedTitle(heading || fallback);
-}
-
-function normalizeLogicalPath(path: string): string {
-  return path.split(sep).join("/");
 }
 
 /** Claude Code memory is sibling to the session transcript directory. */
@@ -235,65 +179,6 @@ function scanClaudeMemory(transcriptPath: string | undefined): ScanResult {
   };
   walk(root);
   return { complete, documents };
-}
-
-/** Linux's MAXSYMLINKS: more hops than this is a loop, not a real location. */
-const MAX_SYMLINK_HOPS = 40;
-
-/** Where `path` points if it is itself a symlink, whether or not the target exists. */
-function symlinkTarget(path: string): string | undefined {
-  try {
-    return lstatSync(path).isSymbolicLink() ? resolve(dirname(path), readlinkSync(path)) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * An absolute path's physical form: its nearest existing ancestor with every
- * symlink resolved, and whatever no longer (or does not yet) exist re-appended.
- * Scope is decided on physical paths on both sides, the way the project lookup
- * resolves its input, so a logical alias of the project (macOS /var →
- * /private/var, a symlinked projects folder) matches it, and a symlink inside
- * the project that points elsewhere does not — including a dangling one, which
- * is followed to where it points rather than read as a missing folder here. A
- * Task Group can outlive the directory it names, which is why a missing tail
- * falls back to its ancestor instead of failing. A symlink loop has no physical
- * location, so it is `undefined` and never in scope.
- *
- * Unlike the project lookup, scope does not stop at a checkout nested inside
- * the project; that is a separate consent question, left as it was.
- */
-function physicalPath(path: string): string | undefined {
-  let existing = resolve(path);
-  const missing: string[] = [];
-  let hops = 0;
-  while (true) {
-    try {
-      return join(realpathSync(existing), ...missing);
-    } catch {
-      /* resolved below */
-    }
-    const target = symlinkTarget(existing);
-    if (target !== undefined) {
-      if (++hops > MAX_SYMLINK_HOPS) return undefined;
-      existing = target;
-      continue;
-    }
-    const parent = dirname(existing);
-    if (parent === existing) return resolve(path);
-    missing.unshift(basename(existing));
-    existing = parent;
-  }
-}
-
-/** `root` must already be physical (see {@link physicalPath}). */
-function isScopedToProject(scope: string, root: string): boolean {
-  if (!isAbsolute(scope)) return false;
-  const target = physicalPath(scope);
-  if (target === undefined) return false;
-  const rel = relative(root, target);
-  return rel === "" || (!rel.startsWith(".." + sep) && rel !== ".." && !isAbsolute(rel));
 }
 
 interface MarkdownH1 {
@@ -419,60 +304,6 @@ function documentId(source: MemoryHarness, projectRoot: string, candidate: Memor
 
 function revision(text: string, deleted: boolean): string {
   return sha256(`${deleted ? "deleted" : "live"}\0${text}`);
-}
-
-function jsonBytes(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value), "utf8");
-}
-
-function safeBoundary(text: string, index: number): number {
-  if (index > 0 && index < text.length) {
-    const previous = text.charCodeAt(index - 1);
-    const next = text.charCodeAt(index);
-    if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) return index - 1;
-  }
-  return index;
-}
-
-function chunkText(
-  text: string,
-  makeRecord: (chunk: string, chunkIndex: number, chunkCount: number) => DocumentRecord,
-): string[] {
-  if (text.length === 0) return [""];
-  const chunks: string[] = [];
-  let start = 0;
-  // Larger than any realistic document chunk index/count. If this envelope
-  // fits, substituting the actual smaller numbers can only shrink it.
-  const sizingIndex = 999_999_999;
-  while (start < text.length) {
-    let lo = start + 1;
-    let hi = text.length;
-    let best = -1;
-    while (lo <= hi) {
-      const rawMid = Math.floor((lo + hi) / 2);
-      const mid = safeBoundary(text, rawMid);
-      if (mid <= start) {
-        lo = rawMid + 1;
-        continue;
-      }
-      const chunk = text.slice(start, mid);
-      if (jsonBytes(makeRecord(chunk, sizingIndex, sizingIndex)) < MAX_DOCUMENT_EXPERIENCE_BYTES) {
-        best = mid;
-        lo = rawMid + 1;
-      } else {
-        hi = rawMid - 1;
-      }
-    }
-    if (best <= start) {
-      // Metadata is bounded above, so a single Unicode scalar always fits. If
-      // an impossible future schema breaks that invariant, fail closed instead
-      // of spooling an over-limit experience that would wedge delivery.
-      return [];
-    }
-    chunks.push(text.slice(start, best));
-    start = best;
-  }
-  return chunks;
 }
 
 function makeLiveRecords(

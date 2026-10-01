@@ -33,7 +33,8 @@ import { captureLock } from "./capture-lock";
 import { recordHealth } from "./health";
 import { normalizeNativeTurns } from "./native-turns";
 import { TurnState } from "./turn-cursor";
-import { captureEnabled, effectiveCaptureSince, projectConfig, resolveProjectRoot } from "./config";
+import { attachmentCaptureMode, captureEnabled, effectiveCaptureSince, loadProjectConfig, projectConfig, resolveProjectRoot } from "./config";
+import { commitAttachments, prepareAttachments } from "./attachments";
 import { setAugentaIgnore } from "./augenta-dir";
 import { captureAgentMemory } from "./memory";
 import { spawnShipper } from "./shipper";
@@ -404,9 +405,15 @@ function captureUnderLock(
     startSeq: cursor.seq,
     startOffset: readFrom,
     scrub,
+    attachmentContext: cursor.attachmentContext,
   };
   const native = codex ? normalizeNativeTurns(normalizeOpts, cursor.nativeTurns, opts.captureSince) : undefined;
-  const { events, raws: rawLines, nextSeq, nextOffset, lastModel } = native ?? normalize(normalizeOpts);
+  const { events, documents, attachmentContext, raws: rawLines, nextSeq, nextOffset, lastModel } = native ?? normalize(normalizeOpts);
+  const cfg = loadProjectConfig(projectRoot);
+  const attachmentsEnabled = !!cfg && captureEnabled(cfg) && attachmentCaptureMode() === "documents" && !!cfg.attachmentsConsentedAt;
+  const attachments = prepareAttachments(projectRoot, src, documents, {
+    consentedAt: cfg?.attachmentsConsentedAt, enabled: attachmentsEnabled, scrub,
+  });
 
   // Raw-telemetry channel: one RawRecord per consumed non-blank valid JSON line,
   // structurally sanitized but otherwise UNSCRUBBED — including lines that
@@ -473,9 +480,9 @@ function captureUnderLock(
   // finalSeq is bumped again below if a drop marker consumes a seq of its
   // own, so a later real event can never collide with it either.
   let accepted = true;
-  if (events.length + raws.length > 0) {
+  if (events.length + raws.length + attachments.records.length > 0) {
     const box = new Outbox(projectRoot, { maxSpoolBytes: opts.maxSpoolBytes });
-    const ok = box.append(native?.records ?? [...events, ...raws]);
+    const ok = box.append([...(native?.records ?? [...events, ...raws]), ...attachments.records]);
     accepted = ok;
     if (!ok) recordHealth(projectRoot, "capture", "spool_full");
     if (!ok && box.markDropped()) {
@@ -510,6 +517,13 @@ function captureUnderLock(
       finalSeq += 1;
     }
   }
+  const attachmentStateAccepted = !attachmentsEnabled || !accepted || commitAttachments(projectRoot, attachments);
+  if (attachmentsEnabled && documents.length) {
+    // Size and file failures remain visible independently of trajectory capture.
+    recordHealth(projectRoot, "attachments", !accepted ? "spool_full" : !attachmentStateAccepted ? "failed" : attachments.tooLarge ? "too_large"
+      : attachments.skipped ? "skipped" : attachments.captured ? "captured" : "idle",
+      !accepted ? 0 : attachments.captured || attachments.tooLarge || attachments.skipped);
+  }
   // Always advance past consumed bytes — lines that produced no event (e.g.
   // empty/system markers) must not be re-scanned forever.
   //
@@ -522,6 +536,7 @@ function captureUnderLock(
     seq: finalSeq,
     ...(payload.hook_event_name === "PreCompact" ? { rebaseline: true } : {}),
     ...(lastModel ?? cursor.model ? { model: lastModel ?? cursor.model } : {}),
+    ...(attachmentContext && payload.hook_event_name !== "PreCompact" ? { attachmentContext } : {}),
   });
 
   if (accepted) recordHealth(projectRoot, "capture", events.length ? "captured" : "idle", events.length);

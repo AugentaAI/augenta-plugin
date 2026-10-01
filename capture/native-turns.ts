@@ -30,6 +30,7 @@ export function normalizeNativeTurns(
   opts: NormalizeOpts,
   prior?: NativeTurns,
   captureSince?: string,
+  normalizeBatch: (opts: NormalizeOpts) => NormalizeResult = normalizeCodexRollout,
 ): NormalizeResult & { records: Array<CaptureEvent | RawRecord>; turns: NativeTurns } {
   const turns: NativeTurns = prior
     ? { ...prior, ids: { ...prior.ids } }
@@ -40,6 +41,7 @@ export function normalizeNativeTurns(
   turns.captureSince = captureSince;
   const events: CaptureEvent[] = [];
   const raws: NormalizeResult["raws"] = [];
+  const documents: NormalizeResult["documents"] = [];
   const records: Array<CaptureEvent | RawRecord> = [];
   let nextSeq = opts.startSeq;
   let nextOffset = opts.startOffset;
@@ -52,7 +54,7 @@ export function normalizeNativeTurns(
 
   const flush = () => {
     if (!batch.length) return;
-    const result = normalizeCodexRollout({ ...opts, lines: batch,
+    const result = normalizeBatch({ ...opts, lines: batch,
       startSeq: nextSeq, startOffset: nextOffset, ctx: { ...opts.ctx, model } });
     nextOffset = result.nextOffset;
     model = result.lastModel ?? model;
@@ -70,7 +72,7 @@ export function normalizeNativeTurns(
           turn: batchTurn, turn_source: batchSource,
           text: "[augenta: transcript records with no mappable steps — raw channel attached]" });
       }
-      events.push(...result.events); raws.push(...result.raws);
+      events.push(...result.events); raws.push(...result.raws); documents.push(...result.documents);
       records.push(...result.events, ...rawRecords);
     }
     batch = [];
@@ -106,7 +108,7 @@ export function normalizeNativeTurns(
     }
   }
   flush();
-  return { events, raws, records, nextSeq, nextOffset, lastModel: model, turns };
+  return { events, documents, raws, records, nextSeq, nextOffset, lastModel: model, turns };
 }
 
 function timestampOf(raw: string | undefined): string {

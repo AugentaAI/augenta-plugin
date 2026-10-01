@@ -134,6 +134,36 @@ recall; untrack it with `git rm --cached .augenta/config.json`.
 Recall uses saved Workspace names immediately and refreshes names for its output
 when the live list is available; it does not update the file.
 
+## Attachment consent and upgrades
+
+Connect and joining with `--adopt` disclose document capture and record
+`attachmentsConsentedAt` in this checkout's `.augenta/state/links.json`.
+It does not go in a browser project's shared `config.json`. The effective time
+is available only while this checkout is joined under its own sign-in, project
+and exact Workspace set. Existing joins keep their current activity and memory
+capture with attachments disabled until reconnecting or joining again.
+After reconnecting or joining again, a fresh supply reaches the current
+Workspace set even when the document is unchanged. Duplicate supplies under
+that consent are omitted, and revision ordering remains enforced across renewals.
+
+Attachment observations must have an originating transcript timestamp at or after
+consent; earlier history is not rescanned. For a mention, its initiating prompt
+must also follow consent. Text is scrubbed and split; whole PDFs are not
+secret-scrubbed, and every selected Workspace receives them. The supported PDF
+Read path includes temporary/generated PDFs and page-range references.
+
+Upgrade **every installed harness** that shares the project queue before
+enabling attachments. Older shippers may silently skip attachment records. Codex
+will ask for renewed hook trust because the hook manifest changes in this release.
+Set `AUGENTA_CAPTURE_ATTACHMENTS=0`, `off` or `false` to stop new attachments.
+`all` still excludes images. The main capture kill switch also stops them.
+
+For an API-key config you write yourself, attachments are off unless you add
+`attachmentsConsentedAt` as an explicit ISO timestamp after accepting the same
+disclosure. It belongs only in the untracked local config. The human/CI
+`connect --api-key` path records it after displaying the disclosure; neither
+key verification nor sign-in repair changes consent.
+
 ## CI or a service
 
 A job without a browser uses an API key. Its key is tied to one Connector and

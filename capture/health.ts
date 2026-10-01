@@ -6,11 +6,11 @@ import { captureGate, loadProjectConfig } from "./config";
 import { ensureAugentaDir } from "./augenta-dir";
 import { Outbox } from "./outbox";
 
-const STAGES = ["dispatch", "capture", "delivery"] as const;
+const STAGES = ["dispatch", "capture", "attachments", "delivery"] as const;
 type Stage = typeof STAGES[number];
-type Outcome = "started" | "captured" | "idle" | "missing_transcript" | "failed" | "accepted" | "rejected" | "retry" | "spool_full";
+type Outcome = "started" | "captured" | "idle" | "missing_transcript" | "failed" | "accepted" | "rejected" | "retry" | "spool_full" | "too_large" | "skipped";
 interface Activity { at: string; outcome: Outcome; count: number; successes: number; lastSuccessAt?: string }
-const outcomes = new Set<Outcome>(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
+const outcomes = new Set<Outcome>(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full", "too_large", "skipped"]);
 function read(projectRoot: string, stage: Stage): Activity | undefined {
   try {
     const s = JSON.parse(readFileSync(join(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));

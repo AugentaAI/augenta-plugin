@@ -63,7 +63,7 @@ const CODEX_UI: Record<string, string[]> = {
 };
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.12.2";
+const RELEASE_VERSION = "0.13.1";
 /** How many values the release must set. AGENTS.md → Releases lists them, and a
  *  test below asserts its count is this one. */
 const RELEASE_SURFACES = 8;
@@ -1474,4 +1474,17 @@ describe("the committed dist/ is reproducible", () => {
     // `bun`, and a skipped script leaves node_modules/.bin/bun a placeholder.
     expect(packageJson.trustedDependencies, "the bun devDependency's postinstall is not trusted").toContain("bun");
   });
+});
+
+test("attachment health is a separate public contract and both join disclosures name PDF privacy", () => {
+  const health = readFileSync(join(PLUGIN_ROOT, "capture/health.ts"), "utf8");
+  expect(health).toContain('["dispatch", "capture", "attachments", "delivery"]');
+  const skill = readFileSync(join(PLUGIN_ROOT, "skills/connect/SKILL.md"), "utf8");
+  const adopt = skill.slice(skill.indexOf("### If this checkout has not joined"), skill.indexOf("## 2."));
+  const choose = skill.slice(skill.indexOf("## 3."), skill.indexOf("## 4."));
+  for (const disclosure of [adopt, choose]) {
+    expect(disclosure).toContain("not secret-scrubbed");
+    expect(disclosure).toContain("PDF");
+    expect(disclosure).toContain("upgrade");
+  }
 });

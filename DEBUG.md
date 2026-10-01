@@ -354,7 +354,8 @@ configuration and activity it inspected. It uses the same nearest-config lookup
 as capture and never substitutes the main checkout for a worktree. `configuration`
 distinguishes missing, invalid and valid configuration. `configured` means the config parsed;
 `dispatch` means a Node hook entrypoint ran; `capture` records the latest local
-capture result; `pendingBytes` is the current queue depth; `delivery` records API
+capture result; `attachments` separately records captured/skipped/too_large documents;
+`pendingBytes` is the current queue depth; `delivery` records API
 acceptance/retry/rejection. Success counters count observed successful capture
 passes and accepted HTTP requests, not unique turns or lifetime deliveries.
 `lastSuccessAt` survives a later failure and spool compaction. Ingestion into the

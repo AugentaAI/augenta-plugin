@@ -16,6 +16,7 @@ import { join, dirname } from "node:path";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { validNativeTurns, type NativeTurns } from "./native-turns";
 import { ensureAugentaDir } from "./augenta-dir";
+import { validAttachmentContext, type AttachmentContext } from "./attachments";
 
 export interface CaptureCursor {
   /** Byte offset in the transcript already consumed. */
@@ -38,6 +39,7 @@ export interface CaptureCursor {
    */
   model?: string;
   nativeTurns?: NativeTurns;
+  attachmentContext?: AttachmentContext;
 }
 
 const ZERO: CaptureCursor = { offset: 0, seq: 0 };
@@ -79,6 +81,7 @@ export class CaptureState {
     }
     return {
       ...(validNativeTurns(c.nativeTurns) ? { nativeTurns: c.nativeTurns } : {}),
+      ...(validAttachmentContext(c.attachmentContext) ? { attachmentContext: c.attachmentContext } : {}),
       offset: c.offset,
       seq: c.seq,
       ...(c.rebaseline === true ? { rebaseline: true } : {}),

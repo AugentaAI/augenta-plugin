@@ -17,6 +17,7 @@
  */
 import { type CaptureEvent, type EventKind, type EventRole, type ToolStatus } from "./event";
 import { isClaudeAutoRecallRecord } from "./auto-recall-marker";
+import { extractClaudeAttachments } from "./attachments";
 import { agentSid, tailToEvents, type NormalizeCtx, type NormalizeOpts, type NormalizeResult, type Scrubber } from "./normalize-core";
 
 interface ContentBlock {
@@ -238,7 +239,8 @@ function normalizeLine(line: TranscriptLine, ctx: NormalizeCtx, seq: number, off
 export function normalizeClaudeTranscript(opts: NormalizeOpts): NormalizeResult {
   const { lines, ctx, startSeq, startOffset } = opts;
   const scrub = opts.scrub ?? ((t) => t);
-  return tailToEvents(
+  let attachmentContext = opts.attachmentContext;
+  const result = tailToEvents(
     lines,
     startSeq,
     startOffset,
@@ -261,5 +263,11 @@ export function normalizeClaudeTranscript(opts: NormalizeOpts): NormalizeResult 
     // records Claude Code writes for it, is remembered memory rather than this
     // session's activity: dropped from both channels (auto-recall-marker.ts).
     (sanitized) => (isClaudeAutoRecallRecord(sanitized) ? "drop" : undefined),
+    (sanitized, payloads) => {
+      const extracted = extractClaudeAttachments(sanitized, payloads, ctx.project, attachmentContext);
+      attachmentContext = extracted.context;
+      return extracted.documents;
+    },
   );
+  return { ...result, attachmentContext };
 }
