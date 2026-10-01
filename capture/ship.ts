@@ -9,7 +9,7 @@
  * `Experience` envelopes — CaptureEvents fill `events` (scrubbed, applied
  * before they reached the outbox), RawRecords fill `data` (otherwise-raw
  * transcript lines structurally sanitized for opaque reasoning and file bytes).
- * Standalone scrubbed memory documents pass
+ * Standalone scrubbed text/memory documents and consented whole PDFs pass
  * through as `type: "doc"` envelopes with no `events` field. The shipper sends
  * them together as `{ experiences: [...] }`; the server owns everything
  * downstream.
@@ -43,6 +43,7 @@
  * location.
  */
 import { recordHealth } from "./health";
+import { chunkText } from "./documents";
 import { isMain } from "../runtime/node";
 import { PLUGIN_VERSION } from "../runtime/version";
 import { join, dirname } from "node:path";
@@ -84,6 +85,7 @@ import { createPluginTelemetry, type PluginTelemetry } from "./telemetry";
  * CJK text is ~3 UTF-8 bytes per UTF-16 unit, so `.length` would under-count 3×.
  */
 export const MAX_EXPERIENCE_BYTES = 512 * 1024;
+export const MAX_PENDING_SLICE_BYTES = 2 * 1024 * 1024;
 
 /**
  * Per-POST body budget: experiences are greedily packed into `{experiences:
@@ -243,6 +245,14 @@ export const DOCUMENT_TRUNCATION_MARKER = " …[augenta: document text truncated
 
 function boundDocumentExperience(exp: DocumentExperience): DocumentExperience[] {
   if (jsonBytes(exp) <= MAX_EXPERIENCE_BYTES) return [exp];
+  // A PDF is indivisible: truncation would create corrupt bytes. Attachments
+  // with text are split before appending; oversized legacy text can be split here.
+  if (exp.data.kind === "agent-attachment") {
+    if (exp.data.encoding === "base64" || exp.data.chunkCount !== 1) return [];
+    const data = exp.data;
+    const chunks = chunkText(data.text, (text, chunkIndex, chunkCount) => ({ ...exp, data: { ...data, text, chunkIndex, chunkCount } }));
+    return chunks.map((text, chunkIndex) => ({ ...exp, data: { ...data, text, chunkIndex, chunkCount: chunks.length } }));
+  }
   let lo = 0;
   let hi = exp.data.text.length;
   let best: DocumentExperience | undefined;
@@ -477,6 +487,8 @@ export interface DrainOptions {
   projectRoot: string;
   /** Max spool records per slice — events, raws, and documents combined. */
   maxBatch?: number;
+  /** Pending spool bytes per slice; one larger legacy record is allowed alone. */
+  maxSliceBytes?: number;
   /** Safety cap on batches per drain (a runaway backstop). */
   maxBatches?: number;
   telemetry?: PluginTelemetry;
@@ -512,7 +524,8 @@ export function shippingNotice(
 /**
  * Drain the outbox in slices until empty, a POST is TRANSIENTLY rejected, or
  * the slice cap is hit. `maxBatch` bounds all spool record kinds per
- * slice; each experience is size-bounded ({@link boundExperienceSize}) and the
+ * slice, with a {@link MAX_PENDING_SLICE_BYTES} byte budget and one larger
+ * legacy record allowed alone; each experience is size-bounded ({@link boundExperienceSize}) and the
  * slice's envelopes are packed into ≤{@link MAX_BODY_BYTES} bodies
  * ({@link packBodies}) before POSTing.
  *
@@ -539,6 +552,7 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
   const box = new Outbox(opts.projectRoot);
   const maxBatch = opts.maxBatch ?? 200;
   const maxBatches = opts.maxBatches ?? 50;
+  const maxSliceBytes = opts.maxSliceBytes ?? MAX_PENDING_SLICE_BYTES;
 
   let shipped = 0;
   let batches = 0;
@@ -546,22 +560,22 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
   let rejectedBodies = 0;
 
   for (let i = 0; i < maxBatches; i++) {
-    const pending = box.readPending(maxBatch, opts.connectorId);
-    if (pending.records.length === 0) break;
-
-    const experiences = groupIntoExperiences(pending.records).flatMap(boundExperienceSize);
-    if (experiences.length === 0) {
-      // Every group in this slice was zero-event (unshippable raws) — consume
-      // it without a POST so orphaned raws can never wedge the spool.
-      box.advance(pending.endOffset, opts.connectorId);
-      shipped += pending.records.length;
-      if (!pending.hasMore) break;
-      continue;
-    }
-
     let sliceOk = true;
     const quarantineBatch: RejectedEntry[] = [];
     try {
+      const pending = box.readPending(maxBatch, opts.connectorId, maxSliceBytes);
+      if (pending.records.length === 0) {
+        // Invalid-only tails are consumed as well, rather than retried forever.
+        box.advance(pending.endOffset, opts.connectorId);
+        break;
+      }
+      const experiences = groupIntoExperiences(pending.records).flatMap(exp => {
+        const bounded = boundExperienceSize(exp);
+        if (exp.type === "doc" && exp.data.kind === "agent-attachment" && !bounded.length) {
+          recordHealth(opts.projectRoot, "attachments", "too_large", 1);
+        }
+        return bounded;
+      });
       for (const body of packBodies(experiences)) {
         const res = await postExperiences(
           opts.url,
@@ -595,6 +609,11 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
         sliceOk = false; // transient — keep the whole slice, discard this pass's quarantine candidates
         break;
       }
+      if (!sliceOk) break;
+      if (quarantineBatch.length > 0) appendRejected(opts.projectRoot, quarantineBatch);
+      box.advance(pending.endOffset, opts.connectorId);
+      shipped += pending.records.length;
+      if (!pending.hasMore) break;
     } catch {
       // Network/timeout — leave the cursor, retry on the next trigger. Clearing
       // `lastStatus` matters: a 2xx earlier in this slice would otherwise be
@@ -605,12 +624,6 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
       lastStatus = 0;
       break;
     }
-    if (!sliceOk) break;
-
-    if (quarantineBatch.length > 0) appendRejected(opts.projectRoot, quarantineBatch);
-    box.advance(pending.endOffset, opts.connectorId);
-    shipped += pending.records.length;
-    if (!pending.hasMore) break;
   }
 
   if (shipped > 0) {

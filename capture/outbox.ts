@@ -43,6 +43,7 @@ import { join } from "node:path";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import type { CaptureEvent, DocumentRecord, RawRecord } from "./event";
 import { ensureAugentaDir } from "./augenta-dir";
+import { documentTimestamp } from "./documents";
 
 const NEWLINE = 0x0a;
 
@@ -81,7 +82,7 @@ export interface DerelictDestination {
 }
 
 /** A durable spool line: a trajectory step, structurally-sanitized raw transcript line, or standalone
- * scrubbed memory document. */
+ * scrubbed text/memory document or consented whole PDF. */
 export type SpoolRecord = CaptureEvent | RawRecord | DocumentRecord;
 
 /**
@@ -116,19 +117,26 @@ export function isDocumentRecord(o: unknown): o is DocumentRecord {
     e.proj.length === 0) return false;
   const data = e.data as Record<string, unknown> | null;
   if (!data ||
-    data.kind !== "agent-memory" ||
     typeof data.documentId !== "string" || data.documentId.length === 0 ||
     typeof data.sourcePath !== "string" ||
     typeof data.title !== "string" ||
-    data.format !== "text/markdown" ||
-    typeof data.text !== "string" ||
-    typeof data.sourceUpdatedAt !== "string" ||
     typeof data.capturedAt !== "string" ||
     typeof data.revision !== "string" || data.revision.length === 0 ||
     typeof data.deleted !== "boolean" ||
     typeof data.chunkIndex !== "number" || !Number.isInteger(data.chunkIndex) || data.chunkIndex < 0 ||
     typeof data.chunkCount !== "number" || !Number.isInteger(data.chunkCount) || data.chunkCount <= 0) return false;
-  return data.chunkIndex < data.chunkCount && e.sid === `memory-${data.documentId}`;
+  if (data.chunkIndex >= data.chunkCount) return false;
+  const text = typeof data.text === "string" && data.content === undefined && data.encoding === undefined && data.mediaType === undefined;
+  if (data.kind === "agent-memory") return text && data.format === "text/markdown" &&
+    typeof data.sourceUpdatedAt === "string" && e.sid === `memory-${data.documentId}`;
+  if (data.kind !== "agent-attachment" || e.sid !== `attachment-${data.documentId}` ||
+      !/^[a-f0-9]{64}$/.test(data.documentId) || !/^[a-f0-9]{64}$/.test(data.revision as string) ||
+      !documentTimestamp(data.capturedAt) || data.deleted !== false ||
+      !["mention", "prompt", "read"].includes(data.origin as string)) return false;
+  if (text) return data.format === "text/plain" || data.format === "text/markdown";
+  return data.text === undefined && data.encoding === "base64" && data.format === "application/pdf" && data.mediaType === "application/pdf" &&
+    typeof data.content === "string" && data.content.length > 0 && data.content.length % 4 === 0 &&
+    /^[A-Za-z0-9+/]*={0,2}$/.test(data.content) && data.content.startsWith("JVBERi0") && data.chunkIndex === 0 && data.chunkCount === 1;
 }
 
 export interface PendingBatch {
@@ -523,7 +531,7 @@ export class Outbox {
    * may be grouped into one experience for one and two for another — legal, and
    * idempotent server-side, since record identity is content-derived.
    */
-  readPending(maxBatch = Infinity, destKey?: string): PendingBatch {
+  readPending(maxBatch = Infinity, destKey?: string, maxBytes = Infinity): PendingBatch {
     const shipped = this.shippedOffset(destKey);
     if (!existsSync(this.spoolPath)) return { records: [], endOffset: shipped, hasMore: false };
 
@@ -533,6 +541,7 @@ export class Outbox {
     let off = start;
     let hasMore = false;
     let cursor = start;
+    let bytes = 0;
 
     while (cursor < buf.length) {
       const nl = buf.indexOf(NEWLINE, cursor);
@@ -547,7 +556,13 @@ export class Outbox {
         }
         try {
           const parsed = JSON.parse(text);
-          if (isCaptureEvent(parsed) || isRawRecord(parsed) || isDocumentRecord(parsed)) records.push(parsed);
+          if (isCaptureEvent(parsed) || isRawRecord(parsed) || isDocumentRecord(parsed)) {
+            const cost = next - cursor;
+            // One oversized legacy line must progress alone; stop before every
+            // subsequent line that would overflow the slice's byte budget.
+            if (records.length && bytes + cost > maxBytes) { hasMore = true; break; }
+            records.push(parsed); bytes += cost;
+          }
           /* else: unrecognized line — drop it, still advance the offset */
         } catch {
           /* drop corrupt local line */

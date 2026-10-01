@@ -9,6 +9,8 @@
  */
 import type { CaptureEvent, EventSource } from "./event";
 import { sanitizeTelemetryRecord } from "./sanitize";
+import type { RemovedPayload } from "./sanitize";
+import type { AttachmentCandidate, AttachmentContext } from "./attachments";
 
 /** A scrub function applied to step text client-side before it is placed into a {@link CaptureEvent}. */
 export type Scrubber = (text: string) => string;
@@ -53,6 +55,8 @@ export function agentSid(baseSid: string, agentId: string): string {
 
 export interface NormalizeResult {
   events: CaptureEvent[];
+  documents: AttachmentCandidate[];
+  attachmentContext?: AttachmentContext;
   /** One entry per consumed NON-BLANK, valid JSON line, structurally sanitized
    *  but otherwise raw — the raw-telemetry channel's feedstock. The automatic-
    *  recall block is the one exclusion (see {@link tailToEvents}). `sid` is the SAME per-line
@@ -81,6 +85,7 @@ export interface NormalizeOpts {
   /** Byte offset the tail started at (for `ref.off` + the advancing cursor). */
   startOffset: number;
   scrub?: Scrubber;
+  attachmentContext?: AttachmentContext;
 }
 
 /**
@@ -115,8 +120,10 @@ export function tailToEvents(
   toEvent: (sanitized: unknown, seq: number, off: number) => CaptureEvent | null,
   lineSid: (sanitized: unknown) => string,
   exclude?: (sanitized: unknown) => "drop" | unknown,
+  extract?: (sanitized: unknown, payloads: Map<string, RemovedPayload>) => AttachmentCandidate[],
 ): NormalizeResult {
   const events: CaptureEvent[] = [];
+  const documents: AttachmentCandidate[] = [];
   const raws: Array<{ raw: string; sid: string }> = [];
   let seq = startSeq;
   let off = startOffset;
@@ -144,6 +151,7 @@ export function tailToEvents(
       json = JSON.stringify(excluded);
     }
 
+    documents.push(...(extract?.(value, sanitized.payloads) ?? []));
     const event = toEvent(value, seq, lineOff);
     if (event) {
       events.push(event);
@@ -152,5 +160,5 @@ export function tailToEvents(
     raws.push({ raw: json, sid: event ? event.sid : lineSid(value) });
   }
 
-  return { events, raws, nextSeq: seq, nextOffset: off };
+  return { events, documents, raws, nextSeq: seq, nextOffset: off };
 }

@@ -325,6 +325,7 @@ describe("project config writers", () => {
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
       authMode: "api-key",
       captureSince: expect.any(String),
+      attachmentsConsentedAt: expect.any(String),
       apiKey: "sk-aug-test.secret",
       autoRecall: false,
       endpoint: "http://gw.example.com",
@@ -338,6 +339,7 @@ describe("project config writers", () => {
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
       authMode: "api-key",
       captureSince: expect.any(String),
+      attachmentsConsentedAt: expect.any(String),
       apiKey: "sk-aug-test.secret",
       autoRecall: false,
     });
@@ -379,6 +381,7 @@ describe("project config writers", () => {
       profileId: "profile_123",
       userId: TEST_USER_ID,
       projectKey: TEST_PROJECT_KEY,
+      attachmentsConsentedAt: expect.any(String),
       links: [{ workspaceId: "ws-default", connectorId: "connector_456" }, { workspaceId: "ws-scratch", connectorId: "connector_ws-scratch" }],
     });
     const again = readFileSync(path, "utf8");
@@ -516,6 +519,7 @@ describe("platform-key connection", () => {
     expect(JSON.parse(readFileSync(result.path, "utf8"))).toEqual({
       authMode: "api-key",
       captureSince: expect.any(String),
+      attachmentsConsentedAt: expect.any(String),
       apiKey: "sk-aug-live.secret",
       endpoint: "https://gw.example.com",
       org: { id: "org_1" },
@@ -2223,6 +2227,8 @@ describe("JSON verbs", () => {
       destinations: [{ connectorId: "connector_new", workspaceId: "ws-default", action: "adopted" }],
       organization: "Example Org",
     });
+    expect(readLinks(project)?.attachmentsConsentedAt).toBe(readLinks(project)?.joinedAt);
+    expect(loadProjectConfig(project)?.attachmentsConsentedAt).toBe(readLinks(project)?.attachmentsConsentedAt);
     // Found by the project's key, not minted again, and not relabelled: every
     // cloud session and worktree joins like this.
     expect(mutations()).toEqual([]);

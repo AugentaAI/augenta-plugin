@@ -29,6 +29,7 @@ hook events and the connect and recall scripts. Reports can cover:
 | Local records | The plugin sets `.augenta/` to `0700` on its writes and adds a self-ignoring `.gitignore`; for a browser connection it lets only `config.json` and the ignore file through |
 | Proxies | When the environment names a proxy in `HTTPS_PROXY` or `HTTP_PROXY`, the plugin tells Node to send through it. Unless `NODE_EXTRA_CA_CERTS` is already set, it trusts a sandbox's own proxy certificate at `/usr/local/share/ca-certificates/mitm-proxy-ca.crt` whenever that file exists, and the system certificate bundle only alongside a proxy it uses. That widens which TLS certificates it accepts, to what the machine itself trusts |
 | Capture | Only connected projects send records, and only to the selected Workspaces, each through a Connector of the person who joined. When someone else signs in to the same organization on that machine and joins, records still queued for the first person's Connectors are never sent through theirs; connect reports how much stays unsent |
+| Attachments | Only observations at or after this checkout's attachment consent are captured. Browser consent is local to `.augenta/state/links.json`, never enabled by a shared config. API-key consent is in its untracked config. Text is scrubbed; PDF bytes are not secret-scrubbed and every selected Workspace receives them. Images are placeholders only. The capture kill switch and `AUGENTA_CAPTURE_ATTACHMENTS=0\|off\|false` stop new attachment capture |
 | Recall | Only the question text is sent as content, with no attached files or transcript, to Workspaces the project already feeds. Automatic recall, when the project turned it on at connect (it is off by default), asks with each submitted prompt, with pasted blocks removed and common secret patterns masked, only while capture is enabled; each question leaves a one-way fingerprint in each Workspace, and the recalled text is never captured back |
 
 Report any breach of these rules. Examples include a leaked sign-in token,
@@ -39,6 +40,10 @@ unselected Workspace.
 Activity and project notes have common secret patterns removed. Raw transcript
 records have some internal fields removed, but their text is **not
 secret-scrubbed** and can contain secrets.
+Binary payloads are replaced by references in telemetry. After attachment
+consent, eligible text and PDFs travel as separate documents; PDF bytes may
+contain secrets. Referenced PDFs must be bounded, stable regular-file snapshots.
+Capture makes no network request or directory scan to find attachments.
 
 ## What to expect
 

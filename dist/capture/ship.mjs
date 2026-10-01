@@ -4550,8 +4550,8 @@ var require_promise = __commonJS((exports) => {
     _resolve;
     _reject;
     constructor() {
-      this._promise = new Promise((resolve4, reject) => {
-        this._resolve = resolve4;
+      this._promise = new Promise((resolve5, reject) => {
+        this._resolve = resolve5;
         this._reject = reject;
       });
     }
@@ -4639,9 +4639,9 @@ var require_exporter = __commonJS((exports) => {
   var api_1 = require_src();
   var suppress_tracing_1 = require_suppress_tracing();
   function _export(exporter, arg) {
-    return new Promise((resolve4) => {
+    return new Promise((resolve5) => {
       api_1.context.with((0, suppress_tracing_1.suppressTracing)(api_1.context.active()), () => {
-        exporter.export(arg, resolve4);
+        exporter.export(arg, resolve5);
       });
     });
   }
@@ -11268,7 +11268,7 @@ var require_http_transport_utils = __commonJS((exports) => {
   var DEFAULT_USER_AGENT = `OTel-OTLP-Exporter-JavaScript/${version_1.VERSION}`;
   exports.MAX_RESPONSE_BODY_SIZE = 4 * 1024 * 1024;
   function sendWithHttp(request, url, headers, compression, userAgent, agent, data, timeoutMillis) {
-    return new Promise((resolve4) => {
+    return new Promise((resolve5) => {
       const parsedUrl = new URL(url);
       if (userAgent) {
         headers["User-Agent"] = `${userAgent} ${DEFAULT_USER_AGENT}`;
@@ -11287,7 +11287,7 @@ var require_http_transport_utils = __commonJS((exports) => {
           responseSize += chunk.length;
           if (responseSize > exports.MAX_RESPONSE_BODY_SIZE) {
             const sizeError = new Error(`OTLP export response body exceeded size limit of ${exports.MAX_RESPONSE_BODY_SIZE} bytes`);
-            resolve4({ status: "failure", error: sizeError });
+            resolve5({ status: "failure", error: sizeError });
             res.destroy();
             return;
           }
@@ -11295,18 +11295,18 @@ var require_http_transport_utils = __commonJS((exports) => {
         });
         res.on("end", () => {
           if (res.statusCode && res.statusCode <= 299) {
-            resolve4({
+            resolve5({
               status: "success",
               data: Buffer.concat(responseData)
             });
           } else if (res.statusCode && (0, is_export_retryable_1.isExportHTTPErrorRetryable)(res.statusCode)) {
-            resolve4({
+            resolve5({
               status: "retryable",
               retryInMillis: (0, is_export_retryable_1.parseRetryAfterToMills)(res.headers["retry-after"])
             });
           } else {
             const error = new types_1.OTLPExporterError(res.statusMessage, res.statusCode, Buffer.concat(responseData).toString());
-            resolve4({
+            resolve5({
               status: "failure",
               error
             });
@@ -11314,17 +11314,17 @@ var require_http_transport_utils = __commonJS((exports) => {
         });
         res.on("error", (error) => {
           if (res.statusCode && res.statusCode <= 299) {
-            resolve4({
+            resolve5({
               status: "success"
             });
           } else if (res.statusCode && (0, is_export_retryable_1.isExportHTTPErrorRetryable)(res.statusCode)) {
-            resolve4({
+            resolve5({
               status: "retryable",
               error,
               retryInMillis: (0, is_export_retryable_1.parseRetryAfterToMills)(res.headers["retry-after"])
             });
           } else {
-            resolve4({
+            resolve5({
               status: "failure",
               error
             });
@@ -11333,26 +11333,26 @@ var require_http_transport_utils = __commonJS((exports) => {
       });
       req.setTimeout(timeoutMillis, () => {
         req.destroy();
-        resolve4({
+        resolve5({
           status: "retryable",
           error: new Error("Request timed out")
         });
       });
       req.on("error", (error) => {
         if (isHttpTransportNetworkErrorRetryable(error)) {
-          resolve4({
+          resolve5({
             status: "retryable",
             error
           });
         } else {
-          resolve4({
+          resolve5({
             status: "failure",
             error
           });
         }
       });
       compressAndSend(req, compression, data, (error) => {
-        resolve4({
+        resolve5({
           status: "failure",
           error
         });
@@ -11455,9 +11455,9 @@ var require_retrying_transport = __commonJS((exports) => {
       this._transport = transport;
     }
     retry(data, timeoutMillis, inMillis) {
-      return new Promise((resolve4, reject) => {
+      return new Promise((resolve5, reject) => {
         setTimeout(() => {
-          this._transport.send(data, timeoutMillis).then(resolve4, reject);
+          this._transport.send(data, timeoutMillis).then(resolve5, reject);
         }, inMillis);
       });
     }
@@ -12960,8 +12960,8 @@ var require_BatchLogRecordProcessorBase = __commonJS((exports) => {
     _metrics;
     _exportScheduledResolve;
     constructor(exporter, logRecords, exportTimeoutMillis, metrics) {
-      this._exportScheduledPromise = new Promise((resolve4) => {
-        this._exportScheduledResolve = resolve4;
+      this._exportScheduledPromise = new Promise((resolve5) => {
+        this._exportScheduledResolve = resolve5;
       });
       this._exportCompleted = this._executeExport(exporter, logRecords, exportTimeoutMillis);
       this._metrics = metrics;
@@ -12984,7 +12984,7 @@ var require_BatchLogRecordProcessorBase = __commonJS((exports) => {
       }
     }
     async _exportWithTimeout(exporter, logRecords, exportTimeoutMillis) {
-      return new Promise((resolve4, reject) => {
+      return new Promise((resolve5, reject) => {
         const timer = setTimeout(() => {
           reject(new Error("Timeout"));
         }, exportTimeoutMillis);
@@ -12992,7 +12992,7 @@ var require_BatchLogRecordProcessorBase = __commonJS((exports) => {
           this._metrics.finishLogs(logRecords.length, result.error);
           clearTimeout(timer);
           if (result.code === core_1.ExportResultCode.SUCCESS) {
-            resolve4();
+            resolve5();
           } else {
             reject(result.error ?? new Error("BatchLogRecordProcessor: log record export failed"));
           }
@@ -14160,12 +14160,12 @@ var require_MultiSpanProcessor = __commonJS((exports) => {
       for (const spanProcessor of this._spanProcessors) {
         promises.push(spanProcessor.forceFlush());
       }
-      return new Promise((resolve4) => {
+      return new Promise((resolve5) => {
         Promise.all(promises).then(() => {
-          resolve4();
+          resolve5();
         }).catch((error) => {
           (0, core_1.globalErrorHandler)(error || new Error("MultiSpanProcessor: forceFlush failed"));
-          resolve4();
+          resolve5();
         });
       });
     }
@@ -14191,9 +14191,9 @@ var require_MultiSpanProcessor = __commonJS((exports) => {
       for (const spanProcessor of this._spanProcessors) {
         promises.push(spanProcessor.shutdown());
       }
-      return new Promise((resolve4, reject) => {
+      return new Promise((resolve5, reject) => {
         Promise.all(promises).then(() => {
-          resolve4();
+          resolve5();
         }, reject);
       });
     }
@@ -14439,14 +14439,14 @@ var require_BatchSpanProcessorBase = __commonJS((exports) => {
       this._maybeStartTimer();
     }
     _flushAll() {
-      return new Promise((resolve4, reject) => {
+      return new Promise((resolve5, reject) => {
         const promises = [];
         const count = Math.ceil(this._finishedSpans.length / this._maxExportBatchSize);
         for (let i = 0, j = count;i < j; i++) {
           promises.push(this._flushOneBatch());
         }
         Promise.all(promises).then(() => {
-          resolve4();
+          resolve5();
         }).catch(reject);
       });
     }
@@ -14455,7 +14455,7 @@ var require_BatchSpanProcessorBase = __commonJS((exports) => {
       if (this._finishedSpans.length === 0) {
         return Promise.resolve();
       }
-      return new Promise((resolve4, reject) => {
+      return new Promise((resolve5, reject) => {
         const timer = setTimeout(() => {
           reject(new Error("Timeout"));
         }, this._exportTimeoutMillis);
@@ -14471,7 +14471,7 @@ var require_BatchSpanProcessorBase = __commonJS((exports) => {
             clearTimeout(timer);
             this._metrics.finishSpans(spans.length, result.error);
             if (result.code === core_1.ExportResultCode.SUCCESS) {
-              resolve4();
+              resolve5();
             } else {
               reject(result.error ?? new Error("BatchSpanProcessor: span export failed"));
             }
@@ -14663,32 +14663,32 @@ var require_TracerProvider = __commonJS((exports) => {
     forceFlush(options) {
       const timeout = options?.timeoutMillis ?? this._forceFlushTimeoutMillis;
       const promises = this._activeSpanProcessor["_spanProcessors"].map((spanProcessor) => {
-        return new Promise((resolve4) => {
+        return new Promise((resolve5) => {
           let state;
           const timeoutInterval = setTimeout(() => {
-            resolve4(new Error(`Span processor did not completed within timeout period of ${timeout} ms`));
+            resolve5(new Error(`Span processor did not completed within timeout period of ${timeout} ms`));
             state = ForceFlushState.timeout;
           }, timeout);
           spanProcessor.forceFlush().then(() => {
             clearTimeout(timeoutInterval);
             if (state !== ForceFlushState.timeout) {
               state = ForceFlushState.resolved;
-              resolve4(state);
+              resolve5(state);
             }
           }).catch((error) => {
             clearTimeout(timeoutInterval);
             state = ForceFlushState.error;
-            resolve4(error);
+            resolve5(error);
           });
         });
       });
-      return new Promise((resolve4, reject) => {
+      return new Promise((resolve5, reject) => {
         Promise.all(promises).then((results) => {
           const errors = results.filter((result) => result !== ForceFlushState.resolved);
           if (errors.length > 0) {
             reject(errors);
           } else {
-            resolve4();
+            resolve5();
           }
         }).catch((error) => reject([error]));
       });
@@ -15321,13 +15321,13 @@ var require_src15 = __commonJS((exports) => {
 });
 
 // capture/health.ts
-import { existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync6, renameSync as renameSync4, writeFileSync as writeFileSync5 } from "node:fs";
-import { join as join8 } from "node:path";
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync7, renameSync as renameSync5, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join9 } from "node:path";
+import { randomUUID as randomUUID4 } from "node:crypto";
 
 // capture/config.ts
-import { readFileSync as readFileSync4 } from "node:fs";
-import { join as join6 } from "node:path";
+import { readFileSync as readFileSync5 } from "node:fs";
+import { join as join7 } from "node:path";
 
 // capture/auth.ts
 import {
@@ -15964,19 +15964,151 @@ function takeAuthNotice(projectRoot) {
 }
 
 // capture/links.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join3 } from "node:path";
+import { randomUUID as randomUUID3 } from "node:crypto";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync4, renameSync as renameSync3, rmSync as rmSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join4 } from "node:path";
+
+// capture/documents.ts
+import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
+import { lstatSync, realpathSync as realpathSync2, readlinkSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { basename, dirname, isAbsolute, join as join3, relative, resolve as resolve2, sep } from "node:path";
+var MAX_DOCUMENT_EXPERIENCE_BYTES = 512 * 1024;
+function sha256(input) {
+  return createHash2("sha256").update(input).digest("hex");
+}
+function jsonBytes(value) {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+function boundedTitle(title) {
+  return [...title].slice(0, 512).join("");
+}
+function normalizeLogicalPath(path) {
+  return path.split(sep).join("/");
+}
+function sameSnapshot(a, b) {
+  return a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+}
+function safeBoundary(text, index) {
+  if (index > 0 && index < text.length && text.charCodeAt(index - 1) >= 55296 && text.charCodeAt(index - 1) <= 56319 && text.charCodeAt(index) >= 56320 && text.charCodeAt(index) <= 57343)
+    return index - 1;
+  return index;
+}
+function chunkText(text, makeRecord) {
+  if (!text.length)
+    return [""];
+  const chunks = [];
+  let start = 0;
+  const sizingIndex = 999999999;
+  while (start < text.length) {
+    let lo = start + 1, hi = text.length, best = -1;
+    while (lo <= hi) {
+      const rawMid = Math.floor((lo + hi) / 2);
+      const mid = safeBoundary(text, rawMid);
+      if (mid <= start) {
+        lo = rawMid + 1;
+        continue;
+      }
+      if (jsonBytes(makeRecord(text.slice(start, mid), sizingIndex, sizingIndex)) < MAX_DOCUMENT_EXPERIENCE_BYTES) {
+        best = mid;
+        lo = rawMid + 1;
+      } else
+        hi = rawMid - 1;
+    }
+    if (best <= start)
+      return [];
+    chunks.push(text.slice(start, best));
+    start = best;
+  }
+  return chunks;
+}
+function readDocumentIndex(root, file, valid, maxBytes = Infinity) {
+  try {
+    const path = join3(root, ".augenta", "state", file);
+    if (statSync2(path).size > maxBytes)
+      return {};
+    const parsed = JSON.parse(readFileSync3(path, "utf8"));
+    if (!parsed || parsed.version !== 1 || !parsed.documents || typeof parsed.documents !== "object" || Array.isArray(parsed.documents))
+      return {};
+    return Object.fromEntries(Object.entries(parsed.documents).filter(([id, value]) => valid(value) && value.documentId === id));
+  } catch {
+    return {};
+  }
+}
+function writeDocumentIndex(root, file, documents, maxBytes = Infinity) {
+  const dir = join3(ensureAugentaDir(root), "state");
+  const path = join3(dir, file), tmp = `${path}.${randomUUID2()}.tmp`;
+  try {
+    const json = JSON.stringify({ version: 1, documents });
+    if (Buffer.byteLength(json) > maxBytes)
+      return false;
+    mkdirSync3(dir, { recursive: true });
+    writeFileSync3(tmp, json, { mode: 384 });
+    renameSync2(tmp, path);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {}
+  }
+}
+function documentTimestamp(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) || !Number.isFinite(Date.parse(value)))
+    return;
+  return new Date(value).toISOString();
+}
+var MAX_SYMLINK_HOPS = 40;
+function symlinkTarget(path) {
+  try {
+    return lstatSync(path).isSymbolicLink() ? resolve2(dirname(path), readlinkSync(path)) : undefined;
+  } catch {
+    return;
+  }
+}
+function physicalPath(path) {
+  let existing = resolve2(path);
+  const missing = [];
+  let hops = 0;
+  while (true) {
+    try {
+      return join3(realpathSync2(existing), ...missing);
+    } catch {}
+    const target = symlinkTarget(existing);
+    if (target !== undefined) {
+      if (++hops > MAX_SYMLINK_HOPS)
+        return;
+      existing = target;
+      continue;
+    }
+    const parent = dirname(existing);
+    if (parent === existing)
+      return resolve2(path);
+    missing.unshift(basename(existing));
+    existing = parent;
+  }
+}
+function isScopedToProject(scope, root) {
+  if (!isAbsolute(scope))
+    return false;
+  const target = physicalPath(scope);
+  if (target === undefined)
+    return false;
+  const rel = relative(root, target);
+  return rel === "" || !rel.startsWith(".." + sep) && rel !== ".." && !isAbsolute(rel);
+}
+
+// capture/links.ts
 function linksPath(projectRoot) {
-  return join3(projectRoot, ".augenta", "state", "links.json");
+  return join4(projectRoot, ".augenta", "state", "links.json");
 }
 function legacyAdoptionPath(projectRoot) {
-  return join3(projectRoot, ".augenta", "state", "adopted.json");
+  return join4(projectRoot, ".augenta", "state", "adopted.json");
 }
 var nonEmpty = (value) => typeof value === "string" && value.length > 0;
 function readLinks(projectRoot) {
   try {
-    const value = JSON.parse(readFileSync3(linksPath(projectRoot), "utf8"));
+    const value = JSON.parse(readFileSync4(linksPath(projectRoot), "utf8"));
     if (value.version !== 1)
       return;
     if (!nonEmpty(value.profileId) || !nonEmpty(value.userId) || !nonEmpty(value.projectKey))
@@ -16000,6 +16132,7 @@ function readLinks(projectRoot) {
       userId: value.userId,
       projectKey: value.projectKey,
       joinedAt: new Date(value.joinedAt).toISOString(),
+      ...documentTimestamp(value.attachmentsConsentedAt) ? { attachmentsConsentedAt: documentTimestamp(value.attachmentsConsentedAt) } : {},
       links
     };
   } catch {
@@ -16007,34 +16140,35 @@ function readLinks(projectRoot) {
   }
 }
 function writeLinks(projectRoot, links) {
-  const dir = join3(ensureAugentaDir(projectRoot), "state");
-  mkdirSync3(dir, { recursive: true });
-  const path = join3(dir, "links.json");
-  const tmp = `${path}.${randomUUID2()}.tmp`;
+  const dir = join4(ensureAugentaDir(projectRoot), "state");
+  mkdirSync4(dir, { recursive: true });
+  const path = join4(dir, "links.json");
+  const tmp = `${path}.${randomUUID3()}.tmp`;
   try {
-    writeFileSync3(tmp, JSON.stringify({
+    writeFileSync4(tmp, JSON.stringify({
       version: 1,
       profileId: links.profileId,
       userId: links.userId,
       projectKey: links.projectKey,
       joinedAt: links.joinedAt,
+      ...documentTimestamp(links.attachmentsConsentedAt) ? { attachmentsConsentedAt: documentTimestamp(links.attachmentsConsentedAt) } : {},
       links: links.links.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId }))
     }), { mode: 384 });
-    renameSync2(tmp, path);
+    renameSync3(tmp, path);
   } finally {
-    rmSync(tmp, { force: true });
+    rmSync2(tmp, { force: true });
   }
-  rmSync(legacyAdoptionPath(projectRoot), { force: true });
+  rmSync2(legacyAdoptionPath(projectRoot), { force: true });
 }
 
 // capture/project.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync4, realpathSync as realpathSync2 } from "node:fs";
-import { dirname as dirname2, join as join5, resolve as resolve3 } from "node:path";
+import { existsSync as existsSync4, realpathSync as realpathSync3 } from "node:fs";
+import { dirname as dirname3, join as join6, resolve as resolve4 } from "node:path";
 
 // capture/environment.ts
 import { existsSync as existsSync3 } from "node:fs";
-import { dirname, join as join4, resolve as resolve2 } from "node:path";
+import { dirname as dirname2, join as join5, resolve as resolve3 } from "node:path";
 function sessionEnvironment(env = process.env) {
   const declared = env.AUGENTA_EPHEMERAL?.trim().toLowerCase();
   if (declared === "0" || declared === "false")
@@ -16056,11 +16190,11 @@ function sessionEnvironment(env = process.env) {
   return { ephemeral: signals.length > 0, ...kind ? { kind } : {}, signals };
 }
 function insideGitCheckout(dir) {
-  let current = resolve2(dir);
+  let current = resolve3(dir);
   while (true) {
-    if (existsSync3(join4(current, ".git")))
+    if (existsSync3(join5(current, ".git")))
       return true;
-    const parent = dirname(current);
+    const parent = dirname2(current);
     if (parent === current)
       return false;
     current = parent;
@@ -16107,16 +16241,16 @@ function resolveProjectRoot(cwd) {
     return;
   let dir;
   try {
-    dir = realpathSync2(cwd);
+    dir = realpathSync3(cwd);
   } catch {
     return;
   }
   while (true) {
-    if (existsSync4(join5(dir, ".augenta", "config.json")))
+    if (existsSync4(join6(dir, ".augenta", "config.json")))
       return dir;
-    if (existsSync4(join5(dir, ".git")))
+    if (existsSync4(join6(dir, ".git")))
       return;
-    const parent = dirname2(dir);
+    const parent = dirname3(dir);
     if (parent === dir)
       return;
     dir = parent;
@@ -16124,7 +16258,7 @@ function resolveProjectRoot(cwd) {
 }
 function resolveProject(args, cwd) {
   if (args.project)
-    return { projectRoot: resolve3(cwd, args.project) };
+    return { projectRoot: resolve4(cwd, args.project) };
   const configured = resolveProjectRoot(cwd);
   if (configured)
     return { projectRoot: configured };
@@ -16194,14 +16328,14 @@ function joinedRoutes(projectRoot, profileId, projectKey, workspaces) {
   }
   if (links.links.length !== workspaces.length)
     return { join: "workspaces" };
-  return { join: "joined", destinations, joinedAt: links.joinedAt };
+  return { join: "joined", destinations, joinedAt: links.joinedAt, attachmentsConsentedAt: links.attachmentsConsentedAt };
 }
 function configPath(projectRoot) {
-  return join6(projectRoot, ".augenta", "config.json");
+  return join7(projectRoot, ".augenta", "config.json");
 }
 function loadProjectConfig(projectRoot) {
   try {
-    const value = JSON.parse(readFileSync4(configPath(projectRoot), "utf8"));
+    const value = JSON.parse(readFileSync5(configPath(projectRoot), "utf8"));
     if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
       return;
     const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
@@ -16252,7 +16386,8 @@ function loadProjectConfig(projectRoot) {
         ...routes.destinations ? {
           destinations: routes.destinations,
           connectorIds: routes.destinations.map((destination) => destination.connectorId),
-          captureSince: routes.joinedAt
+          captureSince: routes.joinedAt,
+          ...routes.attachmentsConsentedAt ? { attachmentsConsentedAt: routes.attachmentsConsentedAt } : {}
         } : {},
         projectRoot
       };
@@ -16272,6 +16407,7 @@ function loadProjectConfig(projectRoot) {
         ...settings,
         authMode: "api-key",
         ...captureSince ? { captureSince } : {},
+        ...documentTimestamp(value.attachmentsConsentedAt) ? { attachmentsConsentedAt: documentTimestamp(value.attachmentsConsentedAt) } : {},
         apiKey,
         ...keyTracking(projectRoot),
         projectRoot
@@ -16333,10 +16469,13 @@ function captureEnabled(cfg) {
 function effectiveCaptureSince(cfg) {
   return cfg.captureSince;
 }
+function attachmentCaptureMode(env = process.env) {
+  return ["0", "off", "false"].includes((env.AUGENTA_CAPTURE_ATTACHMENTS ?? "").trim().toLowerCase()) ? "off" : "documents";
+}
 
 // capture/outbox.ts
-import { join as join7 } from "node:path";
-import { mkdirSync as mkdirSync4, existsSync as existsSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync4, appendFileSync, renameSync as renameSync3, statSync as statSync2, unlinkSync as unlinkSync2 } from "node:fs";
+import { join as join8 } from "node:path";
+import { mkdirSync as mkdirSync5, existsSync as existsSync5, readFileSync as readFileSync6, writeFileSync as writeFileSync5, appendFileSync, renameSync as renameSync4, statSync as statSync3, unlinkSync as unlinkSync2 } from "node:fs";
 var NEWLINE = 10;
 var MAX_SPOOL_BYTES = 50 * 1024 * 1024;
 var MAX_DEST_LAG_BYTES = 16 * 1024 * 1024;
@@ -16354,9 +16493,18 @@ function isDocumentRecord(o) {
   if (!e || e.type !== "doc" || e.src !== "claude-code" && e.src !== "codex" || typeof e.sid !== "string" || typeof e.proj !== "string" || e.proj.length === 0)
     return false;
   const data = e.data;
-  if (!data || data.kind !== "agent-memory" || typeof data.documentId !== "string" || data.documentId.length === 0 || typeof data.sourcePath !== "string" || typeof data.title !== "string" || data.format !== "text/markdown" || typeof data.text !== "string" || typeof data.sourceUpdatedAt !== "string" || typeof data.capturedAt !== "string" || typeof data.revision !== "string" || data.revision.length === 0 || typeof data.deleted !== "boolean" || typeof data.chunkIndex !== "number" || !Number.isInteger(data.chunkIndex) || data.chunkIndex < 0 || typeof data.chunkCount !== "number" || !Number.isInteger(data.chunkCount) || data.chunkCount <= 0)
+  if (!data || typeof data.documentId !== "string" || data.documentId.length === 0 || typeof data.sourcePath !== "string" || typeof data.title !== "string" || typeof data.capturedAt !== "string" || typeof data.revision !== "string" || data.revision.length === 0 || typeof data.deleted !== "boolean" || typeof data.chunkIndex !== "number" || !Number.isInteger(data.chunkIndex) || data.chunkIndex < 0 || typeof data.chunkCount !== "number" || !Number.isInteger(data.chunkCount) || data.chunkCount <= 0)
     return false;
-  return data.chunkIndex < data.chunkCount && e.sid === `memory-${data.documentId}`;
+  if (data.chunkIndex >= data.chunkCount)
+    return false;
+  const text = typeof data.text === "string" && data.content === undefined && data.encoding === undefined && data.mediaType === undefined;
+  if (data.kind === "agent-memory")
+    return text && data.format === "text/markdown" && typeof data.sourceUpdatedAt === "string" && e.sid === `memory-${data.documentId}`;
+  if (data.kind !== "agent-attachment" || e.sid !== `attachment-${data.documentId}` || !/^[a-f0-9]{64}$/.test(data.documentId) || !/^[a-f0-9]{64}$/.test(data.revision) || !documentTimestamp(data.capturedAt) || data.deleted !== false || !["mention", "prompt", "read"].includes(data.origin))
+    return false;
+  if (text)
+    return data.format === "text/plain" || data.format === "text/markdown";
+  return data.text === undefined && data.encoding === "base64" && data.format === "application/pdf" && data.mediaType === "application/pdf" && typeof data.content === "string" && data.content.length > 0 && data.content.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(data.content) && data.content.startsWith("JVBERi0") && data.chunkIndex === 0 && data.chunkCount === 1;
 }
 
 class Outbox {
@@ -16368,22 +16516,22 @@ class Outbox {
   maxDestLagBytes;
   constructor(projectRoot, opts = {}) {
     this.projectRoot = projectRoot;
-    this.dir = join7(projectRoot, ".augenta", "outbox");
-    this.spoolPath = join7(this.dir, "spool.jsonl");
-    this.cursorPath = join7(this.dir, "cursor.json");
+    this.dir = join8(projectRoot, ".augenta", "outbox");
+    this.spoolPath = join8(this.dir, "spool.jsonl");
+    this.cursorPath = join8(this.dir, "cursor.json");
     this.maxSpoolBytes = opts.maxSpoolBytes ?? MAX_SPOOL_BYTES;
     this.maxDestLagBytes = opts.maxDestLagBytes ?? MAX_DEST_LAG_BYTES;
   }
   ensure() {
     ensureAugentaDir(this.projectRoot);
-    mkdirSync4(this.dir, { recursive: true });
+    mkdirSync5(this.dir, { recursive: true });
   }
   append(records) {
     if (records.length === 0)
       return true;
     this.ensure();
     try {
-      if (statSync2(this.spoolPath).size >= this.maxSpoolBytes)
+      if (statSync3(this.spoolPath).size >= this.maxSpoolBytes)
         return false;
     } catch {}
     appendFileSync(this.spoolPath, records.map((r) => JSON.stringify(r)).join(`
@@ -16400,14 +16548,14 @@ class Outbox {
 `);
   }
   dropEpisodePath() {
-    return join7(this.dir, "dropped.json");
+    return join8(this.dir, "dropped.json");
   }
   markDropped() {
     this.ensure();
     const path = this.dropEpisodePath();
     if (existsSync5(path))
       return false;
-    writeFileSync4(path, JSON.stringify({ since: new Date().toISOString() }));
+    writeFileSync5(path, JSON.stringify({ since: new Date().toISOString() }));
     return true;
   }
   clearDropEpisode() {
@@ -16416,20 +16564,20 @@ class Outbox {
     } catch {}
   }
   discardNoticePath() {
-    return join7(this.dir, "discarded.json");
+    return join8(this.dir, "discarded.json");
   }
   markDiscarded(entries) {
     if (entries.length === 0)
       return;
     this.ensure();
     try {
-      writeFileSync4(this.discardNoticePath(), JSON.stringify({ at: new Date().toISOString(), destinations: entries }));
+      writeFileSync5(this.discardNoticePath(), JSON.stringify({ at: new Date().toISOString(), destinations: entries }));
     } catch {}
   }
   takeDiscarded() {
     const path = this.discardNoticePath();
     try {
-      const parsed = JSON.parse(readFileSync5(path, "utf8"));
+      const parsed = JSON.parse(readFileSync6(path, "utf8"));
       unlinkSync2(path);
       if (!Array.isArray(parsed.destinations) || parsed.destinations.length === 0) {
         return;
@@ -16457,7 +16605,7 @@ class Outbox {
   readCursor() {
     let raw;
     try {
-      raw = JSON.parse(readFileSync5(this.cursorPath, "utf8"));
+      raw = JSON.parse(readFileSync6(this.cursorPath, "utf8"));
     } catch {
       return { shipped: 0, lagStrikes: {} };
     }
@@ -16483,8 +16631,8 @@ class Outbox {
     const strikes = Object.keys(lagStrikes).length > 0 ? { lagStrikes } : {};
     const body = links ? { shipped: Math.min(...Object.values(links)), links, ...strikes } : { shipped: scalar ?? 0 };
     const tmp = this.cursorPath + ".tmp";
-    writeFileSync4(tmp, JSON.stringify(body));
-    renameSync3(tmp, this.cursorPath);
+    writeFileSync5(tmp, JSON.stringify(body));
+    renameSync4(tmp, this.cursorPath);
   }
   shippedOffset(destKey) {
     const { shipped, links } = this.readCursor();
@@ -16493,7 +16641,7 @@ class Outbox {
   }
   spoolEnd() {
     try {
-      return statSync2(this.spoolPath).size;
+      return statSync3(this.spoolPath).size;
     } catch {
       return 0;
     }
@@ -16551,7 +16699,7 @@ class Outbox {
   }
   hasPendingBytes() {
     try {
-      return statSync2(this.spoolPath).size > this.shippedOffset();
+      return statSync3(this.spoolPath).size > this.shippedOffset();
     } catch {
       return false;
     }
@@ -16559,16 +16707,17 @@ class Outbox {
   pendingByteCount(destKey) {
     return Math.max(0, this.spoolEnd() - this.shippedOffset(destKey));
   }
-  readPending(maxBatch = Infinity, destKey) {
+  readPending(maxBatch = Infinity, destKey, maxBytes = Infinity) {
     const shipped = this.shippedOffset(destKey);
     if (!existsSync5(this.spoolPath))
       return { records: [], endOffset: shipped, hasMore: false };
-    const buf = readFileSync5(this.spoolPath);
+    const buf = readFileSync6(this.spoolPath);
     const start = Math.min(shipped, buf.length);
     const records = [];
     let off = start;
     let hasMore = false;
     let cursor = start;
+    let bytes = 0;
     while (cursor < buf.length) {
       const nl = buf.indexOf(NEWLINE, cursor);
       const lineEnd = nl === -1 ? buf.length : nl;
@@ -16581,8 +16730,15 @@ class Outbox {
         }
         try {
           const parsed = JSON.parse(text);
-          if (isCaptureEvent(parsed) || isRawRecord(parsed) || isDocumentRecord(parsed))
+          if (isCaptureEvent(parsed) || isRawRecord(parsed) || isDocumentRecord(parsed)) {
+            const cost = next - cursor;
+            if (records.length && bytes + cost > maxBytes) {
+              hasMore = true;
+              break;
+            }
             records.push(parsed);
+            bytes += cost;
+          }
         } catch {}
       }
       off = next;
@@ -16608,14 +16764,14 @@ class Outbox {
       return;
     let size;
     try {
-      size = statSync2(this.spoolPath).size;
+      size = statSync3(this.spoolPath).size;
     } catch {
       return;
     }
     if (size > 0 && this.shippedOffset() >= size) {
       const archivePath = this.spoolPath + ".archive";
       try {
-        renameSync3(this.spoolPath, archivePath);
+        renameSync4(this.spoolPath, archivePath);
       } catch {
         return;
       }
@@ -16633,11 +16789,11 @@ class Outbox {
 }
 
 // capture/health.ts
-var STAGES = ["dispatch", "capture", "delivery"];
-var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full"]);
+var STAGES = ["dispatch", "capture", "attachments", "delivery"];
+var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full", "too_large", "skipped"]);
 function read(projectRoot, stage) {
   try {
-    const s = JSON.parse(readFileSync6(join8(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    const s = JSON.parse(readFileSync7(join9(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
     if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
       return;
     return {
@@ -16653,8 +16809,8 @@ function read(projectRoot, stage) {
 }
 function recordHealth(projectRoot, stage, outcome, count = 0) {
   try {
-    const dir = join8(ensureAugentaDir(projectRoot), "state");
-    mkdirSync5(dir, { recursive: true });
+    const dir = join9(ensureAugentaDir(projectRoot), "state");
+    mkdirSync6(dir, { recursive: true });
     const old = read(projectRoot, stage);
     const at = new Date().toISOString();
     const success = outcome === "captured" || outcome === "accepted";
@@ -16665,10 +16821,10 @@ function recordHealth(projectRoot, stage, outcome, count = 0) {
       successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
       ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
     };
-    const file = join8(dir, `health-${stage}.json`);
-    const tmp = `${file}.${randomUUID3()}.tmp`;
-    writeFileSync5(tmp, JSON.stringify(value), { mode: 384 });
-    renameSync4(tmp, file);
+    const file = join9(dir, `health-${stage}.json`);
+    const tmp = `${file}.${randomUUID4()}.tmp`;
+    writeFileSync6(tmp, JSON.stringify(value), { mode: 384 });
+    renameSync5(tmp, file);
   } catch {}
 }
 function captureHealth(projectRoot) {
@@ -16679,7 +16835,7 @@ function captureHealth(projectRoot) {
     configured: !!cfg,
     enabled: gate === "live",
     ...gate ? { gate } : {},
-    configuration: cfg ? "valid" : existsSync6(join8(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    configuration: cfg ? "valid" : existsSync6(join9(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
     activityScope: "project",
     hostDispatch: "unverified",
     destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg && !cfg.keyTracked ? 1 : 0,
@@ -16692,14 +16848,14 @@ function captureHealth(projectRoot) {
 }
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.12.2";
+var PLUGIN_VERSION = "0.13.0";
 
 // capture/ship.ts
-import { join as join9, dirname as dirname3 } from "node:path";
-import { mkdirSync as mkdirSync6, openSync, writeSync, closeSync, unlinkSync as unlinkSync3, statSync as statSync3, appendFileSync as appendFileSync2 } from "node:fs";
+import { join as join10, dirname as dirname4 } from "node:path";
+import { mkdirSync as mkdirSync7, openSync, writeSync, closeSync, unlinkSync as unlinkSync3, statSync as statSync4, appendFileSync as appendFileSync2 } from "node:fs";
 
 // capture/sanitize.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 var REFERENCE_PREFIX = "[augenta attachment sha256:";
 function attachmentHash(reference) {
   if (typeof reference !== "string")
@@ -16715,7 +16871,7 @@ function removePayload(content, mime, payloads) {
   const clean = content.replace(/\s/g, "");
   const valid = clean.length > 0 && clean.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(clean);
   const bytes = valid ? Buffer.from(clean, "base64") : Buffer.from(content, "utf8");
-  const hash = createHash2("sha256").update(bytes).digest("hex");
+  const hash = createHash3("sha256").update(bytes).digest("hex");
   payloads.set(hash, { hash, content: valid ? bytes.toString("base64") : "", mediaType: mime, bytes: bytes.length, valid });
   return `${REFERENCE_PREFIX}${hash} ${bytes.length}B ${mime}]`;
 }
@@ -16935,15 +17091,16 @@ function createPluginTelemetry(options) {
       ])).then(() => {
         return;
       });
-      await Promise.race([work, new Promise((resolve4) => setTimeout(resolve4, timeoutMillis))]);
+      await Promise.race([work, new Promise((resolve5) => setTimeout(resolve5, timeoutMillis))]);
     }
   };
 }
 
 // capture/ship.ts
 var MAX_EXPERIENCE_BYTES = 512 * 1024;
+var MAX_PENDING_SLICE_BYTES = 2 * 1024 * 1024;
 var MAX_BODY_BYTES = 1024 * 1024;
-function jsonBytes(x) {
+function jsonBytes2(x) {
   return Buffer.byteLength(JSON.stringify(x), "utf8");
 }
 var TRUNCATION_MARKER = " …[augenta: step text truncated — exceeded the single-envelope wire cap]";
@@ -16954,7 +17111,7 @@ function truncateEventText(e, budget) {
   while (lo <= hi) {
     const mid = lo + hi >> 1;
     const candidate = { ...e, text: e.text.slice(0, mid) + TRUNCATION_MARKER };
-    if (jsonBytes(candidate) <= budget) {
+    if (jsonBytes2(candidate) <= budget) {
       best = candidate;
       lo = mid + 1;
     } else {
@@ -16994,15 +17151,15 @@ function rawDropMarker(kept, total) {
 function boundRawData(eventsOnly, data) {
   if (!data || data.length === 0)
     return eventsOnly;
-  const base = jsonBytes({ ...eventsOnly, data: [] });
-  const markerCost = jsonBytes(rawDropMarker(0, data.length)) + 1;
+  const base = jsonBytes2({ ...eventsOnly, data: [] });
+  const markerCost = jsonBytes2(rawDropMarker(0, data.length)) + 1;
   const budget = MAX_EXPERIENCE_BYTES - base - markerCost;
   if (budget < 0)
     return eventsOnly;
   const kept = [];
   let bytes = 0;
   for (const line of data) {
-    const cost = jsonBytes(line) + 1;
+    const cost = jsonBytes2(line) + 1;
     if (bytes + cost > budget)
       break;
     kept.push(line);
@@ -17014,8 +17171,15 @@ function boundRawData(eventsOnly, data) {
 }
 var DOCUMENT_TRUNCATION_MARKER = " …[augenta: document text truncated — exceeded the single-envelope wire cap]";
 function boundDocumentExperience(exp) {
-  if (jsonBytes(exp) <= MAX_EXPERIENCE_BYTES)
+  if (jsonBytes2(exp) <= MAX_EXPERIENCE_BYTES)
     return [exp];
+  if (exp.data.kind === "agent-attachment") {
+    if (exp.data.encoding === "base64" || exp.data.chunkCount !== 1)
+      return [];
+    const data = exp.data;
+    const chunks = chunkText(data.text, (text, chunkIndex, chunkCount) => ({ ...exp, data: { ...data, text, chunkIndex, chunkCount } }));
+    return chunks.map((text, chunkIndex) => ({ ...exp, data: { ...data, text, chunkIndex, chunkCount: chunks.length } }));
+  }
   let lo = 0;
   let hi = exp.data.text.length;
   let best;
@@ -17026,7 +17190,7 @@ function boundDocumentExperience(exp) {
       ...exp,
       data: { ...exp.data, text: exp.data.text.slice(0, end) + DOCUMENT_TRUNCATION_MARKER }
     };
-    if (jsonBytes(candidate) <= MAX_EXPERIENCE_BYTES) {
+    if (jsonBytes2(candidate) <= MAX_EXPERIENCE_BYTES) {
       best = candidate;
       lo = mid + 1;
     } else {
@@ -17038,21 +17202,21 @@ function boundDocumentExperience(exp) {
 function boundExperienceSize(exp) {
   if (exp.type === "doc")
     return boundDocumentExperience(exp);
-  if (jsonBytes(exp) <= MAX_EXPERIENCE_BYTES)
+  if (jsonBytes2(exp) <= MAX_EXPERIENCE_BYTES)
     return [exp];
   const { data, ...eventsOnly } = exp;
-  if (jsonBytes(eventsOnly) <= MAX_EXPERIENCE_BYTES)
+  if (jsonBytes2(eventsOnly) <= MAX_EXPERIENCE_BYTES)
     return [boundRawData(eventsOnly, data)];
-  const base = jsonBytes({ ...eventsOnly, events: [] });
+  const base = jsonBytes2({ ...eventsOnly, events: [] });
   const out = [];
   let chunk = [];
   let chunkBytes = base;
   for (const step of eventsOnly.events) {
     let bounded = step;
-    let cost = jsonBytes(bounded) + 1;
+    let cost = jsonBytes2(bounded) + 1;
     if (base + cost > MAX_EXPERIENCE_BYTES) {
       bounded = truncateEventText(step, MAX_EXPERIENCE_BYTES - base - 1);
-      cost = jsonBytes(bounded) + 1;
+      cost = jsonBytes2(bounded) + 1;
     }
     if (chunk.length > 0 && chunkBytes + cost > MAX_EXPERIENCE_BYTES) {
       out.push({ ...eventsOnly, events: chunk });
@@ -17067,12 +17231,12 @@ function boundExperienceSize(exp) {
   return out;
 }
 function packBodies(experiences) {
-  const wrapper = jsonBytes({ experiences: [] });
+  const wrapper = jsonBytes2({ experiences: [] });
   const bodies = [];
   let cur = [];
   let bytes = wrapper;
   for (const x of experiences) {
-    const cost = jsonBytes(x) + 1;
+    const cost = jsonBytes2(x) + 1;
     if (cur.length > 0 && bytes + cost > MAX_BODY_BYTES) {
       bodies.push(cur);
       cur = [];
@@ -17140,15 +17304,15 @@ async function postExperiences(url, token, experiences, connectorId, authMode = 
 var PERMANENT_STATUSES = new Set([400, 413, 422]);
 var MAX_REJECTED_BYTES = 10 * 1024 * 1024;
 function rejectedPath(projectRoot) {
-  return join9(projectRoot, ".augenta", "outbox", "rejected.jsonl");
+  return join10(projectRoot, ".augenta", "outbox", "rejected.jsonl");
 }
 function appendRejected(projectRoot, entries) {
   if (entries.length === 0)
     return;
   const path = rejectedPath(projectRoot);
-  mkdirSync6(dirname3(path), { recursive: true });
+  mkdirSync7(dirname4(path), { recursive: true });
   try {
-    if (statSync3(path).size >= MAX_REJECTED_BYTES)
+    if (statSync4(path).size >= MAX_REJECTED_BYTES)
       return;
   } catch {}
   appendFileSync2(path, entries.map((e) => JSON.stringify(e)).join(`
@@ -17167,25 +17331,27 @@ async function drain(opts) {
   const box = new Outbox(opts.projectRoot);
   const maxBatch = opts.maxBatch ?? 200;
   const maxBatches = opts.maxBatches ?? 50;
+  const maxSliceBytes = opts.maxSliceBytes ?? MAX_PENDING_SLICE_BYTES;
   let shipped = 0;
   let batches = 0;
   let lastStatus = 0;
   let rejectedBodies = 0;
   for (let i = 0;i < maxBatches; i++) {
-    const pending = box.readPending(maxBatch, opts.connectorId);
-    if (pending.records.length === 0)
-      break;
-    const experiences = groupIntoExperiences(pending.records).flatMap(boundExperienceSize);
-    if (experiences.length === 0) {
-      box.advance(pending.endOffset, opts.connectorId);
-      shipped += pending.records.length;
-      if (!pending.hasMore)
-        break;
-      continue;
-    }
     let sliceOk = true;
     const quarantineBatch = [];
     try {
+      const pending = box.readPending(maxBatch, opts.connectorId, maxSliceBytes);
+      if (pending.records.length === 0) {
+        box.advance(pending.endOffset, opts.connectorId);
+        break;
+      }
+      const experiences = groupIntoExperiences(pending.records).flatMap((exp) => {
+        const bounded = boundExperienceSize(exp);
+        if (exp.type === "doc" && exp.data.kind === "agent-attachment" && !bounded.length) {
+          recordHealth(opts.projectRoot, "attachments", "too_large", 1);
+        }
+        return bounded;
+      });
       for (const body of packBodies(experiences)) {
         const res = await postExperiences(opts.url, opts.token, body, opts.connectorId, opts.authMode, opts.telemetry);
         lastStatus = res.status;
@@ -17210,19 +17376,19 @@ async function drain(opts) {
         sliceOk = false;
         break;
       }
+      if (!sliceOk)
+        break;
+      if (quarantineBatch.length > 0)
+        appendRejected(opts.projectRoot, quarantineBatch);
+      box.advance(pending.endOffset, opts.connectorId);
+      shipped += pending.records.length;
+      if (!pending.hasMore)
+        break;
     } catch {
       recordHealth(opts.projectRoot, "delivery", "retry");
       lastStatus = 0;
       break;
     }
-    if (!sliceOk)
-      break;
-    if (quarantineBatch.length > 0)
-      appendRejected(opts.projectRoot, quarantineBatch);
-    box.advance(pending.endOffset, opts.connectorId);
-    shipped += pending.records.length;
-    if (!pending.hasMore)
-      break;
   }
   if (shipped > 0) {
     box.compact();
@@ -17326,11 +17492,11 @@ async function drainAll(opts) {
 }
 var STALE_LOCK_MS2 = 60000;
 function lockPath2(projectRoot) {
-  return join9(projectRoot, ".augenta", "outbox", ".lock");
+  return join10(projectRoot, ".augenta", "outbox", ".lock");
 }
 function acquireLock(projectRoot) {
   const lock = lockPath2(projectRoot);
-  mkdirSync6(dirname3(lock), { recursive: true });
+  mkdirSync7(dirname4(lock), { recursive: true });
   try {
     const fd = openSync(lock, "wx");
     writeSync(fd, String(process.pid));
@@ -17338,7 +17504,7 @@ function acquireLock(projectRoot) {
     return true;
   } catch {
     try {
-      if (Date.now() - statSync3(lock).mtimeMs > STALE_LOCK_MS2) {
+      if (Date.now() - statSync4(lock).mtimeMs > STALE_LOCK_MS2) {
         unlinkSync3(lock);
         return acquireLock(projectRoot);
       }
@@ -17422,6 +17588,7 @@ export {
   acquireLock,
   TRUNCATION_MARKER,
   MAX_REJECTED_BYTES,
+  MAX_PENDING_SLICE_BYTES,
   MAX_EXPERIENCE_BYTES,
   MAX_BODY_BYTES,
   DOCUMENT_TRUNCATION_MARKER

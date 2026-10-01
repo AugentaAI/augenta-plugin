@@ -24,6 +24,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureAugentaDir } from "./augenta-dir";
+import { documentTimestamp } from "./documents";
 
 export interface Link {
   workspaceId: string;
@@ -39,6 +40,8 @@ export interface Links {
   projectKey: string;
   /** When this checkout joined; Codex turns before it are not eligible. */
   joinedAt: string;
+  /** Reconnect/adopt after the document disclosure. Old joins keep attachments off. */
+  attachmentsConsentedAt?: string;
   /** One link per recorded Workspace, each a Connector this person owns. */
   links: Link[];
 }
@@ -77,6 +80,7 @@ export function readLinks(projectRoot: string): Links | undefined {
       userId: value.userId,
       projectKey: value.projectKey,
       joinedAt: new Date(value.joinedAt).toISOString(),
+      ...(documentTimestamp(value.attachmentsConsentedAt) ? { attachmentsConsentedAt: documentTimestamp(value.attachmentsConsentedAt) } : {}),
       links,
     };
   } catch {
@@ -99,6 +103,7 @@ export function writeLinks(projectRoot: string, links: Links): void {
         userId: links.userId,
         projectKey: links.projectKey,
         joinedAt: links.joinedAt,
+        ...(documentTimestamp(links.attachmentsConsentedAt) ? { attachmentsConsentedAt: documentTimestamp(links.attachmentsConsentedAt) } : {}),
         links: links.links.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId })),
       }),
       { mode: 0o600 },
