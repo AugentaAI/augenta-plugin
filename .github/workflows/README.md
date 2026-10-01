@@ -53,7 +53,7 @@ assertion starts lying.
 
 | Gate | What it refuses |
 |---|---|
-| `.github/gates/claude-allowlist-shape.sh` | an `--allowed-tools` value that is not ONE quoted argument (the action word-splits it and shreds every `Bash(...)` pattern containing a space); a bare ` *` where the `:*` prefix wildcard was meant; approve/merge/`gh api` granted to either review half; a write tool in the read-only half; and a reviewer or fixer missing any piece of the incremental-review or budget machinery |
+| `.github/gates/claude-allowlist-shape.sh` | an `--allowed-tools` value that is not ONE quoted argument (the action word-splits it and shreds every `Bash(...)` pattern containing a space); a bare ` *` where the `:*` prefix wildcard was meant; approve/merge/`gh api` granted to either review half; a write tool in the read-only half; a reviewer or fixer missing any piece of the incremental-review or budget machinery; and an agent run whose `--model` is missing, an alias, or not the one id the gate expects for that model family |
 | `.github/gates/claude-fix-resolution.sh` | a post-fix resolver that would resolve anything but a fresh finding reported `fixed` by a commit proven to be on the PR's first-parent line **and** on origin. `gh` is a fixture; nothing touches the network |
 | `.github/gates/claude-fix-rounds.sh` | a round counter that miscounts the budget in either direction — under-count and the fix cycle never ends, over-count and the agent stops fixing things a human asked for |
 | `.github/gates/workflow-pipefail-grep.sh` | three pipelines whose reported status is not the status of the thing that mattered: `… \| grep -q` under `pipefail`, `curl … \| bash`, and a command substitution piping into a consumer that stops short |
@@ -254,6 +254,15 @@ pattern containing a space (`Bash(git diff *)`, `Bash(gh pr *)`). The agent's `g
 that did nothing. Use `:*`, not a bare `*`, and use the hyphenated flag rather than the
 camel-case spelling. `.github/gates/claude-allowlist-shape.sh` enforces all three, so this
 is a gate rather than a warning.
+
+## Changing a model
+
+Every `claude-code-action` run pins `--model` to a full model id, written literally in its
+workflow so a model change is a reviewed commit. `.github/gates/claude-allowlist-shape.sh`
+holds the one id each family must use (`EXPECTED_OPUS`, `EXPECTED_SONNET`,
+`EXPECTED_HAIKU`) and fails any pin that is missing, an alias such as `opus`, or a
+different version. To move a family, change its line in the gate, then update every pin
+the gate reports — in the same commit.
 
 ## Verify
 
