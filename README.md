@@ -154,11 +154,29 @@ Every selected Workspace gets the **full record**:
 | Agent activity | Messages, tool actions, and results in a common format |
 | Raw transcript records | The chat records written by your coding app |
 | Project memory | Saved agent notes that match this project |
+| Supplied documents | Text documents you attach or mention, and PDFs supplied or referenced in supported file-tool records, including generated and temporary PDFs |
 
 The plugin removes common secret patterns from activity and project notes.
 **Raw transcript records are structurally sanitized but are not secret-scrubbed.**
 This means some internal fields are removed, but passwords, keys, and private
 text can still be sent in the chat records.
+Embedded document and image bytes are replaced with hash, size and media-type
+references in telemetry. Eligible text and PDFs are sent separately as documents.
+Text documents have common secret patterns removed. **PDF bytes are not
+secret-scrubbed**, and every selected Workspace receives the whole PDF.
+Images remain placeholders; they are not sent as documents.
+
+Document capture starts after **this checkout** connects or joins with the new
+disclosure. Earlier transcript history is not rescanned for documents. Existing
+connections keep their current activity and memory capture with attachments off
+until you reconnect or join again. **Upgrade every installed harness before
+enabling attachments:** an older plugin sharing the queue can skip document
+records. This update also makes Codex ask you to trust the changed hooks again.
+
+Text is split into parts below 512 KiB. A PDF must fit a single envelope
+(roughly 380 KiB of PDF bytes); a larger PDF is skipped whole. Missing, changing
+or unreadable referenced PDFs are skipped. The plugin reads only the recorded
+file paths; it does not scan folders or fetch documents from the network.
 
 Only connect projects you are comfortable sharing with all chosen Workspaces.
 The audience is the **union** of their members: anyone with access to any
@@ -180,6 +198,11 @@ This does not delete records already sent to Augenta.
 To pause capture across projects, set `AUGENTA_CAPTURE_ENABLED=0` in the
 environment that starts your coding app. This also pauses automatic recall.
 Asking with the recall command still works while a project has its config file.
+
+To stop new attachment capture while keeping activity and memory capture, set
+`AUGENTA_CAPTURE_ATTACHMENTS=0` (also accepts `off` or `false`). `all` still
+captures only text and PDFs; it does not enable images. Already queued documents
+remain queued for delivery.
 
 To turn automatic recall on or off for one project, ask your agent to change
 it, or run connect again and answer that question. To turn it off for every

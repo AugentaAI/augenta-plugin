@@ -13,7 +13,7 @@ flowchart LR
         Queue[Local queue]
         Sender[Background sender]
         Recall[Recall skill or prompt hook]
-        Agent -->|Activity, raw transcripts, and notes| Queue
+        Agent -->|Activity, raw transcripts, notes and consented documents| Queue
         Queue --> Sender
         Agent -->|A question or the prompt| Recall
     end
@@ -83,11 +83,13 @@ expand project-memory capture.
 
 A short project lock serializes capture/append/cursor commits across processes.
 A contender waits at most 750 ms, then reports `retry` without changing the cursor;
-a later lifecycle event retries. It writes three types of records to a queue on disk:
+a later lifecycle event retries. It writes these records to a queue on disk:
 
 - Activity in a common format for Claude Code and Codex.
 - Raw transcript records, with some internal fields removed.
 - Changed project memory notes, saved as separate documents.
+- Supplied text documents and PDFs supplied or referenced in supported file-tool
+  records, saved as separate documents after this checkout consents.
 
 Activity and memory notes have common secret patterns removed. Raw transcript
 text does not. The [privacy details](../README.md#what-gets-captured) apply to
@@ -97,6 +99,35 @@ every selected Workspace.
 the sections of Codex's memory file that match the project. It checks for
 changes at session start and the end of a turn. It does not scan all source
 files in the repository.
+
+[Attachment capture](../capture/attachments.ts) recognizes native Claude file
+mentions, SDK document blocks and PDF Read records, including page-range reads
+and temporary/generated PDFs. It matches mentions to the user's reference and
+parent chain across incremental tails, and excludes compaction restoration.
+Codex file adapters await a native fixture; images stay placeholders. Sanitation
+removes embedded binary bytes before exclusion, extraction and normalization,
+and again when sending older queued raw records. Extraction receives those
+removed bytes separately and prefers embedded PDFs over local paths.
+
+A referenced PDF is read once as a bounded regular-file snapshot, checked for
+changes to the descriptor and path. Capture never scans directories or fetches
+attachments over the network. Text is secret-scrubbed; PDFs are not. Both go in
+standalone `type: "doc"` envelopes with `kind: "agent-attachment"`, never in
+trajectory events. Project files use a physical project-relative path for
+identity; outside-project and pasted documents use content hashes. Revisions
+use a content hash and the originating line's timestamp, never the current time.
+
+Attachment consent lives in the checkout's links for browser connections and
+in untracked local configs for API keys. Existing connections have no consent
+timestamp, so attachments stay off. Older lines and mentions initiated before
+consent cannot enable it. The validated atomic attachment index is capped at
+4 MiB by evicting the oldest observations. Unchanged content advances its latest
+observation time; older/equal-time conflicting revisions are refused. Documents
+are deduplicated within the current checkout consent. Renewing consent admits
+fresh unchanged supplies to the current Workspace set, with prior revision
+watermarks retained. Documents append with their trajectory under the capture
+lock, and the index advances only after that append is accepted. Attachment
+health is recorded separately.
 
 The capture step writes to disk without waiting for a network request or a
 model response.
@@ -117,6 +148,9 @@ session boundaries. This queue is temporary and has limits:
 | One destination falls more than 16 MiB behind the furthest one | Older queued records can be discarded after three consecutive queue drains in which it sends nothing and another destination makes progress |
 | All destinations are offline | That lag rule does not apply; the overall queue limit still does |
 | The API rejects a request with 400, 413, or 422 | The sender records the rejection locally, within a 10 MiB limit, and moves on |
+| Text documents exceed an envelope | Split into parts below 512 KiB before appending |
+| A PDF exceeds an envelope | Skip whole, without truncating bytes; report `attachments: too_large` |
+| A pending slice exceeds 2 MiB | Stop before the next record; allow one larger legacy record alone so delivery progresses |
 | A network error or other failed HTTP response | The affected records stay queued for a later attempt, subject to the limits above |
 
 Successful delivery resets a destination's lag count. Discards are reported

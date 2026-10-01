@@ -13,6 +13,12 @@ complete non-empty Workspace set. Each selected Workspace receives the same full
 record; the audience is everyone with access to any of them. Raw records are
 structurally sanitized, not secret-scrubbed. Automatic recall is a separate choice.
 
+Native capture retains this checkout's document-consent boundary: supplied text
+documents and supported PDF references are captured only after its recorded
+attachment consent, with the attachment kill switch still applying. PDF bytes
+are not secret-scrubbed. OTLP consumes only exported content; file paths in an
+event never cause this relay to open or fetch a document.
+
 Then confirm the Cowork engine `session.id` and explicitly bind it to this one
 project and one transport. A task title, the desktop's task URL and an attached
 host path do not establish that identity. No organization, email, source user ID

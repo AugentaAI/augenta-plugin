@@ -241,12 +241,14 @@ export function writeApiKeyConfig(
   const dir = ensureAugentaDir(projectRoot);
   setAugentaIgnore(projectRoot, "local");
   const path = join(dir, "config.json");
+  const consentedAt = new Date().toISOString();
   writeFileSync(
     path,
     `${JSON.stringify(
       {
         authMode: "api-key",
-        captureSince: new Date().toISOString(),
+        captureSince: consentedAt,
+        attachmentsConsentedAt: consentedAt,
         apiKey,
         org: details.org ? { id: details.org.id, name: details.org.name } : undefined,
         destinations: details.destinations?.map(({ connectorId, workspaceId, workspaceName }) => ({ connectorId, workspaceId, workspaceName })),
@@ -350,6 +352,7 @@ export function writeOAuthConfig(
     userId: connection.userId,
     projectKey: connection.projectKey,
     joinedAt,
+    attachmentsConsentedAt: joinedAt,
     links: connection.destinations.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId })),
   });
   return path;
@@ -1340,7 +1343,7 @@ export async function connectProject(
   // tell anyone how many people can read their transcripts, and a warning that
   // arrives after the selection cannot change it.
   console.log(
-    "Every Workspace you select receives the FULL record — this project's agent activity, its raw transcript lines (structurally sanitized, but NOT secret-scrubbed), and its project memory, complete, in each.",
+    "Every Workspace you select receives the FULL record — this project's agent activity, its raw transcript lines (structurally sanitized, but NOT secret-scrubbed), its project memory, and supplied text documents and PDFs supplied or referenced in supported file-tool records, complete, in each. PDF bytes are NOT secret-scrubbed. Attachments start after this checkout consents; earlier transcript history is not rescanned. Upgrade every installed harness before connecting to enable attachments.",
   );
   console.log(
     "So anyone with access to ANY Workspace you select can read this project's captured activity: the audience is the union of all of them.",
@@ -1408,6 +1411,7 @@ export async function connectProject(
         "Each of those receives the full record, so the audience is the union of everyone with access to any of them.",
       );
     }
+    console.log("Eligible documents observed after this checkout's consent go to every selected Workspace. PDF bytes and raw transcripts are not secret-scrubbed. Images remain placeholders.");
     console.log(`Automatic recall is ${autoRecall ? "on" : "off"} for this project.`);
   } else {
     console.log("No destination could be linked. No config was written.");
@@ -2162,11 +2166,13 @@ async function adoptProject(resolved: ResolvedProject, args: Args): Promise<Json
     action: action!,
   }));
   const unsent = unsentFromAnotherSignIn(resolved.projectRoot, owner.userId);
+  const consentedAt = new Date().toISOString();
   writeLinks(resolved.projectRoot, {
     profileId: picked.profileId,
     userId: owner.userId,
     projectKey: owner.projectKey,
-    joinedAt: new Date().toISOString(),
+    joinedAt: consentedAt,
+    attachmentsConsentedAt: consentedAt,
     links: destinations.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId })),
   });
   // Links new to this checkout start at the end of its spool, never inheriting
@@ -2529,6 +2535,7 @@ if (isMain(import.meta.url)) {
         `The platform key in .augenta/config.json is accepted by ${gateway} and resolves to Connector ${connector.id} (${connector.status}, ${connector.direction}). Nothing was written.`,
       );
     } else if (args.apiKey?.trim()) {
+      console.log("This checkout will capture supplied text documents and PDFs supplied or referenced in supported file-tool records, including temporary PDFs, after this connection. PDF bytes are not secret-scrubbed and go to the key's assigned Workspace. Upgrade every installed harness before enabling attachments; AUGENTA_CAPTURE_ATTACHMENTS=0 disables new attachment capture.");
       const existed = existsSync(join(projectRoot, ".augenta", "config.json"));
       const { path, connector } = await connectWithApiKey(
         projectRoot,

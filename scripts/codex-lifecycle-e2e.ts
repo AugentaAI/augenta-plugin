@@ -110,7 +110,7 @@ try {
   // Run the installed connection entrypoint from the actual cwd, with no
   // --project override to hide a worktree-resolution regression. The key is a
   // disposable synthetic fixture; no real credential is involved.
-  await run([connectBundle, "--api-key", "fixture-only", "--endpoint", server.url.origin], "node");
+  await run([connectBundle, "--api-key", "fixture-only", "--endpoint", server.url.origin, "--auto-recall", "on"], "node");
   assert(existsSync(join(project, ".augenta/config.json")));
   if (worktreeMode) assert(!existsSync(join(main, ".augenta/state/capture.json")));
   toolNext = true;

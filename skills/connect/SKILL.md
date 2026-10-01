@@ -6,11 +6,13 @@ allowed-tools: AskUserQuestion, Bash, Read
 
 # Augenta Connect
 
-Connect the current project to Augenta activity and project-memory capture.
+Connect the current project to Augenta activity, project memory and document capture.
 Connected projects send normalized activity steps, structurally sanitized raw
-transcript lines, and matching scrubbed memory documents through one inbound
+transcript lines, matching scrubbed memory documents, supplied text documents
+and PDFs supplied or referenced in supported file-tool records through one inbound
 Connector per explicitly selected Workspace. **Every selected Workspace
-receives the full record — the same activity and memory, complete, in each.**
+receives the full record — the same activity, memory and documents, complete,
+in each.**
 Connection is per project and is the user's consent boundary.
 
 You run the connect script yourself and drive it with `--json`. Each verb returns
@@ -191,9 +193,9 @@ records they send go through a link that belongs to them.
 Before asking, name `current.organization`, every entry in `current.destinations`,
 and `current.environment` when it is not `prod`. Say, as in step 3, that each of
 those Workspaces receives the **full record** (activity, raw transcript lines and
-project memory), so the audience is the **union** of everyone with access to any
+project memory and supplied text/PDF documents), so the audience is the **union** of everyone with access to any
 of them, and that raw transcript records are structurally sanitized but **not**
-secret-scrubbed. Say whether automatic recall is on for the project, from
+secret-scrubbed. PDF bytes are also **not secret-scrubbed** and every selected Workspace receives them, including generated/temporary PDFs observed in supported file-tool records. Say that document capture starts after this checkout consents, earlier history is not rescanned, and all installed harnesses must upgrade before enabling attachments; Codex asks for renewed hook trust. Say whether automatic recall is on for the project, from
 `current.autoRecall`.
 
 Then ask one question with three options: **Use these Workspaces**, **Choose
@@ -287,7 +289,9 @@ Before the user answers, say — in one or two sentences, naming the organizatio
 from `signedInAs`:
 
 - every Workspace they select receives the **full record**: this project's agent
-  activity, its raw transcript lines, and its project memory, complete, in each;
+  activity, its raw transcript lines, its project memory, supplied text documents and PDFs supplied or referenced in supported file-tool records (including temporary/generated PDFs), complete, in each;
+- PDF bytes are **not secret-scrubbed** and every selected Workspace receives them;
+- attachments start after this checkout consents, with earlier transcript history excluded; existing connections keep attachments off until reconnecting or joining again; upgrade every installed harness before enabling, and expect Codex to renew its hook-trust prompt;
 - so **anyone with access to any selected Workspace can read this project's
   captured activity** — the audience is the union of all of them;
 - that if they turn on automatic recall (asked alongside), each prompt they
@@ -362,14 +366,14 @@ so tell the user to untrack it with `git rm --cached .augenta/config.json` if th
 is theirs, and never ask for the key in the chat. If dispatch is absent, direct the user to
 review the plugin hooks in their host and follow its activation/restart guidance.
 Never change host trust records or invoke capture/delivery manually as proof.
-Report API acceptance separately from verified ingestion.
+The separate `attachments` health stage reports `captured`, `too_large` or `skipped`; it does not prove platform processing. An oversized PDF is skipped whole, while a missing, changing or unreadable referenced file is skipped. `AUGENTA_CAPTURE_ATTACHMENTS=0|off|false` stops new attachments without stopping activity or memory. Report API acceptance separately from verified ingestion.
 
 On `connected`, name **every** entry in `destinations` — this project now feeds
 each of them, through that entry's `connectorId`. When there is more than one,
 restate that the full record goes to each, so the audience is the union. Name the
 environment if it is not `prod`. Restate that raw transcript records are
 structurally sanitized but **not** secret-scrubbed, and that this now applies to
-every destination you just named. Say whether automatic recall is on or off, from
+every destination you just named. PDF bytes are also **not secret-scrubbed** and go to every selected Workspace. Say that this checkout now captures eligible documents observed after consent, with images excluded. Say whether automatic recall is on or off, from
 `autoRecall`.
 
 Also say that `.augenta/config.json` holds no sign-in token and may be committed,

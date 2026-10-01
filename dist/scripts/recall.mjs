@@ -669,23 +669,155 @@ function takeAuthNotice(projectRoot) {
 }
 
 // capture/config.ts
-import { readFileSync as readFileSync4 } from "node:fs";
-import { join as join6 } from "node:path";
+import { readFileSync as readFileSync5 } from "node:fs";
+import { join as join7 } from "node:path";
 
 // capture/links.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { join as join3 } from "node:path";
+import { randomUUID as randomUUID3 } from "node:crypto";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync4, renameSync as renameSync3, rmSync as rmSync2, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join4 } from "node:path";
+
+// capture/documents.ts
+import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
+import { lstatSync, realpathSync as realpathSync2, readlinkSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync, statSync as statSync2, writeFileSync as writeFileSync3 } from "node:fs";
+import { basename, dirname, isAbsolute, join as join3, relative, resolve as resolve2, sep } from "node:path";
+var MAX_DOCUMENT_EXPERIENCE_BYTES = 512 * 1024;
+function sha256(input) {
+  return createHash2("sha256").update(input).digest("hex");
+}
+function jsonBytes(value) {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+function boundedTitle(title) {
+  return [...title].slice(0, 512).join("");
+}
+function normalizeLogicalPath(path) {
+  return path.split(sep).join("/");
+}
+function sameSnapshot(a, b) {
+  return a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+}
+function safeBoundary(text, index) {
+  if (index > 0 && index < text.length && text.charCodeAt(index - 1) >= 55296 && text.charCodeAt(index - 1) <= 56319 && text.charCodeAt(index) >= 56320 && text.charCodeAt(index) <= 57343)
+    return index - 1;
+  return index;
+}
+function chunkText(text, makeRecord) {
+  if (!text.length)
+    return [""];
+  const chunks = [];
+  let start = 0;
+  const sizingIndex = 999999999;
+  while (start < text.length) {
+    let lo = start + 1, hi = text.length, best = -1;
+    while (lo <= hi) {
+      const rawMid = Math.floor((lo + hi) / 2);
+      const mid = safeBoundary(text, rawMid);
+      if (mid <= start) {
+        lo = rawMid + 1;
+        continue;
+      }
+      if (jsonBytes(makeRecord(text.slice(start, mid), sizingIndex, sizingIndex)) < MAX_DOCUMENT_EXPERIENCE_BYTES) {
+        best = mid;
+        lo = rawMid + 1;
+      } else
+        hi = rawMid - 1;
+    }
+    if (best <= start)
+      return [];
+    chunks.push(text.slice(start, best));
+    start = best;
+  }
+  return chunks;
+}
+function readDocumentIndex(root, file, valid, maxBytes = Infinity) {
+  try {
+    const path = join3(root, ".augenta", "state", file);
+    if (statSync2(path).size > maxBytes)
+      return {};
+    const parsed = JSON.parse(readFileSync3(path, "utf8"));
+    if (!parsed || parsed.version !== 1 || !parsed.documents || typeof parsed.documents !== "object" || Array.isArray(parsed.documents))
+      return {};
+    return Object.fromEntries(Object.entries(parsed.documents).filter(([id, value]) => valid(value) && value.documentId === id));
+  } catch {
+    return {};
+  }
+}
+function writeDocumentIndex(root, file, documents, maxBytes = Infinity) {
+  const dir = join3(ensureAugentaDir(root), "state");
+  const path = join3(dir, file), tmp = `${path}.${randomUUID2()}.tmp`;
+  try {
+    const json = JSON.stringify({ version: 1, documents });
+    if (Buffer.byteLength(json) > maxBytes)
+      return false;
+    mkdirSync3(dir, { recursive: true });
+    writeFileSync3(tmp, json, { mode: 384 });
+    renameSync2(tmp, path);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {}
+  }
+}
+function documentTimestamp(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) || !Number.isFinite(Date.parse(value)))
+    return;
+  return new Date(value).toISOString();
+}
+var MAX_SYMLINK_HOPS = 40;
+function symlinkTarget(path) {
+  try {
+    return lstatSync(path).isSymbolicLink() ? resolve2(dirname(path), readlinkSync(path)) : undefined;
+  } catch {
+    return;
+  }
+}
+function physicalPath(path) {
+  let existing = resolve2(path);
+  const missing = [];
+  let hops = 0;
+  while (true) {
+    try {
+      return join3(realpathSync2(existing), ...missing);
+    } catch {}
+    const target = symlinkTarget(existing);
+    if (target !== undefined) {
+      if (++hops > MAX_SYMLINK_HOPS)
+        return;
+      existing = target;
+      continue;
+    }
+    const parent = dirname(existing);
+    if (parent === existing)
+      return resolve2(path);
+    missing.unshift(basename(existing));
+    existing = parent;
+  }
+}
+function isScopedToProject(scope, root) {
+  if (!isAbsolute(scope))
+    return false;
+  const target = physicalPath(scope);
+  if (target === undefined)
+    return false;
+  const rel = relative(root, target);
+  return rel === "" || !rel.startsWith(".." + sep) && rel !== ".." && !isAbsolute(rel);
+}
+
+// capture/links.ts
 function linksPath(projectRoot) {
-  return join3(projectRoot, ".augenta", "state", "links.json");
+  return join4(projectRoot, ".augenta", "state", "links.json");
 }
 function legacyAdoptionPath(projectRoot) {
-  return join3(projectRoot, ".augenta", "state", "adopted.json");
+  return join4(projectRoot, ".augenta", "state", "adopted.json");
 }
 var nonEmpty = (value) => typeof value === "string" && value.length > 0;
 function readLinks(projectRoot) {
   try {
-    const value = JSON.parse(readFileSync3(linksPath(projectRoot), "utf8"));
+    const value = JSON.parse(readFileSync4(linksPath(projectRoot), "utf8"));
     if (value.version !== 1)
       return;
     if (!nonEmpty(value.profileId) || !nonEmpty(value.userId) || !nonEmpty(value.projectKey))
@@ -709,6 +841,7 @@ function readLinks(projectRoot) {
       userId: value.userId,
       projectKey: value.projectKey,
       joinedAt: new Date(value.joinedAt).toISOString(),
+      ...documentTimestamp(value.attachmentsConsentedAt) ? { attachmentsConsentedAt: documentTimestamp(value.attachmentsConsentedAt) } : {},
       links
     };
   } catch {
@@ -716,34 +849,35 @@ function readLinks(projectRoot) {
   }
 }
 function writeLinks(projectRoot, links) {
-  const dir = join3(ensureAugentaDir(projectRoot), "state");
-  mkdirSync3(dir, { recursive: true });
-  const path = join3(dir, "links.json");
-  const tmp = `${path}.${randomUUID2()}.tmp`;
+  const dir = join4(ensureAugentaDir(projectRoot), "state");
+  mkdirSync4(dir, { recursive: true });
+  const path = join4(dir, "links.json");
+  const tmp = `${path}.${randomUUID3()}.tmp`;
   try {
-    writeFileSync3(tmp, JSON.stringify({
+    writeFileSync4(tmp, JSON.stringify({
       version: 1,
       profileId: links.profileId,
       userId: links.userId,
       projectKey: links.projectKey,
       joinedAt: links.joinedAt,
+      ...documentTimestamp(links.attachmentsConsentedAt) ? { attachmentsConsentedAt: documentTimestamp(links.attachmentsConsentedAt) } : {},
       links: links.links.map(({ workspaceId, connectorId }) => ({ workspaceId, connectorId }))
     }), { mode: 384 });
-    renameSync2(tmp, path);
+    renameSync3(tmp, path);
   } finally {
-    rmSync(tmp, { force: true });
+    rmSync2(tmp, { force: true });
   }
-  rmSync(legacyAdoptionPath(projectRoot), { force: true });
+  rmSync2(legacyAdoptionPath(projectRoot), { force: true });
 }
 
 // capture/project.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync4, realpathSync as realpathSync2 } from "node:fs";
-import { dirname as dirname2, join as join5, resolve as resolve3 } from "node:path";
+import { existsSync as existsSync4, realpathSync as realpathSync3 } from "node:fs";
+import { dirname as dirname3, join as join6, resolve as resolve4 } from "node:path";
 
 // capture/environment.ts
 import { existsSync as existsSync3 } from "node:fs";
-import { dirname, join as join4, resolve as resolve2 } from "node:path";
+import { dirname as dirname2, join as join5, resolve as resolve3 } from "node:path";
 function sessionEnvironment(env = process.env) {
   const declared = env.AUGENTA_EPHEMERAL?.trim().toLowerCase();
   if (declared === "0" || declared === "false")
@@ -765,11 +899,11 @@ function sessionEnvironment(env = process.env) {
   return { ephemeral: signals.length > 0, ...kind ? { kind } : {}, signals };
 }
 function insideGitCheckout(dir) {
-  let current = resolve2(dir);
+  let current = resolve3(dir);
   while (true) {
-    if (existsSync3(join4(current, ".git")))
+    if (existsSync3(join5(current, ".git")))
       return true;
-    const parent = dirname(current);
+    const parent = dirname2(current);
     if (parent === current)
       return false;
     current = parent;
@@ -816,16 +950,16 @@ function resolveProjectRoot(cwd) {
     return;
   let dir;
   try {
-    dir = realpathSync2(cwd);
+    dir = realpathSync3(cwd);
   } catch {
     return;
   }
   while (true) {
-    if (existsSync4(join5(dir, ".augenta", "config.json")))
+    if (existsSync4(join6(dir, ".augenta", "config.json")))
       return dir;
-    if (existsSync4(join5(dir, ".git")))
+    if (existsSync4(join6(dir, ".git")))
       return;
-    const parent = dirname2(dir);
+    const parent = dirname3(dir);
     if (parent === dir)
       return;
     dir = parent;
@@ -833,7 +967,7 @@ function resolveProjectRoot(cwd) {
 }
 function resolveProject(args, cwd) {
   if (args.project)
-    return { projectRoot: resolve3(cwd, args.project) };
+    return { projectRoot: resolve4(cwd, args.project) };
   const configured = resolveProjectRoot(cwd);
   if (configured)
     return { projectRoot: configured };
@@ -903,14 +1037,14 @@ function joinedRoutes(projectRoot, profileId, projectKey, workspaces) {
   }
   if (links.links.length !== workspaces.length)
     return { join: "workspaces" };
-  return { join: "joined", destinations, joinedAt: links.joinedAt };
+  return { join: "joined", destinations, joinedAt: links.joinedAt, attachmentsConsentedAt: links.attachmentsConsentedAt };
 }
 function configPath(projectRoot) {
-  return join6(projectRoot, ".augenta", "config.json");
+  return join7(projectRoot, ".augenta", "config.json");
 }
 function loadProjectConfig(projectRoot) {
   try {
-    const value = JSON.parse(readFileSync4(configPath(projectRoot), "utf8"));
+    const value = JSON.parse(readFileSync5(configPath(projectRoot), "utf8"));
     if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
       return;
     const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
@@ -961,7 +1095,8 @@ function loadProjectConfig(projectRoot) {
         ...routes.destinations ? {
           destinations: routes.destinations,
           connectorIds: routes.destinations.map((destination) => destination.connectorId),
-          captureSince: routes.joinedAt
+          captureSince: routes.joinedAt,
+          ...routes.attachmentsConsentedAt ? { attachmentsConsentedAt: routes.attachmentsConsentedAt } : {}
         } : {},
         projectRoot
       };
@@ -981,6 +1116,7 @@ function loadProjectConfig(projectRoot) {
         ...settings,
         authMode: "api-key",
         ...captureSince ? { captureSince } : {},
+        ...documentTimestamp(value.attachmentsConsentedAt) ? { attachmentsConsentedAt: documentTimestamp(value.attachmentsConsentedAt) } : {},
         apiKey,
         ...keyTracking(projectRoot),
         projectRoot
@@ -1041,6 +1177,9 @@ function captureEnabled(cfg) {
 }
 function effectiveCaptureSince(cfg) {
   return cfg.captureSince;
+}
+function attachmentCaptureMode(env = process.env) {
+  return ["0", "off", "false"].includes((env.AUGENTA_CAPTURE_ATTACHMENTS ?? "").trim().toLowerCase()) ? "off" : "documents";
 }
 
 // capture/platform.ts
@@ -1125,7 +1264,7 @@ function describeError(error) {
 }
 
 // capture/recall-client.ts
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 var MAX_QUERY_CHARS = 4096;
 var MIN_ATTEMPT_MS = 200;
 var RETRY_BACKOFF_MS = [150, 300];
@@ -1274,7 +1413,7 @@ function classifyRecallResponse(parts) {
     message: say(`Augenta returned ${status}`)
   };
 }
-var defaultSleep = (ms) => new Promise((resolve4) => setTimeout(resolve4, ms));
+var defaultSleep = (ms) => new Promise((resolve5) => setTimeout(resolve5, ms));
 function requestTimeout(ceilingMs, deadlineAt) {
   if (deadlineAt === undefined)
     return Math.max(1, Math.floor(ceilingMs));
@@ -1299,7 +1438,7 @@ async function askOnce(ctx, destination) {
     return { outcome: outOfTime(), transient: false };
   const headers = {
     "content-type": "application/json",
-    "idempotency-key": randomUUID3()
+    "idempotency-key": randomUUID4()
   };
   const body = JSON.stringify(destination.workspaceId ? { query: ctx.query, workspace: destination.workspaceId } : { query: ctx.query });
   try {
