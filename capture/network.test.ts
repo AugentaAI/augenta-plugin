@@ -84,7 +84,7 @@ describe("diagnoseHosts", () => {
     });
     expect(hosts).toEqual([
       { host: "control.example.com", ok: true },
-      { host: "auth.example.com", ok: false, reason: "a proxy refused it (403)" },
+      { host: "auth.example.com", ok: false, reason: "a proxy refused it (403)", kind: "proxy_refused" },
       { host: "api.example.com", ok: false, reason: "answered 403, not as Augenta does" },
     ]);
   });
@@ -97,7 +97,18 @@ describe("diagnoseHosts", () => {
 
   test("discovery blocked elsewhere names only what it knows", async () => {
     const hosts = await diagnoseHosts("https://control.example.com", { fetcher: fetcherFor({}) });
-    expect(hosts).toEqual([{ host: "control.example.com", ok: false, reason: "the name did not resolve" }]);
+    expect(hosts).toEqual([{ host: "control.example.com", ok: false, reason: "the name did not resolve", kind: "dns" }]);
+  });
+
+  test("a TLS failure is carried as a kind, not left only in the prose", async () => {
+    // blockedNetworkMessage branches on this, so the structured value has to
+    // survive the check; the reason is display text and may be reworded.
+    const hosts = await diagnoseHosts("https://control.example.com", {
+      fetcher: fetcherFor(answers({
+        "https://api.example.com/v1/me": failedWith("SELF_SIGNED_CERT_IN_CHAIN"),
+      })),
+    });
+    expect(hosts[2]).toEqual({ host: "api.example.com", ok: false, reason: "its TLS certificate was not trusted", kind: "tls" });
   });
 });
 

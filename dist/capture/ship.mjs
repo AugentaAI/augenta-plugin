@@ -15431,7 +15431,8 @@ async function check(fetcher, url, timeoutMs, isAugenta) {
     return {
       host,
       ok: false,
-      reason: !failure ? "no answer" : failure.kind === "proxy_refused" ? `a proxy refused it (${failure.status})` : failure.kind === "dns" ? "the name did not resolve" : failure.kind === "refused" ? "the connection was refused" : failure.kind === "reset" ? "the connection was cut" : failure.kind === "timeout" ? "no answer in time" : "its TLS certificate was not trusted"
+      reason: !failure ? "no answer" : failure.kind === "proxy_refused" ? `a proxy refused it (${failure.status})` : failure.kind === "dns" ? "the name did not resolve" : failure.kind === "refused" ? "the connection was refused" : failure.kind === "reset" ? "the connection was cut" : failure.kind === "timeout" ? "no answer in time" : "its TLS certificate was not trusted",
+      ...failure ? { kind: failure.kind } : {}
     };
   }
 }
@@ -16848,7 +16849,7 @@ function captureHealth(projectRoot) {
 }
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.13.0";
+var PLUGIN_VERSION = "0.13.1";
 
 // capture/ship.ts
 import { join as join10, dirname as dirname4 } from "node:path";

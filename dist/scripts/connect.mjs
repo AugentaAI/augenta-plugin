@@ -144,7 +144,8 @@ async function check(fetcher, url, timeoutMs, isAugenta) {
     return {
       host,
       ok: false,
-      reason: !failure ? "no answer" : failure.kind === "proxy_refused" ? `a proxy refused it (${failure.status})` : failure.kind === "dns" ? "the name did not resolve" : failure.kind === "refused" ? "the connection was refused" : failure.kind === "reset" ? "the connection was cut" : failure.kind === "timeout" ? "no answer in time" : "its TLS certificate was not trusted"
+      reason: !failure ? "no answer" : failure.kind === "proxy_refused" ? `a proxy refused it (${failure.status})` : failure.kind === "dns" ? "the name did not resolve" : failure.kind === "refused" ? "the connection was refused" : failure.kind === "reset" ? "the connection was cut" : failure.kind === "timeout" ? "no answer in time" : "its TLS certificate was not trusted",
+      ...failure ? { kind: failure.kind } : {}
     };
   }
 }
@@ -1579,7 +1580,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.13.0";
+var PLUGIN_VERSION = "0.13.1";
 
 // capture/platform.ts
 class AugentaRequestError extends Error {
@@ -2206,7 +2207,13 @@ async function linkWorkspaces(projectRoot, args, profileId, gateway, owner, work
   }
   return results;
 }
+function ephemeralProjectMessage(projectRoot) {
+  const session = sessionEnvironment();
+  return `this session's machine is discarded when the session ends (${session.signals.join(", ")}), and ` + `${projectRoot} is not inside a Git checkout, so a connection written here could not outlast it; ` + "connect from a local session instead (in Cowork, a local session with the project folder attached)";
+}
 async function connectProject(projectRoot, args) {
+  if (ephemeralProject(projectRoot))
+    throw new Error(ephemeralProjectMessage(projectRoot));
   const { oauth, gateway, control, discovered, discoveredGateway } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
   const environment = environmentLabel(control);
@@ -2588,6 +2595,11 @@ function savedConnection(cfg) {
     autoRecall: autoRecallSetting(cfg)
   };
 }
+function blockedNetworkMessage(hosts) {
+  const blocked = hosts.filter((host) => !host.ok);
+  const needed = hosts.map((host) => host.host).join(", ");
+  return `this network does not let connect reach ${blocked.map((host) => `${host.host} (${host.reason})`).join(", ")}; ` + `connect needs ${needed}. Allow these hosts in this environment's network settings, or ask your administrator to allow them. ` + "In Cowork, the setting is Organization settings → Capabilities → Code execution → Allow network egress " + "(also called Admin settings → Capabilities → Network egress). Start a new task after the setting changes; existing tasks keep their original settings." + (blocked.some((host) => host.kind === "tls") ? " If your network intercepts TLS, ask your administrator to supply its trusted proxy CA for Node." : "");
+}
 async function runJsonVerb(resolved, args) {
   const cfg = loadProjectConfig(resolved.projectRoot);
   const metadata = {
@@ -2611,7 +2623,7 @@ async function runJsonVerb(resolved, args) {
           status: "error",
           code: "network_blocked",
           hosts,
-          message: `this network does not let connect reach ${blocked.map((host) => `${host.host} (${host.reason})`).join(", ")}; ` + `connect needs ${hosts.map((host) => host.host).join(", ")}, so allow them in this environment's network settings`,
+          message: blockedNetworkMessage(hosts),
           ...metadata,
           ...disclosures
         };
@@ -2842,13 +2854,13 @@ async function dispatchJsonVerb(resolved, args) {
       message: "--create-workspace and --workspace are separate steps; create first, then ask for the complete destination set again and pass it with --workspace"
     };
   }
-  if ((args.probe || args.workspaces?.length || args.adopt) && ephemeralProject(resolved.projectRoot)) {
+  if ((args.probe || args.login || args.awaitLogin || args.createWorkspace !== undefined || args.workspaces?.length || args.adopt) && ephemeralProject(resolved.projectRoot)) {
     const session = sessionEnvironment();
     return {
       status: "error",
       code: "ephemeral_project",
       session,
-      message: `this session's machine is discarded when the session ends (${session.signals.join(", ")}), and ` + `${resolved.projectRoot} is not inside a Git checkout, so a connection written here could not outlast it; ` + "connect from a local session instead (in Cowork, a local session with the project folder attached)"
+      message: ephemeralProjectMessage(resolved.projectRoot)
     };
   }
   if (args.adopt) {
@@ -3015,6 +3027,7 @@ export {
   connectWithApiKey,
   connectToWorkspaces,
   connectProject,
+  blockedNetworkMessage,
   awaitLogin,
   WORKSPACE_LIST_PAGE_SIZE,
   WORKSPACE_LIST_MAX_PAGES

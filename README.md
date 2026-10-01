@@ -273,8 +273,9 @@ Wherever commands run behind a network allowlist, allow `augenta.ai`,
 | Claude Code in the cloud | The environment's Network access, set to Custom. |
 | Codex cloud | The environment's internet access, with all HTTP methods allowed. The GET, HEAD and OPTIONS-only setting blocks sign-in, capture and recall. |
 
-If a host is blocked, connect tells you which one and why before asking you
-anything. Where the environment sets `HTTPS_PROXY`, connect, recall and the hooks
+If a host is blocked, connect tells you which one and why, and what to ask your
+administrator to allow. In Cowork, start a new task after the setting changes;
+existing tasks keep their original settings. Where the environment sets `HTTPS_PROXY`, connect, recall and the hooks
 send through that proxy and trust the sandbox's proxy certificate. This needs
 Node.js 22.21 or newer; older versions ignore the proxy.
 

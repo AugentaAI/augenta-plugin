@@ -43,10 +43,20 @@ Only if your harness did not give you this file's directory, find the install:
 
 ```bash
 ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/augenta/*/dist/scripts/connect.mjs \
-      "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/augenta/*/dist/scripts/connect.mjs 2>/dev/null
+      "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/augenta/*/dist/scripts/connect.mjs \
+      "$HOME/Library/Application Support/Claude/local-agent-mode-sessions/"*/*/rpm/plugin_*/dist/scripts/connect.mjs 2>/dev/null
 ```
 
-If neither finds the script, do not keep searching other machines or shells. In a
+The last layout is Cowork desktop's account-scoped plugin cache, which is
+per session: several copies of the same install are normal there. For an RPM
+candidate, read `../../.claude-plugin/plugin.json` from the script's directory
+and keep it only when its name is `augenta`. Then compare the surviving
+candidates' `version`: if they all report the same one, use any of them; if they
+disagree, stop and report the ambiguity rather than guessing which install these
+instructions came from. A cache path does not establish that the project and
+plugin share a runtime.
+
+If none of these finds the script, do not keep searching other machines or shells. In a
 cloud session whose shell reaches the user's folder through a separate device
 shell (a Cowork cloud task), the plugin is not in that shell: say that connect
 cannot run in this session, and suggest a local session with the project folder
@@ -105,6 +115,12 @@ not `prod`, say so before any sign-in** (step 2), and again in the question and
 the confirmation: the sign-in link belongs to that environment, and signing in
 sends the new sign-in to it at once. Connecting a project to a dev or staging
 Workspace by accident is silent otherwise.
+
+For `network_blocked`, show the script's message and host checks, including
+what to ask the administrator to allow. Cowork's egress settings apply to new
+tasks: tell the user to create a new task after their administrator changes the
+setting. Stop this connection attempt; searching another install does not fix
+a blocked network.
 
 When `environmentChange` is present, say the project is moving from `from` to
 `to` before any sign-in, before the destination question and in the

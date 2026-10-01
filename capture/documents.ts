@@ -131,4 +131,3 @@ export function isScopedToProject(scope: string, root: string): boolean {
   const rel = relative(root, target);
   return rel === "" || (!rel.startsWith(".." + sep) && rel !== ".." && !isAbsolute(rel));
 }
-
