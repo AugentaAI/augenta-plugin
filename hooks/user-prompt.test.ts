@@ -17,6 +17,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, realpathSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TurnState } from "../capture/turn-cursor";
+import { bindCoworkTask } from "../capture/cowork-task";
 import { AUTO_RECALL_SENTINEL } from "../capture/auto-recall-marker";
 
 const HOOK = join(import.meta.dir, "user-prompt.ts");
@@ -26,14 +27,41 @@ const CODEX_TP = "/u/.codex/sessions/2026/09/23/rollout-2026-09-23T00-00-00-abc.
 const NOWHERE = "http://127.0.0.1:9";
 
 let project: string;
-beforeEach(() => (project = realpathSync(mkdtempSync(join(tmpdir(), "aug-up-")))));
-afterEach(() => rmSync(project, { recursive: true, force: true }));
+/** Cowork task claims are machine-global; no test here may read or write the
+ *  real `~/.augenta`. */
+let authHome: string;
+beforeEach(() => {
+  project = realpathSync(mkdtempSync(join(tmpdir(), "aug-up-")));
+  authHome = realpathSync(mkdtempSync(join(tmpdir(), "aug-up-auth-")));
+});
+afterEach(() => {
+  rmSync(project, { recursive: true, force: true });
+  rmSync(authHome, { recursive: true, force: true });
+});
 
 function hookEnv(extra: Record<string, string> = {}): Record<string, string> {
-  const env: Record<string, string> = { ...(process.env as Record<string, string>), AUGENTA_API_URL: NOWHERE, ...extra };
+  const env: Record<string, string> = { ...(process.env as Record<string, string>), AUGENTA_API_URL: NOWHERE, AUGENTA_AUTH_HOME: authHome, ...extra };
   delete env.AUGENTA_CAPTURE_ENABLED;
   delete env.AUGENTA_AUTO_RECALL;
+  delete env.AUGENTA_COWORK_NATIVE;
   return env;
+}
+
+/** Bind an engine session to this project's OTLP relay, as
+ *  `connect --cowork-task … --cowork-transport otlp` does, without a gateway. */
+async function bindOtlpTask(sessionId: string): Promise<void> {
+  const realFetch = globalThis.fetch;
+  const priorHome = process.env.AUGENTA_AUTH_HOME;
+  process.env.AUGENTA_AUTH_HOME = authHome;
+  globalThis.fetch = (async () =>
+    Response.json({ connectors: [{ id: "c1", workspaceId: "w1", orgId: "o1", status: "active", direction: "inbound" }] })) as unknown as typeof fetch;
+  try {
+    await bindCoworkTask(project, sessionId, "otlp");
+  } finally {
+    globalThis.fetch = realFetch;
+    if (priorHome === undefined) delete process.env.AUGENTA_AUTH_HOME;
+    else process.env.AUGENTA_AUTH_HOME = priorHome;
+  }
 }
 
 function fire(payload: object, env: Record<string, string> = {}): { stdout: string; stderr: string; exitCode: number | null } {
@@ -144,6 +172,27 @@ describe("user-prompt automatic recall", () => {
     expect(r.stdout).toBe("");
     expect(r.stderr).toBe("");
     expect(r.exitCode).toBe(0);
+  });
+
+  // The Cowork gate is the only thing in this hook that can suppress BOTH the
+  // turn bump and the recall block, so it is driven through the real hook here
+  // rather than through nativeCoworkAllowed alone.
+  test("an engine session bound to the OTLP relay suppresses the turn bump AND the recall block", async () => {
+    await bindOtlpTask("cowork-session-1");
+    const r = await fireAsync({ transcript_path: TP, cwd: project, session_id: "cowork-session-1", prompt: "what did we decide about sign-in" }, env());
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe("");
+    expect(r.exitCode).toBe(0);
+    expect(seen).toEqual([]); // the prompt text never left for the other transport's project
+    expect(new TurnState(project).get(TP)).toBe(0);
+  });
+
+  test("an ordinary session that carries a session_id keeps its turn and its recall block", async () => {
+    const r = await fireAsync({ transcript_path: TP, cwd: project, session_id: "ordinary-session", prompt: "what did we decide about sign-in" }, env());
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toBe("");
+    expect(JSON.parse(r.stdout).hookSpecificOutput.additionalContext).toContain("we chose device sign-in");
+    expect(new TurnState(project).get(TP)).toBe(1);
   });
 
   test("a trivial reply is not asked about", async () => {

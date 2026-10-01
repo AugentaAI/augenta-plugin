@@ -17,7 +17,7 @@
  */
 import { writeOAuthProject } from "../__tests__/fixtures";
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, renameSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -39,6 +39,7 @@ import {
 } from "./ship";
 import { Outbox, LAG_STRIKES } from "./outbox";
 import { takeAuthNotice } from "./auth";
+import { captureHealth } from "./health";
 import type { CaptureEvent, DocumentRecord, TrajectoryExperience, RawRecord } from "./event";
 import type { PluginTelemetry } from "./telemetry";
 
@@ -635,6 +636,26 @@ describe("drain against a real loopback endpoint", () => {
     expect(body.experiences[1]!.data).toEqual([raw("raw-turn-2").raw]);
     // cursor advanced → nothing left pending
     expect(box.readPending().records).toEqual([]);
+  });
+
+  test("a journal that no longer matches its spool stops delivery, and records WHY", async () => {
+    startServer(202);
+    const receipt = join(project, ".augenta", "state", "receipt.json");
+    mkdirSync(receipt, { recursive: true }); // a DIRECTORY — the receipt rename cannot land
+    expect(() => box.appendWithReceipt([ev(0, { turn: 1 })], receipt, { seen: [0] })).toThrow();
+    rmSync(receipt, { recursive: true });
+    // An older shipper, with no journal awareness, rewrites the spool under the
+    // open transaction: same bytes, new inode. The journal can never be finished.
+    const replacement = join(project, ".augenta", "outbox", "replacement");
+    writeFileSync(replacement, readFileSync(box.spoolPath));
+    renameSync(replacement, box.spoolPath);
+
+    expect(await drain({ url: url(), projectRoot: project })).toEqual({ shipped: 0, batches: 0, lastStatus: 0 });
+    expect(received.count).toBe(0);
+    expect(box.hasPendingAppend()).toBe(true);
+    // Nothing else on this path writes an auth, discard or health record, so a
+    // wedged project would otherwise be indistinguishable from an idle one.
+    expect(captureHealth(project).delivery?.outcome).toBe("failed");
   });
 
   test("ships a document as its own type: doc experience without an events field", async () => {

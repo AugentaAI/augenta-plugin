@@ -558,7 +558,15 @@ export async function drain(opts: DrainOptions): Promise<DrainResult> {
     const release = captureLock(opts.projectRoot);
     if (!release) return { shipped: 0, batches: 0, lastStatus: 0 };
     try { box.finishPendingAppend(); }
-    catch { return { shipped: 0, batches: 0, lastStatus: 0 }; }
+    catch {
+      // A journal that no longer matches its spool stops delivery rather than
+      // replaying history (docs/cowork-pilot.md), and nothing below runs — so
+      // this is the only place the stop can be recorded. Without it a wedged
+      // project writes no notice and no health at all, and looks exactly like
+      // one that simply has nothing to ship.
+      recordHealth(opts.projectRoot, "delivery", "failed");
+      return { shipped: 0, batches: 0, lastStatus: 0 };
+    }
     finally { release(); }
   }
   const maxBatch = opts.maxBatch ?? 200;

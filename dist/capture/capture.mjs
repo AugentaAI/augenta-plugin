@@ -1108,7 +1108,7 @@ class Outbox {
     if (records.length === 0)
       return true;
     if (existsSync2(this.appendJournalPath()))
-      return false;
+      throw new Error("An outbox append needs recovery");
     this.ensure();
     try {
       if (statSync3(this.spoolPath).size >= this.maxSpoolBytes)
@@ -3905,6 +3905,15 @@ function runCapture(payload, opts = {}) {
     return { appended: 0, flushed: false };
   }
   try {
+    const box = new Outbox(root, { maxSpoolBytes: opts.maxSpoolBytes });
+    if (box.hasPendingAppend()) {
+      try {
+        box.finishPendingAppend();
+      } catch {
+        recordHealth(root, "capture", "failed");
+        return { appended: 0, flushed: false };
+      }
+    }
     return captureUnderLock(payload, opts);
   } finally {
     release();

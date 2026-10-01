@@ -178,10 +178,17 @@ export class Outbox {
   /** Append records (events, raws, and/or documents) to the spool. No-op for
    *  an empty batch. Returns false — without writing anything — when the spool is
    *  already at cap, so the caller (capture.ts) can surface the drop loudly
-   *  instead of records silently vanishing. */
+   *  instead of records silently vanishing.
+   *
+   *  A pending append journal THROWS instead, exactly as {@link forceAppend}
+   *  does. It is a "finish me" condition, not a drop: a caller reading it as the
+   *  cap would spend the episode's ONE loud overflow marker on it and then fail
+   *  to spool that marker, leaving a later genuine overflow silent — the outcome
+   *  {@link markDropped} exists to prevent. {@link finishPendingAppend} clears
+   *  it; capture, the relay and the shipper all run that under the lock first. */
   append(records: SpoolRecord[]): boolean {
     if (records.length === 0) return true;
-    if (existsSync(this.appendJournalPath())) return false;
+    if (existsSync(this.appendJournalPath())) throw new Error("An outbox append needs recovery");
     this.ensure();
     try {
       if (statSync(this.spoolPath).size >= this.maxSpoolBytes) return false; // cap: drop rather than fill the disk

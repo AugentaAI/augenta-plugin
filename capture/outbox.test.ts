@@ -108,7 +108,10 @@ describe("Outbox", () => {
     const bytes = readFileSync(box.spoolPath);
     if (partial) truncateSync(box.spoolPath, Math.floor(bytes.length / 2));
     expect(box.readPending().records).toEqual([]);
-    expect(box.append([ev(3)])).toBe(false);
+    // Distinct from the cap's `false`: a pending journal is "finish me", and a
+    // caller that read it as an overflow would burn the one loud drop marker.
+    expect(() => box.append([ev(3)])).toThrow();
+    expect(() => box.forceAppend([ev(3)])).toThrow();
     box.compact();
     expect(box.hasPendingAppend()).toBe(true);
     rmSync(receipt, { recursive: true });

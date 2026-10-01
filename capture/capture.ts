@@ -555,7 +555,24 @@ export function runCapture(payload: CapturePayload, opts: RunCaptureOptions = {}
     recordHealth(root, "capture", "retry");
     return { appended: 0, flushed: false };
   }
-  try { return captureUnderLock(payload, opts); } finally { release(); }
+  try {
+    // A killed relay leaves an append journal behind, and the spool is frozen
+    // until it is finished. Finish it here — under the lock that owns it, as the
+    // OTLP relay and the shipper already do — so the append below never meets a
+    // pending journal, which is a "retry me" condition and not the spool cap.
+    const box = new Outbox(root, { maxSpoolBytes: opts.maxSpoolBytes });
+    if (box.hasPendingAppend()) {
+      try { box.finishPendingAppend(); }
+      catch {
+        // A journal that no longer matches its spool stops capture rather than
+        // replaying history (docs/cowork-pilot.md). Record it: a wedged project
+        // is otherwise indistinguishable from a hook that never fires.
+        recordHealth(root, "capture", "failed");
+        return { appended: 0, flushed: false };
+      }
+    }
+    return captureUnderLock(payload, opts);
+  } finally { release(); }
 }
 
 if (isMain(import.meta.url)) {

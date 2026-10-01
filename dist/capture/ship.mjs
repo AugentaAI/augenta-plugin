@@ -16580,7 +16580,7 @@ class Outbox {
     if (records.length === 0)
       return true;
     if (existsSync5(this.appendJournalPath()))
-      return false;
+      throw new Error("An outbox append needs recovery");
     this.ensure();
     try {
       if (statSync4(this.spoolPath).size >= this.maxSpoolBytes)
@@ -17477,6 +17477,7 @@ async function drain(opts) {
     try {
       box.finishPendingAppend();
     } catch {
+      recordHealth(opts.projectRoot, "delivery", "failed");
       return { shipped: 0, batches: 0, lastStatus: 0 };
     } finally {
       release();
