@@ -34,6 +34,8 @@ secret-scrubbed and every selected Workspace receives them.
 - Duplicate documents are omitted and older conflicting revisions are refused,
   using the originating transcript time. Local attachment state is capped at
   4 MiB and advances only after the queue accepts the documents.
+- After reconnecting or joining again, freshly supplied documents reach the
+  current Workspace set even when their content is unchanged.
 
 ### Fixed
 

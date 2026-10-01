@@ -256,7 +256,9 @@ Read only supported-record paths as bounded, stable regular-file snapshots; no
 network request or directory scan. Compaction restoration is not a fresh supply.
 Documents append with trajectory under the capture lock; attachment state changes
 only after that append is accepted. Bound the validated atomic index to 4 MiB
-by evicting oldest observations. Upgrade every installed harness before enabling
+by evicting oldest observations. Deduplicate within the current checkout consent;
+renewing it admits fresh unchanged supplies to the current Workspace set while
+retaining revision watermarks. Upgrade every installed harness before enabling
 attachments: older shippers can silently skip attachment records. Batch hook
 manifest changes once and document Codex's renewed trust prompt.
 

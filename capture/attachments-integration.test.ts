@@ -63,6 +63,46 @@ test("a rejected append never advances the attachment index; a later independent
   expect(existsSync(join(project, ".augenta/state/attachments.json"))).toBe(true);
 });
 
+test("a rejected unchanged-document append after renewed consent leaves the previous observation intact", () => {
+  config(t(1)); capture(mention(2), "original.jsonl");
+  const indexPath = join(project, ".augenta/state/attachments.json");
+  const previous = readFileSync(indexPath, "utf8");
+  config(t(3)); capture(mention(4), "full-after-renewal.jsonl", 1);
+  expect(readFileSync(indexPath, "utf8")).toBe(previous);
+  expect(docs()).toHaveLength(1);
+  capture(mention(5), "retry-after-renewal.jsonl");
+  expect(docs()).toHaveLength(2);
+  expect(docs()[1]!.data.capturedAt).toBe(t(5));
+});
+
+test("a newly selected OAuth Workspace gets a fresh unchanged document, while historical supplies stay excluded", () => {
+  const auth = join(project, "auth"); mkdirSync(auth); process.env.AUGENTA_AUTH_HOME = auth;
+  writeFileSync(join(auth, "auth.json"), JSON.stringify({ version: 1, profiles: { "fixture-profile": { gateway: "https://gw.example.com", userId: TEST_USER_ID, orgId: "fixture-org", accessToken: "fixture-only", refreshToken: "fixture-only", expiresAt: Date.now() + 3600000, updatedAt: t(1) } } }));
+  const a = { workspaceId: "workspace-a", connectorId: "link-a" }, b = { workspaceId: "workspace-b", connectorId: "link-b" };
+  const box = new Outbox(project);
+  const connect = (n: number, destinations: typeof a[]) => {
+    const fixture = { profileId: "fixture-profile", joinedAt: t(n), destinations, extra: { endpoint: "https://gw.example.com" } };
+    writeSharedConfig(project, fixture); joinCheckout(project, fixture);
+    writeLinks(project, { ...readLinks(project)!, attachmentsConsentedAt: t(n) });
+    box.registerDestinations(destinations.map(d => d.connectorId), { freshKeys: destinations.filter(d => d.connectorId === b.connectorId).map(d => d.connectorId) });
+  };
+  connect(1, [a]); capture(mention(2), "original-workspace.jsonl");
+  const original = box.readPending(Infinity, a.connectorId).records.filter(isDocumentRecord)[0]!;
+  box.advance(box.readPending(Infinity, a.connectorId).endOffset, a.connectorId); box.compact();
+  connect(3, [a, b]); capture(mention(2), "historical-after-connect.jsonl");
+  expect(box.readPending(Infinity, b.connectorId).records.filter(isDocumentRecord)).toEqual([]);
+  capture(mention(4), "fresh-after-connect.jsonl");
+  for (const destination of [a, b]) {
+    const documents = box.readPending(Infinity, destination.connectorId).records.filter(isDocumentRecord);
+    expect(documents).toHaveLength(1);
+    expect(documents[0]!.sid).toBe(original.sid);
+    expect(documents[0]!.data.revision).toBe(original.data.revision);
+    expect(documents[0]!.data.capturedAt).toBe(t(4));
+  }
+  capture(mention(5), "duplicate-after-connect.jsonl");
+  expect(box.readPending(Infinity, b.connectorId).records.filter(isDocumentRecord)).toHaveLength(1);
+});
+
 test("kill switch, attachment switch and tracked keys never enable document capture", () => {
   config(t(1)); process.env.AUGENTA_CAPTURE_ATTACHMENTS = "off"; capture(mention(), "disabled.jsonl"); expect(docs()).toHaveLength(0);
   delete process.env.AUGENTA_CAPTURE_ATTACHMENTS; process.env.AUGENTA_CAPTURE_ENABLED = "0";

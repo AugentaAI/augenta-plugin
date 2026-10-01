@@ -142,6 +142,9 @@ It does not go in a browser project's shared `config.json`. The effective time
 is available only while this checkout is joined under its own sign-in, project
 and exact Workspace set. Existing joins keep their current activity and memory
 capture with attachments disabled until reconnecting or joining again.
+After reconnecting or joining again, a fresh supply reaches the current
+Workspace set even when the document is unchanged. Duplicate supplies under
+that consent are omitted, and revision ordering remains enforced across renewals.
 
 Attachment observations must have an originating transcript timestamp at or after
 consent; earlier history is not rescanned. For a mention, its initiating prompt

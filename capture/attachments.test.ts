@@ -113,6 +113,45 @@ describe("materialization, ordering and local state", () => {
     expect(prepare([text(path, "Late conflicting replay", 4)]).records).toEqual([]);
     expect(prepare([text(path, "New", 6)]).records).toHaveLength(1);
   });
+  test("renewed consent captures a fresh unchanged supply once and keeps deduplication across fires", () => {
+    const path = join(project, "notes.md");
+    const first = prepare([text(path, "Stable paragraph.", 2)]); commitAttachments(project, first);
+    const renewed = prepare([text(path, "Stable paragraph.", 2), text(path, "Stable paragraph.", 5), text(path, "Stable paragraph.", 6)], { consentedAt: t(4) });
+    expect(renewed.records).toHaveLength(1);
+    expect(renewed.records[0]!.sid).toBe(first.records[0]!.sid);
+    expect(renewed.records[0]!.data.revision).toBe(first.records[0]!.data.revision);
+    expect(renewed.records[0]!.data.capturedAt).toBe(t(5));
+    expect(Object.values(renewed.observations)[0]!.capturedAt).toBe(t(6));
+    expect(commitAttachments(project, renewed)).toBe(true);
+    expect(prepare([text(path, "Stable paragraph.", 7)], { consentedAt: t(4) }).records).toEqual([]);
+    expect(prepare([text(path, "Conflicting replay", 6)], { consentedAt: t(4) }).records).toEqual([]);
+  });
+  test("a consent renewal preserves later revision watermarks when an unchanged observation is replayed", () => {
+    const path = join(project, "notes.md");
+    commitAttachments(project, prepare([text(path, "Latest paragraph.", 8)]));
+    expect(prepare([text(path, "Earlier conflict", 6)], { consentedAt: t(4) }).records).toEqual([]);
+    const renewed = prepare([text(path, "Latest paragraph.", 7)], { consentedAt: t(4) });
+    expect(renewed.records).toHaveLength(1);
+    expect(renewed.records[0]!.data.capturedAt).toBe(t(7));
+    expect(Object.values(renewed.observations)[0]!.capturedAt).toBe(t(8));
+    commitAttachments(project, renewed);
+    expect(prepare([text(path, "Equal-time conflict", 8)], { consentedAt: t(4) }).records).toEqual([]);
+    expect(prepare([text(path, "Next revision", 9)], { consentedAt: t(4) }).records).toHaveLength(1);
+  });
+  test("legacy or invalid consent observations cannot suppress a fresh supply under the current selection", () => {
+    const path = join(project, "notes.md");
+    const first = prepare([text(path, "Stable paragraph.", 2)]); commitAttachments(project, first);
+    const indexPath = join(project, ".augenta/state/attachments.json");
+    const index = JSON.parse(readFileSync(indexPath, "utf8"));
+    const id = first.records[0]!.data.documentId;
+    for (const consentedAt of [undefined, "invalid"]) {
+      index.documents[id].consentedAt = consentedAt; writeFileSync(indexPath, JSON.stringify(index));
+      const fresh = prepare([text(path, "Stable paragraph.", 5)], { consentedAt: t(4) });
+      expect(fresh.records).toHaveLength(1);
+      commitAttachments(project, fresh);
+      expect(prepare([text(path, "Stable paragraph.", 6)], { consentedAt: t(4) }).records).toEqual([]);
+    }
+  });
   test("scrubbed text chunks preserve Unicode and each envelope stays below 512 KiB", () => {
     const result = prepare([text(join(project, "large.md"), "😊".repeat(300_000))]);
     expect(result.records.length).toBeGreaterThan(1);

@@ -123,8 +123,11 @@ timestamp, so attachments stay off. Older lines and mentions initiated before
 consent cannot enable it. The validated atomic attachment index is capped at
 4 MiB by evicting the oldest observations. Unchanged content advances its latest
 observation time; older/equal-time conflicting revisions are refused. Documents
-append with their trajectory under the capture lock, and the index advances only
-after that append is accepted. Attachment health is recorded separately.
+are deduplicated within the current checkout consent. Renewing consent admits
+fresh unchanged supplies to the current Workspace set, with prior revision
+watermarks retained. Documents append with their trajectory under the capture
+lock, and the index advances only after that append is accepted. Attachment
+health is recorded separately.
 
 The capture step writes to disk without waiting for a network request or a
 model response.

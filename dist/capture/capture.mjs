@@ -496,7 +496,7 @@ function readPdfSnapshot(path, afterRead) {
 }
 function validObservation(x) {
   const v = x;
-  return !!v && typeof v.documentId === "string" && /^[a-f0-9]{64}$/.test(v.documentId) && typeof v.revision === "string" && /^[a-f0-9]{64}$/.test(v.revision) && Number.isSafeInteger(v.chunkCount) && v.chunkCount > 0 && typeof v.capturedAt === "string" && documentTimestamp(v.capturedAt) === v.capturedAt;
+  return !!v && typeof v.documentId === "string" && /^[a-f0-9]{64}$/.test(v.documentId) && typeof v.revision === "string" && /^[a-f0-9]{64}$/.test(v.revision) && Number.isSafeInteger(v.chunkCount) && v.chunkCount > 0 && typeof v.capturedAt === "string" && documentTimestamp(v.capturedAt) === v.capturedAt && (v.consentedAt === undefined || typeof v.consentedAt === "string" && documentTimestamp(v.consentedAt) === v.consentedAt);
 }
 function prepareAttachments(projectRoot, harness, candidates, opts) {
   const maxIndexBytes = opts.maxIndexBytes ?? MAX_ATTACHMENT_INDEX_BYTES;
@@ -538,12 +538,12 @@ function prepareAttachments(projectRoot, harness, candidates, opts) {
       const key = scoped ? sourcePath : `sha256:${revision}`;
       const documentId = sha256(`attachment\x00${harness}\x00${resolve2(projectRoot)}\x00${key}`);
       const prior = result.observations[documentId];
-      if (prior && prior.revision === revision) {
+      if (prior && prior.revision === revision && prior.consentedAt === consent) {
         if (capturedAt > prior.capturedAt)
           result.observations[documentId] = { ...prior, capturedAt };
         continue;
       }
-      if (prior && capturedAt <= prior.capturedAt) {
+      if (prior && prior.revision !== revision && capturedAt <= prior.capturedAt) {
         result.skipped++;
         continue;
       }
@@ -579,7 +579,8 @@ function prepareAttachments(projectRoot, harness, candidates, opts) {
       }
       result.records.push(...records);
       result.captured++;
-      Object.defineProperty(result.observations, documentId, { value: { documentId, revision, chunkCount: records.length, capturedAt }, enumerable: true, writable: true, configurable: true });
+      const observedAt = prior && prior.revision === revision && prior.capturedAt > capturedAt ? prior.capturedAt : capturedAt;
+      Object.defineProperty(result.observations, documentId, { value: { documentId, revision, chunkCount: records.length, capturedAt: observedAt, consentedAt: consent }, enumerable: true, writable: true, configurable: true });
     } catch (e) {
       if (e instanceof TooLarge)
         result.tooLarge++;

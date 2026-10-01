@@ -149,13 +149,21 @@ export function readPdfSnapshot(path: string, afterRead?: () => void): Buffer {
   } finally { if (fd >= 0) closeSync(fd); }
 }
 
-export interface AttachmentObservation { documentId: string; revision: string; chunkCount: number; capturedAt: string }
+export interface AttachmentObservation {
+  documentId: string;
+  revision: string;
+  chunkCount: number;
+  capturedAt: string;
+  /** Checkout consent under which this revision reached the outbox. */
+  consentedAt?: string;
+}
 function validObservation(x: unknown): x is AttachmentObservation {
   const v = x as AttachmentObservation | null;
   return !!v && typeof v.documentId === "string" && /^[a-f0-9]{64}$/.test(v.documentId) &&
     typeof v.revision === "string" && /^[a-f0-9]{64}$/.test(v.revision) &&
     Number.isSafeInteger(v.chunkCount) && v.chunkCount > 0 &&
-    typeof v.capturedAt === "string" && documentTimestamp(v.capturedAt) === v.capturedAt;
+    typeof v.capturedAt === "string" && documentTimestamp(v.capturedAt) === v.capturedAt &&
+    (v.consentedAt === undefined || (typeof v.consentedAt === "string" && documentTimestamp(v.consentedAt) === v.consentedAt));
 }
 export interface PreparedAttachments {
   records: DocumentRecord[];
@@ -195,11 +203,12 @@ export function prepareAttachments(projectRoot: string, harness: EventSource, ca
       const key = scoped ? sourcePath : `sha256:${revision}`;
       const documentId = sha256(`attachment\0${harness}\0${resolve(projectRoot)}\0${key}`);
       const prior = result.observations[documentId];
-      if (prior && prior.revision === revision) {
+      // Renewed checkout consent can add Workspaces that never saw this revision.
+      if (prior && prior.revision === revision && prior.consentedAt === consent) {
         if (capturedAt > prior.capturedAt) result.observations[documentId] = { ...prior, capturedAt };
         continue;
       }
-      if (prior && capturedAt <= prior.capturedAt) { result.skipped++; continue; }
+      if (prior && prior.revision !== revision && capturedAt <= prior.capturedAt) { result.skipped++; continue; }
       const metadata = { kind: "agent-attachment" as const, documentId, sourcePath: opts.scrub(sourcePath),
         title: boundedTitle(opts.scrub(typeof c.title === "string" ? c.title : basename(sourcePath))),
         format: c.format, origin: c.origin, revision, capturedAt, deleted: false as const };
@@ -218,7 +227,8 @@ export function prepareAttachments(projectRoot: string, harness: EventSource, ca
         records = chunks.map((part, i) => record({ text: part }, i, chunks.length));
       }
       result.records.push(...records); result.captured++;
-      Object.defineProperty(result.observations, documentId, { value: { documentId, revision, chunkCount: records.length, capturedAt }, enumerable: true, writable: true, configurable: true });
+      const observedAt = prior && prior.revision === revision && prior.capturedAt > capturedAt ? prior.capturedAt : capturedAt;
+      Object.defineProperty(result.observations, documentId, { value: { documentId, revision, chunkCount: records.length, capturedAt: observedAt, consentedAt: consent }, enumerable: true, writable: true, configurable: true });
     } catch (e) { if (e instanceof TooLarge) result.tooLarge++; else result.skipped++; }
   }
   // Evict the oldest observed entries, including unchanged-content observations.
