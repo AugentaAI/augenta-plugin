@@ -2,10 +2,12 @@
  * Tests for recall.ts: argument parsing, response classification, and the
  * fan-out that turns a project's Connector ids into labelled answers.
  *
- * Contract under test: only the question (and, for a signed-in project, the
- * Workspace id) is ever sent; one destination failing never costs the others
- * their answer; a young Workspace's 404 is a normal outcome and not an error;
- * every idempotency key is fresh; and no credential reaches the payload. The
+ * Contract under test: only the question, `origin: "manual"` (and, for a
+ * signed-in project, the Workspace id) is ever sent; one destination failing
+ * never costs the others their answer; a young Workspace's 404 is a normal
+ * outcome and not an error; every destination and every call gets its own
+ * idempotency key, which the context fallback reuses; and no credential reaches
+ * the payload. The
  * gateway is a stubbed `globalThis.fetch` routed on `METHOD origin+path`, the
  * same shape scripts/connect.test.ts uses.
  *
@@ -727,11 +729,13 @@ describe("the fan-out", () => {
     const calls = recallCalls();
     expect(calls).toHaveLength(2);
     for (const call of calls) {
-      // The body carries the question and a Workspace id — never `scope`, which
-      // the door composes from the credential, and never anything else.
+      // The body carries the question, a Workspace id and who asked — never
+      // `scope`, which the door composes from the credential, and never a
+      // budget: a person's recall takes the door's default for `manual`.
       const body = JSON.parse(String(call.body)) as Record<string, unknown>;
-      expect(Object.keys(body).sort()).toEqual(["query", "workspace"]);
+      expect(Object.keys(body).sort()).toEqual(["origin", "query", "workspace"]);
       expect(body.query).toBe("what did we decide");
+      expect(body.origin).toBe("manual");
       expect(call.headers.get("authorization")).toBe("Bearer access-live");
     }
     expect(calls.map((c) => JSON.parse(String(c.body)).workspace)).toEqual([
@@ -778,7 +782,9 @@ describe("the fan-out", () => {
         const calls = recallCalls();
         expect(calls[0]!.body).toBe(calls[1]!.body);
         expect(calls[0]!.headers.get("authorization")).toBe(calls[1]!.headers.get("authorization"));
-        expect(calls[0]!.headers.get("idempotency-key")).not.toBe(calls[1]!.headers.get("idempotency-key"));
+        // The SAME key: the refused answer leg recorded nothing at the door, and
+        // the context leg is the same question, so it is one recall.
+        expect(calls[0]!.headers.get("idempotency-key")).toBe(calls[1]!.headers.get("idempotency-key"));
       });
     }
   }
@@ -828,7 +834,7 @@ describe("the fan-out", () => {
     expect(payload.nothingRemembered).toEqual([{ fallback: { requested: "answer", reason: "answerer_unavailable" } }]);
     for (const call of recallCalls()) {
       expect(call.headers.get("authorization")).toBe("AugentaKey platform-test-key");
-      expect(JSON.parse(call.body!)).toEqual({ query: "what did we decide" });
+      expect(JSON.parse(call.body!)).toEqual({ query: "what did we decide", origin: "manual" });
     }
     expect(JSON.stringify(payload)).not.toContain("platform-test-key");
   });
@@ -1306,7 +1312,7 @@ describe("recorded destinations and live recall", () => {
     const payload = await runRecall({ projectRoot: project }, args());
     expect(payload.organization).toBe("Recorded Org");
     expect(payload.environment).toBe("https://saved.example.com");
-    expect(JSON.parse(recallCalls()[0]!.body!)).toEqual({ query: "what did we decide", workspace: "ws-default" });
+    expect(JSON.parse(recallCalls()[0]!.body!)).toEqual({ query: "what did we decide", workspace: "ws-default", origin: "manual" });
     process.env.AUGENTA_CONTROL_URL = "https://override.example.com";
     expect((await runRecall({ projectRoot: project }, args())).environment).toBe("https://override.example.com");
     process.env.AUGENTA_CONTROL_URL = "https://augenta.ai";
@@ -1380,7 +1386,7 @@ describe("platform-key projects", () => {
     expect(payload.status).toBe("answered");
     expect(payload.answers[0]).toEqual({ scope: "org_1:ws-default", answer: "from the keyed Workspace", mode: "context" });
     const call = recallCalls()[0]!;
-    expect(JSON.parse(String(call.body))).toEqual({ query: "what did we decide" });
+    expect(JSON.parse(String(call.body))).toEqual({ query: "what did we decide", origin: "manual" });
     expect(call.headers.get("authorization")).toBe("AugentaKey sk-aug-live.secret");
     // No Workspace list and no Connector lookup: there is nothing to resolve.
     expect(requests).toHaveLength(1);

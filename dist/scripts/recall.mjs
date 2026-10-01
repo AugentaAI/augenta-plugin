@@ -1284,13 +1284,14 @@ function textOf(block) {
   return typeof block?.text === "string" ? block.text : "";
 }
 function renderContext(body) {
-  const parts = [
-    ...blocksOf(body, "engram").map(textOf),
-    ...blocksOf(body, "note").map(textOf)
-  ].filter((text) => text.trim());
-  return parts.join(`
+  const { summaries, notes } = memoryOf(body);
+  return [...summaries, ...notes].join(`
 
 `);
+}
+function memoryOf(body) {
+  const texts = (type) => blocksOf(body, type).map(textOf).filter((text) => text.trim());
+  return { summaries: texts("engram"), notes: texts("note") };
 }
 function errorFields(body, text) {
   const error = body?.error;
@@ -1323,7 +1324,7 @@ function retryAfterSeconds(raw) {
   const value = Number(trimmed);
   return Number.isFinite(value) && value >= 0 ? Math.ceil(value) : undefined;
 }
-function classifyRecallResponse(parts) {
+function classifyRecallResponse(parts, withNotes = false) {
   const { status, body, text } = parts;
   if (status === 200) {
     const declared = body?.mode;
@@ -1344,6 +1345,7 @@ function classifyRecallResponse(parts) {
       answer,
       mode,
       ...body.notes_truncated === true ? { notesTruncated: true } : {},
+      ...withNotes && mode === "context" ? { memory: memoryOf(body) } : {},
       ...typeof scope === "string" ? { scope } : {},
       ...parts.model ? { model: parts.model } : {},
       ...parts.renderer ? { renderer: parts.renderer } : {}
@@ -1432,15 +1434,20 @@ function outOfTime() {
     message: "Augenta did not answer within the time allowed"
   };
 }
-async function askOnce(ctx, destination) {
+async function askOnce(ctx, destination, idempotencyKey) {
   const timeoutMs = requestTimeout(ctx.timeoutMs, ctx.deadlineAt);
   if (timeoutMs === undefined)
     return { outcome: outOfTime(), transient: false };
   const headers = {
     "content-type": "application/json",
-    "idempotency-key": randomUUID4()
+    "idempotency-key": idempotencyKey
   };
-  const body = JSON.stringify(destination.workspaceId ? { query: ctx.query, workspace: destination.workspaceId } : { query: ctx.query });
+  const body = JSON.stringify({
+    query: ctx.query,
+    ...destination.workspaceId ? { workspace: destination.workspaceId } : {},
+    origin: ctx.origin,
+    ...ctx.budgetTokens !== undefined ? { budget_tokens: ctx.budgetTokens } : {}
+  });
   try {
     const response = await ctx.fetcher(ctx.url, {
       method: "POST",
@@ -1462,11 +1469,11 @@ async function askOnce(ctx, destination) {
       model: response.headers.get("x-augenta-model") ?? undefined,
       renderer: response.headers.get("x-augenta-renderer") ?? undefined,
       retryAfter: response.headers.get("retry-after")
-    });
+    }, ctx.withNotes);
     const url = new URL(ctx.url);
     if (response.status === 503 && url.searchParams.get("mode") === "answer" && outcome.kind === "failed" && (outcome.code === "answerer_unavailable" || outcome.code === "consent_required")) {
       url.searchParams.set("mode", "context");
-      const fallback = await askDestination({ ...ctx, url: url.toString(), timeoutMs: ctx.contextTimeoutMs }, destination);
+      const fallback = await askDestination({ ...ctx, url: url.toString(), timeoutMs: ctx.contextTimeoutMs }, destination, idempotencyKey);
       return { outcome: { ...fallback, fallback: { requested: "answer", reason: outcome.code } }, transient: false };
     }
     const { code } = errorFields(parsed, text);
@@ -1492,9 +1499,9 @@ async function askOnce(ctx, destination) {
     return { outcome: { kind: "failed", code: "network", message: describeError(error) }, transient: true };
   }
 }
-async function askDestination(ctx, destination) {
+async function askDestination(ctx, destination, idempotencyKey = randomUUID4()) {
   for (let attempt = 0;; attempt++) {
-    const { outcome, transient, retryAfterMs } = await askOnce(ctx, destination);
+    const { outcome, transient, retryAfterMs } = await askOnce(ctx, destination, idempotencyKey);
     if (!transient || attempt >= ctx.retries)
       return outcome;
     const wait = retryAfterMs ?? RETRY_BACKOFF_MS[Math.min(attempt, RETRY_BACKOFF_MS.length - 1)];
@@ -1678,6 +1685,9 @@ async function askWorkspaces(searchRoot, request) {
   const ctx = {
     url,
     query,
+    origin: request.origin,
+    ...request.budgetTokens ? { budgetTokens: request.budgetTokens(destinations.length) } : {},
+    withNotes: request.withNotes === true,
     timeoutMs: request.timeoutMs,
     contextTimeoutMs: request.contextTimeoutMs,
     fetcher,
@@ -1788,6 +1798,7 @@ async function runRecall(resolved, args) {
   return askWorkspaces(resolved.projectRoot, {
     query,
     mode,
+    origin: "manual",
     ...args.workspaces ? { workspaces: args.workspaces } : {},
     timeoutMs,
     contextTimeoutMs

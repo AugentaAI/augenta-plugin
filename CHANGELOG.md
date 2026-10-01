@@ -12,6 +12,28 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.15.0] — 2026-10-01
+
+No reconnect is required.
+
+### Changed
+
+- **Recall says who asked.** The request now carries `origin`: `manual` for the
+  recall skill, `auto` for the per-prompt recall. The platform reinforces an
+  automatic fetch at a lower weight than a recall a person asked for, so how
+  often the hook fetches cannot outweigh deliberate reuse. Neither field is
+  content: only the question text leaves, as before.
+- **Automatic recall asks for what fits.** It sends `budget_tokens`, its share of
+  the injected block, so the platform selects that much memory instead of sending
+  more for the plugin to cut.
+- **A retry is the same recall.** Every retry of one question to one Workspace,
+  and the answer-to-context fallback, reuses that request's idempotency key, so a
+  retry after a lost response no longer records the recall twice.
+- **Notes are never cut mid-sentence.** A section over its share keeps the
+  summary and drops whole notes, oldest first, and says how many it left out.
+  The heading reads "(a selection of its notes)" whenever the notes shown are
+  not all of the engram's.
+
 ## [0.14.0] — 2026-10-01
 
 No reconnect is required. Cowork capture is an explicit pilot; it does not turn
@@ -601,6 +623,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.15.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.12.2...v0.13.0

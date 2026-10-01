@@ -165,7 +165,7 @@ describe("shipped Node network behavior", () => {
       const recall = await run(home, "scripts/recall.mjs", ["--json", "--context", "--project", home, "what did the proxy test remember"], env);
       expect(recall.exitCode, recall.stdout + recall.stderr).toBe(0);
       expect(JSON.parse(recall.stdout).status).toBe("answered");
-      expect(requests.find(r => r.path === "/v1/recall")!.body).toEqual({ query: "what did the proxy test remember" });
+      expect(requests.find(r => r.path === "/v1/recall")!.body).toEqual({ query: "what did the proxy test remember", origin: "manual" });
       // The three product flows use Node fetch. Optional SDK observability has
       // its own transport and is not part of this routing assertion.
       expect(requests.filter(r => !r.path.startsWith("/v1/telemetry/")).every(r => r.via === (mode === "intercept" ? "intercept" : "origin"))).toBe(true);

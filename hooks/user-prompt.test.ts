@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { TurnState } from "../capture/turn-cursor";
 import { bindCoworkTask } from "../capture/cowork-task";
 import { AUTO_RECALL_SENTINEL } from "../capture/auto-recall-marker";
+import { autoRecallBudgetTokens } from "./auto-recall";
 
 const HOOK = join(import.meta.dir, "user-prompt.ts");
 const TP = "/tmp/transcripts/sess-1.jsonl";
@@ -161,7 +162,7 @@ describe("user-prompt automatic recall", () => {
       expect(out.hookSpecificOutput.additionalContext).toStartWith(AUTO_RECALL_SENTINEL);
       expect(out.hookSpecificOutput.additionalContext).toContain("we chose device sign-in");
       expect(r.stdout).not.toContain("platform-test-key");
-      expect(seen).toEqual([{ path: "/v1/recall", mode: "context", body: { query: "what did we decide about sign-in" } }]);
+      expect(seen).toEqual([{ path: "/v1/recall", mode: "context", body: { query: "what did we decide about sign-in", origin: "auto", budget_tokens: autoRecallBudgetTokens(1) } }]);
       expect(new TurnState(project).get(transcript)).toBe(1);
     });
   }
