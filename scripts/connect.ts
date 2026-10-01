@@ -32,6 +32,7 @@ import { readLinks, writeLinks } from "../capture/links";
 import { displayOrigin, sameOrigin } from "../capture/url";
 import { ephemeralProject, sessionEnvironment } from "../capture/environment";
 import { classifyNetworkError, diagnoseHosts, type HostCheck } from "../capture/network";
+import { bindCoworkTask, CoworkError, type CoworkTransport } from "../capture/cowork-task";
 import {
   DEFAULT_CONTROL_URL,
   DEFAULT_GATEWAY,
@@ -89,6 +90,9 @@ import {
 } from "../capture/auth";
 
 interface Args {
+  coworkTask?: string;
+  coworkTransport?: CoworkTransport;
+  coworkTranscript?: string;
   apiKey?: string;
   project?: string;
   endpoint?: string;
@@ -152,7 +156,15 @@ export function parseArgs(argv: string[]): Args {
   };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
-    if (flag === "--api-key") {
+    if (flag === "--cowork-task") {
+      args.coworkTask = valueFor(flag, i++);
+    } else if (flag === "--cowork-transport") {
+      const value = valueFor(flag, i++);
+      if (value !== "native" && value !== "otlp") throw new Error("--cowork-transport requires native or otlp");
+      args.coworkTransport = value;
+    } else if (flag === "--cowork-transcript") {
+      args.coworkTranscript = valueFor(flag, i++);
+    } else if (flag === "--api-key") {
       args.apiKey = valueFor(flag, i++);
     } else if (flag === "--project") {
       args.project = valueFor(flag, i++);
@@ -1931,6 +1943,9 @@ export async function runJsonVerb(
   resolved: ResolvedProject,
   args: Args,
 ): Promise<JsonPayload> {
+  if ((args.coworkTask || args.coworkTransport || args.coworkTranscript) && !args.project) {
+    return { status: "error", code: "project_required", message: "Task binding requires an explicit --project directory; attached paths and the current directory do not choose its route." };
+  }
   const cfg = loadProjectConfig(resolved.projectRoot);
   const metadata = {
     environment: environmentLabel(args.repairHarness ? cfg?.controlUrl : controlUrl(cfg, args.controlUrl)),
@@ -1949,6 +1964,7 @@ export async function runJsonVerb(
   try {
     return { ...(await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot, disclosures })), ...metadata, ...disclosures };
   } catch (error) {
+    if (error instanceof CoworkError) return { status: "error", code: error.code, message: error.message, ...metadata, ...disclosures };
     if (error instanceof GatewayOverrideError) {
       return { status: "error", code: error.code, message: error.message, ...metadata, ...disclosures };
     }
@@ -2218,6 +2234,15 @@ async function dispatchJsonVerb(
   resolved: ResolvedProject,
   args: Args,
 ): Promise<JsonPayload> {
+  if (args.coworkTask || args.coworkTransport || args.coworkTranscript) {
+    if (!args.coworkTask || !args.coworkTransport || args.apiKey || args.endpoint || args.controlUrl || args.profile ||
+      args.health || args.repairHarness || args.probe || args.login || args.awaitLogin || args.adopt || args.verifyOnly ||
+      args.workspaces !== undefined || args.createWorkspace !== undefined || args.autoRecall !== undefined) {
+      return { status: "error", code: "conflicting_verbs", message: "Task binding uses the joined project; pass --cowork-task and --cowork-transport alone with --json, --project and optionally --cowork-transcript for native capture." };
+    }
+    const task = await bindCoworkTask(resolved.projectRoot, args.coworkTask, args.coworkTransport, { transcriptPath: args.coworkTranscript });
+    return { status: "bound", sessionId: task.sessionId, transport: task.transport, boundAt: task.boundAt };
+  }
   if (args.repairHarness) {
     if (args.health || args.probe || args.login || args.awaitLogin || args.verifyOnly ||
         args.workspaces !== undefined || args.createWorkspace !== undefined || args.apiKey ||
@@ -2462,6 +2487,7 @@ if (isMain(import.meta.url)) {
   // stack trace.
   try {
     const args = parseArgs(argv);
+    if ((args.coworkTask || args.coworkTransport || args.coworkTranscript) && !args.json) throw new Error("Cowork task binding requires --json; it does not start an interactive sign-in.");
     if (args.repairHarness && !args.json) throw new Error("--repair-harness requires --json and an explicit --harness");
     // The terminal flow offers creation inside its own menu, so this flag has no
     // meaning here. Silently ignoring it would look like a Workspace was created.

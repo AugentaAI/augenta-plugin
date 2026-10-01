@@ -38,7 +38,9 @@ import { setAugentaIgnore } from "./augenta-dir";
 import { captureAgentMemory } from "./memory";
 import { spawnShipper } from "./shipper";
 import { isCodexHarness, sniffHarness } from "../hooks/harness";
-import { isMain, readStdin } from "../runtime/node";
+import { isMain, readStdin, reexecForEnvProxy } from "../runtime/node";
+import { nativeCoworkAllowed } from "./cowork-task";
+import { coworkCommandFailure, runCoworkCommand } from "./cowork-command";
 
 export interface CapturePayload {
   session_id?: string;
@@ -532,6 +534,7 @@ function captureUnderLock(
 export function runCapture(payload: CapturePayload, opts: RunCaptureOptions = {}): { appended: number; flushed: boolean } {
   const root = opts.projectRoot ?? resolveProjectRoot(payload.cwd);
   if (!root) return { appended: 0, flushed: false };
+  if (!nativeCoworkAllowed(root, payload.session_id, payload.transcript_path)) return { appended: 0, flushed: false };
   const release = captureLock(root);
   if (!release) {
     recordHealth(root, "capture", "retry");
@@ -541,21 +544,37 @@ export function runCapture(payload: CapturePayload, opts: RunCaptureOptions = {}
 }
 
 if (isMain(import.meta.url)) {
-  // Hook entrypoint: parse the payload, gate on the project's opt-in, run
-  // capture, always exit 0.
-  try {
-    const payload = JSON.parse(await readStdin()) as CapturePayload;
-    const cfg = projectConfig(payload.cwd);
-    if (cfg && captureEnabled(cfg)) {
-      recordHealth(cfg.projectRoot, "dispatch", "started");
-      // An API-key config holds its key, so it never keeps the shared ignore
-      // form a browser connection may have left behind, even one written by hand.
-      if (cfg.authMode === "api-key") setAugentaIgnore(cfg.projectRoot, "local");
-      try { runCapture(payload, { captureSince: effectiveCaptureSince(cfg) }); }
-      catch { recordHealth(cfg.projectRoot, "capture", "failed"); }
+  if (process.argv.slice(2).some(arg => arg.startsWith("--cowork-"))) {
+    reexecForEnvProxy();
+    try {
+      const listening = await runCoworkCommand(process.argv.slice(2), (payload, root) => {
+        if (payload.hook_event_name === "UserPromptSubmit") {
+          return { turn: new TurnState(root).bump(payload.transcript_path) };
+        }
+        return runCapture(payload, { projectRoot: root });
+      });
+      if (!listening) process.exit(0);
+    } catch (error) {
+      console.log(JSON.stringify(coworkCommandFailure(error)));
+      process.exit(1);
     }
-  } catch {
-    /* malformed payload or capture failure — stay silent, never block the turn */
+  } else {
+    // Hook entrypoint: parse the payload, gate on the project's opt-in, run
+    // capture, always exit 0.
+    try {
+      const payload = JSON.parse(await readStdin()) as CapturePayload;
+      const cfg = projectConfig(payload.cwd);
+      if (cfg && captureEnabled(cfg)) {
+        recordHealth(cfg.projectRoot, "dispatch", "started");
+        // An API-key config holds its key, so it never keeps the shared ignore
+        // form a browser connection may have left behind, even one written by hand.
+        if (cfg.authMode === "api-key") setAugentaIgnore(cfg.projectRoot, "local");
+        try { runCapture(payload, { captureSince: effectiveCaptureSince(cfg) }); }
+        catch { recordHealth(cfg.projectRoot, "capture", "failed"); }
+      }
+    } catch {
+      /* malformed payload or capture failure — stay silent, never block the turn */
+    }
+    process.exit(0);
   }
-  process.exit(0);
 }

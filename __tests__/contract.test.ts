@@ -63,7 +63,7 @@ const CODEX_UI: Record<string, string[]> = {
 };
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.12.2";
+const RELEASE_VERSION = "0.13.0";
 /** How many values the release must set. AGENTS.md → Releases lists them, and a
  *  test below asserts its count is this one. */
 const RELEASE_SURFACES = 8;
