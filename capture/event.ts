@@ -16,7 +16,7 @@
  * (`scrub.ts`) and then shipped VERBATIM (uncapped) so the full reasoning trace
  * reaches the backend, with `ref` also pointing back into the harness's own
  * transcript on disk. The envelope's `data` channel is not secret-scrubbed or
- * normalized, but opaque reasoning signatures/encrypted content and empty
+ * normalized, but embedded binary payloads, opaque reasoning signatures/encrypted content and empty
  * thought fields are removed before storage and again before egress. The
  * project's `.augenta/config.json` opt-in covers BOTH channels. The
  * tenant/Workspace is intentionally absent from this payload: the client never
@@ -171,7 +171,7 @@ export type DocumentRecord = DocumentExperience;
  * past them; without a wrapper they would be lost). Carries the same
  * src/sid/proj context and the same `turn` stamp its sibling events get, so the
  * flush groups a turn's raws into the same {@link Experience} as its steps
- * (`data`). It is not secret-scrubbed, but opaque reasoning artifacts and empty
+ * (`data`). It is not secret-scrubbed, but embedded binary payloads, opaque reasoning artifacts and empty
  * thought fields are removed before storage and again before egress.
  */
 export interface RawRecord {

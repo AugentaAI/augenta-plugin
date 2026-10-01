@@ -159,6 +159,8 @@ The plugin removes common secret patterns from activity and project notes.
 **Raw transcript records are structurally sanitized but are not secret-scrubbed.**
 This means some internal fields are removed, but passwords, keys, and private
 text can still be sent in the chat records.
+Embedded document and image bytes are replaced with hash, size and media-type
+references in telemetry. Attachments are not processed as documents by this release.
 
 Only connect projects you are comfortable sharing with all chosen Workspaces.
 The audience is the **union** of their members: anyone with access to any

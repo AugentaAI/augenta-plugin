@@ -241,3 +241,55 @@ describe("memory capture E2E", () => {
     }
   }, 10_000);
 });
+
+test("built capture and shipper strip Codex UI and MCP image copies, including older queued raws", async () => {
+  const work = realpathSync(mkdtempSync(join(tmpdir(), "augenta-e2e-binary-")));
+  const project = join(work, "project");
+  const sessionDir = join(work, ".codex/sessions/2026/09/30");
+  const transcript = join(sessionDir, "rollout-2026-09-30T10-00-00-00000000-0000-4000-8000-000000000001.jsonl");
+  const requests: ReceivedRequest[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    if (new URL(req.url).pathname === "/v1/experiences") requests.push({ authorization: req.headers.get("authorization"), ...(await req.json() as { experiences: Experience[] }) });
+    return new Response(null, { status: 202 });
+  } });
+  const content = Buffer.alloc(450_000, 65).toString("base64");
+  const ui = { type: "user_message", message: "Inspect image", images: [`data:image/png;base64,${content}`], local_images: [] };
+  const mcp = { content: [{ type: "image", data: content, mimeType: "image/png" }] };
+  const line = (type: string, payload: object) => ({ timestamp: "2026-09-30T10:00:00.000Z", type, payload });
+  try {
+    mkdirSync(project); configureProject(project, "e2e-binary-key"); mkdirSync(sessionDir, { recursive: true });
+    const box = new Outbox(project);
+    box.append([
+      { src: "codex", sid: "legacy", proj: project, ts: "2026-09-30T10:00:00.000Z", seq: 0, kind: "msg", role: "user", text: "legacy image result" },
+      ...[line("event_msg", ui), line("event_msg", { type: "mcp_tool_call_end", result: mcp })].map(x => ({ src: "codex" as const, sid: "legacy", proj: project, raw: JSON.stringify(x) })),
+    ]);
+    writeFileSync(transcript, [
+      line("event_msg", { type: "task_started", turn_id: "fixture-turn" }),
+      line("response_item", { type: "message", role: "user", content: [{ type: "input_image", image_url: ui.images[0] }] }),
+      line("event_msg", ui),
+      // Codex stringifies an MCP tool result into `output`; the UI copy below keeps it an object.
+      line("response_item", { type: "function_call_output", call_id: "mcp-image", output: JSON.stringify(mcp) }),
+      line("event_msg", { type: "mcp_tool_call_end", result: mcp }),
+      line("response_item", { type: "message", role: "assistant", content: [{ type: "output_text", text: "turn tail survives" }] }),
+      line("event_msg", { type: "task_complete", turn_id: "fixture-turn" }),
+    ].map(x => JSON.stringify(x)).join("\n") + "\n");
+    const result = runHook(CAPTURE_HOOK, { cwd: project, transcript_path: transcript, hook_event_name: "Stop" }, {
+      AUGENTA_CAPTURE_ENABLED: "1", AUGENTA_API_URL: server.url.origin, AUGENTA_INGEST_URL: `${server.url.origin}/v1/experiences`,
+    });
+    expect(result.exitCode).toBe(0); expect(result.stderr?.toString()).toBe("");
+    await waitForShipper(project, requests, 2);
+    const experiences = requests.flatMap(x => x.experiences);
+    const trajectory = experiences.filter((x): x is TrajectoryExperience => x.type === "trajectory");
+    expect(JSON.stringify(experiences)).not.toContain(content);
+    expect(trajectory.flatMap(x => x.events).some(e => e.text === "turn tail survives")).toBe(true);
+    expect(trajectory.flatMap(x => x.events).some(e => e.text === "[input_image]")).toBe(true);
+    expect(trajectory.find(x => x.sid === "legacy")!.data).toHaveLength(2);
+    const current = trajectory.find(x => x.sid !== "legacy")!;
+    expect(current.data).toHaveLength(7);
+    expect(current.events.find(e => e.role === "tool")!.text).toContain("[augenta attachment sha256:");
+    expect(requests.every(x => x.authorization === "AugentaKey e2e-binary-key")).toBe(true);
+  } finally {
+    await waitFor(() => !existsSync(join(project, ".augenta/outbox/.lock")), "binary shipper exit", 2_000).catch(() => {});
+    server.stop(true); rmSync(work, { recursive: true, force: true });
+  }
+}, 10_000);

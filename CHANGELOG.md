@@ -12,6 +12,21 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.12.2] — 2026-09-30
+
+No reconnect or renewed hook approval is required.
+
+### Fixed
+
+- Embedded document and image bytes are replaced by hash, size and media-type
+  references in captured telemetry, including Codex UI image copies and the
+  images, audio and binary resources returned by MCP tools — whether a tool
+  result arrives as structured data or as serialized JSON text, as Codex
+  records it. PDF tool results no longer send base64
+  through the secret scrubber or crowd later raw records out of the turn.
+- Older queued raw transcripts are stripped before delivery too. This release
+  does not turn attachments into Workspace documents; that needs separate consent.
+
 ## [0.12.1] — 2026-09-30
 
 No reconnect is required, except for the one case in the first item.
@@ -518,6 +533,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.12.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.10.2...v0.11.0
