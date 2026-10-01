@@ -165,15 +165,17 @@ their recorded Workspaces. By default it asks
 all of them at once. A caller can narrow that set but cannot add an unconnected
 Workspace.
 
-The request body holds the question and, for browser sign-in, the Workspace
-id. No transcript or file content is attached. The API decides the allowed
-organization and memory scope from the signed-in identity. An API key already
-fixes the Workspace, so that request needs only the question.
+The request body holds the question, `origin: "manual"` and, for browser
+sign-in, the Workspace id. No transcript or file content is attached. The API
+decides the allowed organization and memory scope from the signed-in identity,
+and maps `origin` to how strongly the recall reinforces what it used. An API key
+already fixes the Workspace, so that request needs only the question and its
+origin. Each destination gets one idempotency key per call.
 
 By default the script explicitly requests `?mode=answer` for model-written prose.
 `--context` requests `?mode=context` for the matched summary and supporting notes.
 A 503 `answerer_unavailable` or `consent_required` triggers one context retry
-with the same question and destination, a fresh idempotency key, and a `fallback` marker.
+with the same question, destination and idempotency key, and a `fallback` marker.
 It reports results, empty Workspaces, and failures separately. An
 empty Workspace is a normal result. A failure in one is not presented as a
 successful answer from all of them.
@@ -199,7 +201,15 @@ The [prompt hook](../hooks/auto-recall.ts) runs the same request on each
 submitted prompt, through the same [request layer](../capture/recall-client.ts),
 with these differences:
 
-- It asks in context mode, so Augenta runs no model for it.
+- It asks in context mode, so Augenta runs no model for it. The body adds
+  `origin: "auto"`, which reinforces at a lower weight than a manual recall, and
+  `budget_tokens`, its share of the injected block in the platform's token
+  estimate.
+- Retries reuse the request's idempotency key, so a retry after a response was
+  lost records one recall, not two.
+- A section over its share drops whole notes, oldest first, keeps the summary,
+  and says how many notes it left out. The heading then reads "(a selection of
+  its notes)", as it does when the platform itself sent only some of them.
 - The question is the prompt, with pasted blocks removed and common secret
   patterns masked. Commands, `$augenta:` mentions, replies under three words and
   prompts over the size limit are not asked.

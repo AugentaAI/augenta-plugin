@@ -18,10 +18,17 @@
  * recall is deliberately not gated on it, and the hook applies its own gate
  * before calling in. What governs recall is a readable `.augenta/config.json`.
  *
- * ONLY THE QUESTION LEAVES. The request body is the query text and — for a
- * signed-in project — the Workspace id. No transcript, no file contents, no
- * credential in any payload this returns: a sign-in token travels in the
+ * ONLY THE QUESTION LEAVES. The request body is the query text, `origin` (who
+ * asked: `manual` for the CLI, `auto` for the prompt hook) and — for a
+ * signed-in project — the Workspace id; the prompt hook adds `budget_tokens`, how
+ * much memory its share of the block can carry. No transcript, no file contents,
+ * no credential in any payload this returns: a sign-in token travels in the
  * authorization header only, and a platform key from the project config.
+ *
+ * ONE IDEMPOTENCY KEY PER DESTINATION PER CALL. Every retry of that question, and
+ * the answer-to-context fallback, reuses it. The door records one reuse activation
+ * per key, so a retry after a request it did process — a lost response, a 502 from
+ * a proxy — is the same recall, not a second one.
  *
  * TWO MODES, WITH ANSWER AS THE CLI's DEFAULT. Every URL carries an explicit
  * `?mode=`. If answer mode returns 503 answerer_unavailable or
@@ -120,8 +127,20 @@ export interface RecallAnswer extends Destination {
    *  answering from this memory can say it is working from part of it rather
    *  than implying it saw everything. */
   notesTruncated?: boolean;
+  /**
+   * The context-mode memory as the door sent it — the engram summaries, then the
+   * notes oldest first (the door's content order) — kept apart so a caller
+   * trimming to a budget can drop whole notes. Present only when the request set
+   * `withNotes`, so the CLI's `--json` payload is unchanged.
+   */
+  memory?: RecallMemory;
   model?: string;
   renderer?: string;
+}
+
+export interface RecallMemory {
+  summaries: string[];
+  notes: string[];
 }
 
 export type NothingRemembered = Destination & { fallback?: RecallFallback };
@@ -165,6 +184,14 @@ export interface RecallPayload {
 export interface RecallRequest {
   query: string;
   mode: "answer" | "context";
+  /** Who asked, sent as the body's `origin`: the door reinforces an automatic
+   *  recall at a lower weight than one a person asked for. */
+  origin: "auto" | "manual";
+  /** The `budget_tokens` to send, given how many destinations will be asked.
+   *  Absent: none is sent and the door uses its default for `origin`. */
+  budgetTokens?: (destinations: number) => number;
+  /** Keep each context answer's summaries and notes apart (`RecallAnswer.memory`). */
+  withNotes?: boolean;
   /** Narrow the fan-out to these Workspace ids. Empty means every destination. */
   workspaces?: string[];
   /** Per-request ceiling for `mode`, in ms. */
@@ -225,6 +252,7 @@ export type Outcome = (
       answer: string;
       mode: "context" | "answer";
       notesTruncated?: boolean;
+      memory?: RecallMemory;
       scope?: string;
       model?: string;
       renderer?: string;
@@ -268,11 +296,15 @@ function textOf(block: ContentBlock | undefined): string {
  * evidence under it, with no invented labels asserting more structure than that.
  */
 export function renderContext(body: unknown): string {
-  const parts = [
-    ...blocksOf(body, "engram").map(textOf),
-    ...blocksOf(body, "note").map(textOf),
-  ].filter((text) => text.trim());
-  return parts.join("\n\n");
+  const { summaries, notes } = memoryOf(body);
+  return [...summaries, ...notes].join("\n\n");
+}
+
+/** The summaries and notes `renderContext` joins, blank ones dropped, in the
+ *  door's order: the content contract sends notes oldest first. */
+export function memoryOf(body: unknown): RecallMemory {
+  const texts = (type: string) => blocksOf(body, type).map(textOf).filter((text) => text.trim());
+  return { summaries: texts("engram"), notes: texts("note") };
 }
 
 function errorFields(
@@ -316,7 +348,7 @@ function retryAfterSeconds(raw: string | null | undefined): number | undefined {
   return Number.isFinite(value) && value >= 0 ? Math.ceil(value) : undefined;
 }
 
-export function classifyRecallResponse(parts: RecallResponseParts): Outcome {
+export function classifyRecallResponse(parts: RecallResponseParts, withNotes = false): Outcome {
   const { status, body, text } = parts;
   if (status === 200) {
     /* The MODE is read off the response, never assumed from the flag that was
@@ -367,6 +399,7 @@ export function classifyRecallResponse(parts: RecallResponseParts): Outcome {
       ...((body as { notes_truncated?: unknown }).notes_truncated === true
         ? { notesTruncated: true }
         : {}),
+      ...(withNotes && mode === "context" ? { memory: memoryOf(body) } : {}),
       ...(typeof scope === "string" ? { scope } : {}),
       ...(parts.model ? { model: parts.model } : {}),
       ...(parts.renderer ? { renderer: parts.renderer } : {}),
@@ -455,6 +488,9 @@ export function classifyRecallResponse(parts: RecallResponseParts): Outcome {
 interface AskContext {
   url: string;
   query: string;
+  origin: "auto" | "manual";
+  budgetTokens?: number;
+  withNotes: boolean;
   timeoutMs: number;
   contextTimeoutMs: number;
   fetcher: AuthorizedFetch;
@@ -506,23 +542,29 @@ function outOfTime(): Outcome {
 async function askOnce(
   ctx: AskContext,
   destination: Destination,
+  idempotencyKey: string,
 ): Promise<{ outcome: Outcome; transient: boolean; retryAfterMs?: number }> {
   const timeoutMs = requestTimeout(ctx.timeoutMs, ctx.deadlineAt);
   if (timeoutMs === undefined) return { outcome: outOfTime(), transient: false };
   /* The client owns its contract: every URL carries an explicit mode. */
   const headers: Record<string, string> = {
     "content-type": "application/json",
-    /* Fresh per destination, per call AND per attempt. The door namespaces an
-       activation by (principal, key), so reusing one key across two
-       destinations or two different questions is a 409 on a perfectly valid
-       request — and a 409 without a typed code reads as `workspace_archived`,
-       which would wrongly mark a healthy link unresolved. A retry after a
-       request the door did process therefore records a second activation. */
-    "idempotency-key": randomUUID(),
+    /* Fresh per destination and per call, and the SAME across that call's
+       attempts (`askDestination`). The door namespaces an activation by
+       (principal, key), so reusing one key across two destinations or two
+       different questions is a 409 on a perfectly valid request — and a 409
+       without a typed code reads as `workspace_archived`, which would wrongly
+       mark a healthy link unresolved. Across one question's retries the reuse
+       is the point: a retry after a request the door did process is the same
+       recall, and records no second activation. */
+    "idempotency-key": idempotencyKey,
   };
-  const body = JSON.stringify(
-    destination.workspaceId ? { query: ctx.query, workspace: destination.workspaceId } : { query: ctx.query },
-  );
+  const body = JSON.stringify({
+    query: ctx.query,
+    ...(destination.workspaceId ? { workspace: destination.workspaceId } : {}),
+    origin: ctx.origin,
+    ...(ctx.budgetTokens !== undefined ? { budget_tokens: ctx.budgetTokens } : {}),
+  });
   try {
     const response = await ctx.fetcher(ctx.url, {
       method: "POST",
@@ -544,14 +586,15 @@ async function askOnce(
       model: response.headers.get("x-augenta-model") ?? undefined,
       renderer: response.headers.get("x-augenta-renderer") ?? undefined,
       retryAfter: response.headers.get("retry-after"),
-    });
+    }, ctx.withNotes);
     const url = new URL(ctx.url);
     if (response.status === 503 && url.searchParams.get("mode") === "answer" &&
         outcome.kind === "failed" &&
         (outcome.code === "answerer_unavailable" || outcome.code === "consent_required")) {
       url.searchParams.set("mode", "context");
+      // The same key: the answer leg recorded nothing, and this is the same question.
       const fallback = await askDestination(
-        { ...ctx, url: url.toString(), timeoutMs: ctx.contextTimeoutMs }, destination,
+        { ...ctx, url: url.toString(), timeoutMs: ctx.contextTimeoutMs }, destination, idempotencyKey,
       );
       return { outcome: { ...fallback, fallback: { requested: "answer", reason: outcome.code } }, transient: false };
     }
@@ -584,9 +627,13 @@ async function askOnce(
  *  transient failure. Everything that can go wrong on the wire lands here as an
  *  {@link Outcome} so the fan-out never rejects and one bad destination cannot
  *  take the others down with it. */
-async function askDestination(ctx: AskContext, destination: Destination): Promise<Outcome> {
+async function askDestination(
+  ctx: AskContext,
+  destination: Destination,
+  idempotencyKey: string = randomUUID(),
+): Promise<Outcome> {
   for (let attempt = 0; ; attempt++) {
-    const { outcome, transient, retryAfterMs } = await askOnce(ctx, destination);
+    const { outcome, transient, retryAfterMs } = await askOnce(ctx, destination, idempotencyKey);
     if (!transient || attempt >= ctx.retries) return outcome;
     const wait = retryAfterMs ?? RETRY_BACKOFF_MS[Math.min(attempt, RETRY_BACKOFF_MS.length - 1)]!;
     if (!hasRoomFor(wait, ctx.deadlineAt)) return outcome;
@@ -950,6 +997,9 @@ export async function askWorkspaces(searchRoot: string, request: RecallRequest):
   const ctx: AskContext = {
     url,
     query,
+    origin: request.origin,
+    ...(request.budgetTokens ? { budgetTokens: request.budgetTokens(destinations.length) } : {}),
+    withNotes: request.withNotes === true,
     timeoutMs: request.timeoutMs,
     contextTimeoutMs: request.contextTimeoutMs,
     fetcher,

@@ -4,7 +4,8 @@ Recall sends `?mode=answer` by default. Pass `--context` to inspect model-free m
 or `--answer` to spell the default explicitly; combining them is an error. A 503
 `answerer_unavailable` or `consent_required` causes one context retry. Inspect each
 entry's `fallback: {requested: "answer", reason: ...}` and returned `mode`; other
-errors do not trigger this fallback. The retry gets a fresh idempotency key.
+errors do not trigger this fallback. The retry reuses the request's idempotency key,
+so it records at most one reuse activation, as every transient retry does.
 `--timeout` applies separately to each request, including the fallback. Allow a
 Bash budget of at least 180 seconds for answer and 90 seconds for explicit context
 with the default ceilings; increase the budget when overriding them.

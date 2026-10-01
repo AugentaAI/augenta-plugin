@@ -281,10 +281,19 @@ layer in `capture/recall-client.ts` — is the only outbound path that is not
 capture, so the rules above do not all transfer and the differences are
 deliberate:
 
-- **Only the question text leaves.** The request body is the query and — for a
-  signed-in project — the Workspace id, and nothing else. No transcript line, no
-  file content, no memory document. Adding a field to that body is a change to
-  what a user's machine discloses, not a feature.
+- **Only the question text leaves.** The request body is the query, `origin`
+  (`manual` from the CLI, `auto` from the prompt hook) and — for a signed-in
+  project — the Workspace id; the prompt hook adds `budget_tokens`. Neither added
+  field is content: `origin` says which code path asked, so the platform
+  reinforces an automatic fetch at a lower weight than a recall a person asked
+  for, and `budget_tokens` is a number derived from how many Workspaces are
+  asked. No transcript line, no file content, no memory document. Adding a field
+  to that body is a change to what a user's machine discloses, not a feature:
+  these two were a recorded product decision, and the next one needs its own.
+- **One idempotency key per destination per call.** Every retry of that
+  question, and the answer-to-context fallback, reuses it, because the platform
+  records one reuse activation per key: a retry after a request it processed is
+  the same recall. Two destinations, or two calls, never share a key.
 - **Explicit recall is NOT gated on `AUGENTA_CAPTURE_ENABLED`,** on purpose. That
   switch stops a project SENDING; someone who turned it off may still legitimately
   ask what was already remembered, and gating a read on it would make one off
@@ -327,8 +336,8 @@ deliberate:
   and appears in no output.
 - **Answer is the default, with one bounded fallback.** Every request sends an
   explicit mode. Only 503 `answerer_unavailable` / `consent_required` in answer
-  mode retries as context: same question, same destination, once, with a fresh
-  idempotency key and a `fallback` marker. No new disclosure or destination.
+  mode retries as context: same question, same destination, same idempotency
+  key, once, with a `fallback` marker. No new disclosure or destination.
 - **A young Workspace is not an error.** `empty_scope` means "nothing remembered
   yet"; reporting it as a failure sends a user to look for a fault that is not
   there, and invites a reconnect that would change nothing.
@@ -351,7 +360,8 @@ hook context. Everything above still holds; these are the additions:
   connected with. `--auto-recall on|off` alone changes only that key, patched
   atomically, never `captureSince` or the destinations. The answer never gates
   the explicit recall skill, which the model may run whenever it helps.
-- **Same body, same destinations, context mode.** `{query, workspace}` only, to
+- **Same body, same destinations, context mode.** `{query, workspace}` plus
+  `origin: "auto"` and `budget_tokens`, to
   recorded destinations whose links check out live, in `?mode=context` — no
   Augenta-side model runs and no prompt reaches an external model on this path.
   The query is the user's own words: pasted blocks are removed, credential shapes

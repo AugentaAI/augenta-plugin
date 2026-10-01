@@ -1713,7 +1713,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.14.0";
+var PLUGIN_VERSION = "0.15.0";
 
 // capture/cowork-task.ts
 import { createHash as createHash4, randomUUID as randomUUID6 } from "node:crypto";

@@ -20,8 +20,8 @@
  * destinations side by side, which is why the aggregate `status` has a
  * `partially_answered` value rather than collapsing to a boolean.
  *
- * ONLY THE QUESTION LEAVES. The request body is the query text and — for a
- * signed-in project — the Workspace id. No transcript, no file contents, no
+ * ONLY THE QUESTION LEAVES. The request body is the query text, `origin:
+ * "manual"` and — for a signed-in project — the Workspace id. No transcript, no file contents, no
  * credential in any payload this prints: the token travels inside
  * `fetchWithProfile` from `~/.augenta/auth.json`, and a platform key from the
  * project config, exactly as the shipper does it. The agent is the normal caller
@@ -188,6 +188,8 @@ export async function runRecall(
   return askWorkspaces(resolved.projectRoot, {
     query,
     mode,
+    // A person asked: the door reinforces this recall at full weight.
+    origin: "manual",
     ...(args.workspaces ? { workspaces: args.workspaces } : {}),
     timeoutMs,
     contextTimeoutMs,
