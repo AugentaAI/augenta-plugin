@@ -223,6 +223,19 @@ describe("groupIntoExperiences", () => {
     expect(g.data).toEqual(['{"payload":{"thinking":"keep"}}']);
   });
 
+  test("strips Codex UI and MCP image bytes from older queued raw records", () => {
+    const content = Buffer.from("legacy fixture image").toString("base64");
+    const g = trajectories([ev(0),
+      rawJson(JSON.stringify({ payload: { type: "user_message", images: [`data:image/png;base64,${content}`] } })),
+      rawJson(JSON.stringify({ result: { content: [{ type: "image", data: content, mimeType: "image/png" }] } })),
+      rawJson(JSON.stringify({ note: "turn tail" })),
+    ])[0]!;
+    expect(g.data).toHaveLength(3);
+    expect(g.data!.slice(0, 2).every(line => line.includes("[augenta attachment sha256:"))).toBe(true);
+    expect(g.data![2]).toContain("turn tail");
+    expect(JSON.stringify(g)).not.toContain(content);
+  });
+
   test("drops malformed legacy raw records rather than bypassing sanitation", () => {
     const g = trajectories([ev(0), rawJson("{ not json")])[0]!;
     expect("data" in g).toBe(false);
