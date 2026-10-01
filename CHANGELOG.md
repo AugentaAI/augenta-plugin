@@ -12,6 +12,27 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.14.0] — 2026-10-01
+
+No reconnect is required. Cowork capture is an explicit pilot; it does not turn
+on for an existing connected project.
+
+### Added
+
+- **A Cowork task can be bound to one connected project and one transport.**
+  Native transcript capture and an authenticated local OTLP/HTTP JSON relay use
+  the project's complete affirmed Workspace set and its own Connectors. Attached
+  folders and source account fields never choose a route.
+- **Cowork events are grouped into agent turns.** Prompt and response text, tool
+  details and usage preserve the exported session, prompt and sequence correlation
+  through the existing Experience pipeline. Retries and interrupted writes avoid
+  duplicate appends; late events wait for their prompt. Unbound tasks and projects
+  without their own join send nothing.
+- **The pilot guide records the remaining field checks and source limits.**
+  Thinking and complete tool-result bodies are unavailable in the documented
+  Cowork schema. Native hook dispatch and actual exported turns must still be
+  verified in real Cowork tasks and every selected Workspace.
+
 ## [0.13.1] — 2026-10-01
 
 No reconnect is required.
@@ -580,6 +601,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.14.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.12.2...v0.13.0
 [0.12.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.12.1...v0.12.2

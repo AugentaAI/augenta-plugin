@@ -48,6 +48,7 @@ import { isMain } from "../runtime/node";
 import { PLUGIN_VERSION } from "../runtime/version";
 import { join, dirname } from "node:path";
 import { mkdirSync, openSync, writeSync, closeSync, unlinkSync, statSync, appendFileSync } from "node:fs";
+import { captureLock } from "./capture-lock";
 import {
   Outbox,
   isDocumentRecord,
@@ -127,7 +128,7 @@ function truncateEventText(e: CaptureEvent, budget: number): CaptureEvent {
 /**
  * Group buffered records into turn-scoped trajectory experiences: one per
  * (src, sid, proj, turn), first-seen order preserved, intra-group order as
- * buffered (events seq-ascending by construction). CaptureEvents fill
+ * source sequence, including OTLP events that arrived out of order. CaptureEvents fill
  * `events`; RawRecords' raw strings fill `data` (omitted when the group has
  * none). Records missing a turn stamp bucket as turn 0. The turn is only the
  * GROUPING key — it rides on each step (trajectory-domain data), never on the
@@ -162,6 +163,9 @@ export function groupIntoExperiences(records: SpoolRecord[]): Experience[] {
       if (raw !== undefined) (g.data ??= []).push(raw);
     }
     else g.events.push(r);
+  }
+  for (const experience of experiences) {
+    if (experience.type === "trajectory") experience.events.sort((a, b) => a.seq - b.seq);
   }
   return experiences.filter((experience) => experience.type === "doc" || experience.events.length > 0);
 }
@@ -550,6 +554,21 @@ export function shippingNotice(
  */
 export async function drain(opts: DrainOptions): Promise<DrainResult> {
   const box = new Outbox(opts.projectRoot);
+  if (box.hasPendingAppend()) {
+    const release = captureLock(opts.projectRoot);
+    if (!release) return { shipped: 0, batches: 0, lastStatus: 0 };
+    try { box.finishPendingAppend(); }
+    catch {
+      // A journal that no longer matches its spool stops delivery rather than
+      // replaying history (docs/cowork-pilot.md), and nothing below runs — so
+      // this is the only place the stop can be recorded. Without it a wedged
+      // project writes no notice and no health at all, and looks exactly like
+      // one that simply has nothing to ship.
+      recordHealth(opts.projectRoot, "delivery", "failed");
+      return { shipped: 0, batches: 0, lastStatus: 0 };
+    }
+    finally { release(); }
+  }
   const maxBatch = opts.maxBatch ?? 200;
   const maxBatches = opts.maxBatches ?? 50;
   const maxSliceBytes = opts.maxSliceBytes ?? MAX_PENDING_SLICE_BYTES;

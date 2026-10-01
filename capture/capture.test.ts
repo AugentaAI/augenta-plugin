@@ -14,10 +14,11 @@
  * Run: bun test capture/capture.test.ts
  */
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readsFullTail, resolveCaptureTarget, runCapture, shouldFlush, SPOOL_FULL_MARKER } from "./capture";
+import { captureHealth } from "./health";
 import { CaptureState } from "./capture-cursor";
 import { TurnState } from "./turn-cursor";
 import { Outbox, isCaptureEvent, isDocumentRecord, isRawRecord } from "./outbox";
@@ -449,6 +450,58 @@ describe("runCapture", () => {
 
       const marker = pendingEvents().find((e) => e.text === SPOOL_FULL_MARKER)!;
       expect(marker.turn).toBe(1);
+    });
+  });
+
+  describe("a pending relay append is a 'finish me', never the spool cap", () => {
+    const outboxDir = () => join(project, ".augenta", "outbox");
+
+    /** Leave an append journal behind exactly as a killed relay does: the bytes
+     *  reach the spool, the receipt publish fails, the transaction stays open. */
+    function wedge(): string {
+      const receipt = join(project, ".augenta", "state", "receipt.json");
+      mkdirSync(receipt, { recursive: true }); // a DIRECTORY — the receipt rename cannot land
+      expect(() =>
+        new Outbox(project).appendWithReceipt(
+          [{ src: "claude-code", sid: "relay", proj: project, ts: new Date().toISOString(), seq: 0, kind: "msg", role: "user", text: "relayed" }],
+          receipt,
+          { seen: [0] },
+        ),
+      ).toThrow();
+      expect(new Outbox(project).hasPendingAppend()).toBe(true);
+      return receipt;
+    }
+
+    test("capture finishes it and spools normally — it never spends the episode's one loud drop marker", () => {
+      const receipt = wedge();
+      rmSync(receipt, { recursive: true }); // the receipt can land now
+      writeFileSync(transcript, userLine("after the relay"));
+
+      expect(fire().appended).toBe(1);
+      expect(new Outbox(project).hasPendingAppend()).toBe(false);
+      expect(pendingEvents().map((e) => e.text)).toEqual(["relayed", "after the relay"]);
+      expect(JSON.parse(readFileSync(receipt, "utf8"))).toEqual({ seen: [0] });
+      // The drop episode is what a `false` return would have opened, silencing
+      // the NEXT genuine overflow for as long as the spool stays undrained.
+      expect(existsSync(join(outboxDir(), "dropped.json"))).toBe(false);
+      expect(pendingEvents().some((e) => e.text === SPOOL_FULL_MARKER)).toBe(false);
+    });
+
+    test("a journal whose spool moved under it stops capture VISIBLY", () => {
+      wedge();
+      // An older shipper without journal awareness rewrites the spool: same
+      // bytes, new inode. The journal can no longer be finished.
+      const spool = join(outboxDir(), "spool.jsonl");
+      const replacement = join(outboxDir(), "replacement");
+      writeFileSync(replacement, readFileSync(spool));
+      renameSync(replacement, spool);
+      writeFileSync(transcript, userLine("after the relay"));
+
+      expect(fire()).toEqual({ appended: 0, flushed: false });
+      expect(new Outbox(project).hasPendingAppend()).toBe(true);
+      // Diagnosable: a wedged project must not look like a hook that never fired.
+      expect(captureHealth(project).capture?.outcome).toBe("failed");
+      expect(existsSync(join(outboxDir(), "dropped.json"))).toBe(false);
     });
   });
 

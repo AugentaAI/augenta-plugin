@@ -34,9 +34,9 @@ var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, 
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // capture/health.ts
-import { existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync7, renameSync as renameSync5, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join9 } from "node:path";
-import { randomUUID as randomUUID4 } from "node:crypto";
+import { existsSync as existsSync6, mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "node:fs";
+import { join as join10 } from "node:path";
+import { randomUUID as randomUUID5 } from "node:crypto";
 
 // capture/config.ts
 import { readFileSync as readFileSync5 } from "node:fs";
@@ -1188,8 +1188,57 @@ function attachmentCaptureMode(env = process.env) {
 }
 
 // capture/outbox.ts
+import { basename as basename2, dirname as dirname4, join as join9 } from "node:path";
+import { randomUUID as randomUUID4 } from "node:crypto";
+import { mkdirSync as mkdirSync6, existsSync as existsSync5, readFileSync as readFileSync7, writeFileSync as writeFileSync6, appendFileSync, renameSync as renameSync4, statSync as statSync4, unlinkSync as unlinkSync3 } from "node:fs";
+
+// capture/capture-lock.ts
+import { mkdirSync as mkdirSync5, openSync, readFileSync as readFileSync6, closeSync, writeFileSync as writeFileSync5, unlinkSync as unlinkSync2, statSync as statSync3 } from "node:fs";
 import { join as join8 } from "node:path";
-import { mkdirSync as mkdirSync5, existsSync as existsSync5, readFileSync as readFileSync6, writeFileSync as writeFileSync5, appendFileSync, renameSync as renameSync4, statSync as statSync3, unlinkSync as unlinkSync2 } from "node:fs";
+function captureLock(projectRoot) {
+  const dir = join8(ensureAugentaDir(projectRoot), "state");
+  mkdirSync5(dir, { recursive: true });
+  const path = join8(dir, "capture.lock");
+  const deadline = Date.now() + 750;
+  do {
+    try {
+      const fd = openSync(path, "wx", 384);
+      try {
+        writeFileSync5(fd, String(process.pid));
+      } finally {
+        closeSync(fd);
+      }
+      return () => {
+        try {
+          unlinkSync2(path);
+        } catch {}
+      };
+    } catch (error) {
+      if (error.code !== "EEXIST")
+        return;
+      try {
+        const pid = Number(readFileSync6(path, "utf8"));
+        if (Number.isSafeInteger(pid) && pid > 0) {
+          try {
+            process.kill(pid, 0);
+          } catch (e) {
+            if (e.code === "ESRCH") {
+              unlinkSync2(path);
+              continue;
+            }
+          }
+        } else if (Date.now() - statSync3(path).mtimeMs > 30000) {
+          unlinkSync2(path);
+          continue;
+        }
+      } catch {}
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  } while (Date.now() < deadline);
+  return;
+}
+
+// capture/outbox.ts
 var NEWLINE = 10;
 var MAX_SPOOL_BYTES = 50 * 1024 * 1024;
 var MAX_DEST_LAG_BYTES = 16 * 1024 * 1024;
@@ -1230,22 +1279,24 @@ class Outbox {
   maxDestLagBytes;
   constructor(projectRoot, opts = {}) {
     this.projectRoot = projectRoot;
-    this.dir = join8(projectRoot, ".augenta", "outbox");
-    this.spoolPath = join8(this.dir, "spool.jsonl");
-    this.cursorPath = join8(this.dir, "cursor.json");
+    this.dir = join9(projectRoot, ".augenta", "outbox");
+    this.spoolPath = join9(this.dir, "spool.jsonl");
+    this.cursorPath = join9(this.dir, "cursor.json");
     this.maxSpoolBytes = opts.maxSpoolBytes ?? MAX_SPOOL_BYTES;
     this.maxDestLagBytes = opts.maxDestLagBytes ?? MAX_DEST_LAG_BYTES;
   }
   ensure() {
     ensureAugentaDir(this.projectRoot);
-    mkdirSync5(this.dir, { recursive: true });
+    mkdirSync6(this.dir, { recursive: true });
   }
   append(records) {
     if (records.length === 0)
       return true;
+    if (existsSync5(this.appendJournalPath()))
+      throw new Error("An outbox append needs recovery");
     this.ensure();
     try {
-      if (statSync3(this.spoolPath).size >= this.maxSpoolBytes)
+      if (statSync4(this.spoolPath).size >= this.maxSpoolBytes)
         return false;
     } catch {}
     appendFileSync(this.spoolPath, records.map((r) => JSON.stringify(r)).join(`
@@ -1256,43 +1307,112 @@ class Outbox {
   forceAppend(records) {
     if (records.length === 0)
       return;
+    if (existsSync5(this.appendJournalPath()))
+      throw new Error("An outbox append needs recovery");
     this.ensure();
     appendFileSync(this.spoolPath, records.map((r) => JSON.stringify(r)).join(`
 `) + `
 `);
   }
+  appendJournalPath() {
+    return join9(this.dir, "append-transaction.json");
+  }
+  hasPendingAppend() {
+    return existsSync5(this.appendJournalPath());
+  }
+  publish(path, value) {
+    mkdirSync6(dirname4(path), { recursive: true, mode: 448 });
+    const temp = `${path}.${randomUUID4()}.tmp`;
+    try {
+      writeFileSync6(temp, JSON.stringify(value), { mode: 384, flag: "wx" });
+      renameSync4(temp, path);
+    } finally {
+      try {
+        unlinkSync3(temp);
+      } catch {}
+    }
+  }
+  appendWithReceipt(records, receiptPath, receipt) {
+    this.ensure();
+    if (dirname4(receiptPath) !== join9(this.projectRoot, ".augenta", "state"))
+      throw new Error("Invalid outbox receipt path");
+    if (existsSync5(this.appendJournalPath()))
+      throw new Error("An outbox append needs recovery");
+    if (!records.length) {
+      this.publish(receiptPath, receipt);
+      return true;
+    }
+    appendFileSync(this.spoolPath, "");
+    const before = statSync4(this.spoolPath);
+    if (before.size >= this.maxSpoolBytes)
+      return false;
+    this.publish(this.appendJournalPath(), {
+      version: 1,
+      offset: before.size,
+      inode: before.ino,
+      content: records.map((record) => JSON.stringify(record)).join(`
+`) + `
+`,
+      receiptName: basename2(receiptPath),
+      receipt
+    });
+    this.finishPendingAppend();
+    return true;
+  }
+  finishPendingAppend() {
+    const path = this.appendJournalPath();
+    if (!existsSync5(path))
+      return 0;
+    if (statSync4(path).size > MAX_SPOOL_BYTES)
+      throw new Error("Invalid outbox append journal");
+    const journal = JSON.parse(readFileSync7(path, "utf8"));
+    if (journal.version !== 1 || !Number.isSafeInteger(journal.offset) || journal.offset < 0 || typeof journal.content !== "string" || !journal.content.endsWith(`
+`) || typeof journal.receiptName !== "string" || !/^[a-zA-Z0-9_-]+\.json$/.test(journal.receiptName))
+      throw new Error("Invalid outbox append journal");
+    const spool = statSync4(this.spoolPath);
+    const content = Buffer.from(journal.content);
+    const tail = readFileSync7(this.spoolPath).subarray(journal.offset);
+    if (spool.ino !== journal.inode || spool.size < journal.offset || tail.length > content.length || !tail.equals(content.subarray(0, tail.length)))
+      throw new Error("Outbox append journal no longer matches its spool");
+    if (tail.length < content.length)
+      appendFileSync(this.spoolPath, content.subarray(tail.length));
+    this.publish(join9(this.projectRoot, ".augenta", "state", journal.receiptName), journal.receipt);
+    unlinkSync3(path);
+    return journal.content.split(`
+`).length - 1;
+  }
   dropEpisodePath() {
-    return join8(this.dir, "dropped.json");
+    return join9(this.dir, "dropped.json");
   }
   markDropped() {
     this.ensure();
     const path = this.dropEpisodePath();
     if (existsSync5(path))
       return false;
-    writeFileSync5(path, JSON.stringify({ since: new Date().toISOString() }));
+    writeFileSync6(path, JSON.stringify({ since: new Date().toISOString() }));
     return true;
   }
   clearDropEpisode() {
     try {
-      unlinkSync2(this.dropEpisodePath());
+      unlinkSync3(this.dropEpisodePath());
     } catch {}
   }
   discardNoticePath() {
-    return join8(this.dir, "discarded.json");
+    return join9(this.dir, "discarded.json");
   }
   markDiscarded(entries) {
     if (entries.length === 0)
       return;
     this.ensure();
     try {
-      writeFileSync5(this.discardNoticePath(), JSON.stringify({ at: new Date().toISOString(), destinations: entries }));
+      writeFileSync6(this.discardNoticePath(), JSON.stringify({ at: new Date().toISOString(), destinations: entries }));
     } catch {}
   }
   takeDiscarded() {
     const path = this.discardNoticePath();
     try {
-      const parsed = JSON.parse(readFileSync6(path, "utf8"));
-      unlinkSync2(path);
+      const parsed = JSON.parse(readFileSync7(path, "utf8"));
+      unlinkSync3(path);
       if (!Array.isArray(parsed.destinations) || parsed.destinations.length === 0) {
         return;
       }
@@ -1319,7 +1439,7 @@ class Outbox {
   readCursor() {
     let raw;
     try {
-      raw = JSON.parse(readFileSync6(this.cursorPath, "utf8"));
+      raw = JSON.parse(readFileSync7(this.cursorPath, "utf8"));
     } catch {
       return { shipped: 0, lagStrikes: {} };
     }
@@ -1345,7 +1465,7 @@ class Outbox {
     const strikes = Object.keys(lagStrikes).length > 0 ? { lagStrikes } : {};
     const body = links ? { shipped: Math.min(...Object.values(links)), links, ...strikes } : { shipped: scalar ?? 0 };
     const tmp = this.cursorPath + ".tmp";
-    writeFileSync5(tmp, JSON.stringify(body));
+    writeFileSync6(tmp, JSON.stringify(body));
     renameSync4(tmp, this.cursorPath);
   }
   shippedOffset(destKey) {
@@ -1355,7 +1475,7 @@ class Outbox {
   }
   spoolEnd() {
     try {
-      return statSync3(this.spoolPath).size;
+      return statSync4(this.spoolPath).size;
     } catch {
       return 0;
     }
@@ -1413,7 +1533,7 @@ class Outbox {
   }
   hasPendingBytes() {
     try {
-      return statSync3(this.spoolPath).size > this.shippedOffset();
+      return statSync4(this.spoolPath).size > this.shippedOffset();
     } catch {
       return false;
     }
@@ -1423,9 +1543,11 @@ class Outbox {
   }
   readPending(maxBatch = Infinity, destKey, maxBytes = Infinity) {
     const shipped = this.shippedOffset(destKey);
+    if (this.hasPendingAppend())
+      return { records: [], endOffset: shipped, hasMore: false };
     if (!existsSync5(this.spoolPath))
       return { records: [], endOffset: shipped, hasMore: false };
-    const buf = readFileSync6(this.spoolPath);
+    const buf = readFileSync7(this.spoolPath);
     const start = Math.min(shipped, buf.length);
     const records = [];
     let off = start;
@@ -1476,9 +1598,20 @@ class Outbox {
   compact() {
     if (!existsSync5(this.spoolPath))
       return;
+    const release = captureLock(this.projectRoot);
+    if (!release)
+      return;
+    try {
+      if (!this.hasPendingAppend())
+        this.compactUnderLock();
+    } finally {
+      release();
+    }
+  }
+  compactUnderLock() {
     let size;
     try {
-      size = statSync3(this.spoolPath).size;
+      size = statSync4(this.spoolPath).size;
     } catch {
       return;
     }
@@ -1496,7 +1629,7 @@ class Outbox {
         this.advance(0);
       }
       try {
-        unlinkSync2(archivePath);
+        unlinkSync3(archivePath);
       } catch {}
     }
   }
@@ -1507,7 +1640,7 @@ var STAGES = ["dispatch", "capture", "attachments", "delivery"];
 var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full", "too_large", "skipped"]);
 function read(projectRoot, stage) {
   try {
-    const s = JSON.parse(readFileSync7(join9(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    const s = JSON.parse(readFileSync8(join10(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
     if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
       return;
     return {
@@ -1523,8 +1656,8 @@ function read(projectRoot, stage) {
 }
 function recordHealth(projectRoot, stage, outcome, count = 0) {
   try {
-    const dir = join9(ensureAugentaDir(projectRoot), "state");
-    mkdirSync6(dir, { recursive: true });
+    const dir = join10(ensureAugentaDir(projectRoot), "state");
+    mkdirSync7(dir, { recursive: true });
     const old = read(projectRoot, stage);
     const at = new Date().toISOString();
     const success = outcome === "captured" || outcome === "accepted";
@@ -1535,9 +1668,9 @@ function recordHealth(projectRoot, stage, outcome, count = 0) {
       successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
       ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
     };
-    const file = join9(dir, `health-${stage}.json`);
-    const tmp = `${file}.${randomUUID4()}.tmp`;
-    writeFileSync6(tmp, JSON.stringify(value), { mode: 384 });
+    const file = join10(dir, `health-${stage}.json`);
+    const tmp = `${file}.${randomUUID5()}.tmp`;
+    writeFileSync7(tmp, JSON.stringify(value), { mode: 384 });
     renameSync5(tmp, file);
   } catch {}
 }
@@ -1549,7 +1682,7 @@ function captureHealth(projectRoot) {
     configured: !!cfg,
     enabled: gate === "live",
     ...gate ? { gate } : {},
-    configuration: cfg ? "valid" : existsSync6(join9(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    configuration: cfg ? "valid" : existsSync6(join10(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
     activityScope: "project",
     hostDispatch: "unverified",
     destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg && !cfg.keyTracked ? 1 : 0,
@@ -1563,9 +1696,9 @@ function captureHealth(projectRoot) {
 
 // hooks/session-start.ts
 import { homedir as homedir3 } from "node:os";
-import { join as join12 } from "node:path";
+import { join as join13 } from "node:path";
 import { createHash as createHash3 } from "node:crypto";
-import { mkdirSync as mkdirSync7, readFileSync as readFileSync9, writeFileSync as writeFileSync7, renameSync as renameSync6 } from "node:fs";
+import { mkdirSync as mkdirSync8, readFileSync as readFileSync10, writeFileSync as writeFileSync8, renameSync as renameSync6 } from "node:fs";
 
 // hooks/harness.ts
 function isCodexHarness(transcriptPath) {
@@ -1681,14 +1814,14 @@ function describeError(error) {
 // capture/shipper.ts
 import { spawn } from "node:child_process";
 import { existsSync as existsSync7 } from "node:fs";
-import { dirname as dirname4, join as join10 } from "node:path";
+import { dirname as dirname5, join as join11 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function shipperEntry() {
   const self = fileURLToPath2(import.meta.url);
   const ext = self.endsWith(".ts") ? ".ts" : ".mjs";
-  const here = dirname4(self);
-  const sibling = join10(here, `ship${ext}`);
-  return existsSync7(sibling) ? sibling : join10(here, "..", "capture", `ship${ext}`);
+  const here = dirname5(self);
+  const sibling = join11(here, `ship${ext}`);
+  return existsSync7(sibling) ? sibling : join11(here, "..", "capture", `ship${ext}`);
 }
 function spawnShipper(projectRoot) {
   try {
@@ -1710,12 +1843,12 @@ function spawnShipper(projectRoot) {
 import {
   existsSync as existsSync8,
   lstatSync as lstatSync2,
-  readFileSync as readFileSync8,
+  readFileSync as readFileSync9,
   readdirSync,
-  statSync as statSync4
+  statSync as statSync5
 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { basename as basename2, dirname as dirname5, extname, join as join11, relative as relative2, resolve as resolve5 } from "node:path";
+import { basename as basename3, dirname as dirname6, extname, join as join12, relative as relative2, resolve as resolve5 } from "node:path";
 // capture/scrub.ts
 var MASK = (label) => `[redacted:${label}]`;
 var TOKEN_GUARD = "(?<!page[_-]?)(?<!continuation[_-]?)(?<!cursor[_-]?)(?<!sync[_-]?)(?<!csrf[_-]?)(?<!xsrf[_-]?)(?<!anti[_-]?forgery[_-]?)";
@@ -1780,7 +1913,7 @@ function markdownTitle(text, fallback) {
 function scanClaudeMemory(transcriptPath) {
   if (!transcriptPath)
     return { complete: false, documents: [] };
-  const root = join11(dirname5(transcriptPath), "memory");
+  const root = join12(dirname6(transcriptPath), "memory");
   try {
     if (!existsSync8(root) || !lstatSync2(root).isDirectory())
       return { complete: false, documents: [] };
@@ -1804,7 +1937,7 @@ function scanClaudeMemory(transcriptPath) {
       return;
     }
     for (const entry of entries) {
-      const path = join11(dir, entry.name);
+      const path = join12(dir, entry.name);
       if (entry.isSymbolicLink())
         continue;
       if (entry.isDirectory()) {
@@ -1819,7 +1952,7 @@ function scanClaudeMemory(transcriptPath) {
           complete = false;
           continue;
         }
-        const text = readFileSync8(path, "utf8");
+        const text = readFileSync9(path, "utf8");
         const after = lstatSync2(path);
         if (!after.isFile() || !sameSnapshot(before, after)) {
           complete = false;
@@ -1828,7 +1961,7 @@ function scanClaudeMemory(transcriptPath) {
         const sourcePath = normalizeLogicalPath(relative2(root, path));
         documents.push({
           sourcePath,
-          title: markdownTitle(text, basename2(entry.name, extname(entry.name))),
+          title: markdownTitle(text, basename3(entry.name, extname(entry.name))),
           text,
           sourceUpdatedAt: after.mtime.toISOString()
         });
@@ -1914,18 +2047,18 @@ function codexHomeFromRollout(transcriptPath) {
   return match?.[1];
 }
 function scanCodexMemory(projectRoot, codexHome, transcriptPath) {
-  const root = codexHome ?? process.env.CODEX_HOME ?? codexHomeFromRollout(transcriptPath) ?? join11(homedir2(), ".codex");
-  const path = join11(root, "memories", "MEMORY.md");
+  const root = codexHome ?? process.env.CODEX_HOME ?? codexHomeFromRollout(transcriptPath) ?? join12(homedir2(), ".codex");
+  const path = join12(root, "memories", "MEMORY.md");
   try {
     if (!existsSync8(path))
       return { complete: false, documents: [] };
     const linkBefore = lstatSync2(path);
-    const before = statSync4(path);
+    const before = statSync5(path);
     if (!before.isFile())
       return { complete: false, documents: [] };
-    const text = readFileSync8(path, "utf8");
+    const text = readFileSync9(path, "utf8");
     const linkAfter = lstatSync2(path);
-    const after = statSync4(path);
+    const after = statSync5(path);
     if (!after.isFile() || !sameSnapshot(linkBefore, linkAfter) || !sameSnapshot(before, after))
       return { complete: false, documents: [] };
     const sourceUpdatedAt = after.mtime.toISOString();
@@ -2074,12 +2207,12 @@ var codex = isCodexHarness(transcriptPath);
 var connectAction = codex ? "$augenta:connect or Connect Augenta" : "/augenta:connect";
 var projectPath = cwd || process.cwd();
 var home = process.env.AUGENTA_HOME ?? homedir3();
-var stateDir = join12(home, ".augenta", "state");
-var markerPath = join12(stateDir, "connect-prompted.json");
-var legacyMarkerPath = join12(stateDir, "init-prompted.json");
+var stateDir = join13(home, ".augenta", "state");
+var markerPath = join13(stateDir, "connect-prompted.json");
+var legacyMarkerPath = join13(stateDir, "init-prompted.json");
 function readMarkers(path) {
   try {
-    const parsed = JSON.parse(readFileSync9(path, "utf8"));
+    const parsed = JSON.parse(readFileSync10(path, "utf8"));
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
@@ -2090,10 +2223,10 @@ function firstTime(key) {
   if (markers[key])
     return false;
   try {
-    mkdirSync7(stateDir, { recursive: true });
+    mkdirSync8(stateDir, { recursive: true });
     markers[key] = new Date().toISOString();
     const tmp = markerPath + ".tmp";
-    writeFileSync7(tmp, JSON.stringify(markers));
+    writeFileSync8(tmp, JSON.stringify(markers));
     renameSync6(tmp, markerPath);
   } catch {
     return false;
@@ -2103,7 +2236,7 @@ function firstTime(key) {
 function staleConfigDigest() {
   let bytes = "";
   try {
-    bytes = readFileSync9(configPath(configuredRoot));
+    bytes = readFileSync10(configPath(configuredRoot));
   } catch {}
   return createHash3("sha256").update(bytes).digest("hex").slice(0, 16);
 }

@@ -21,6 +21,7 @@
 import { recordHealth } from "../capture/health";
 import { TurnState } from "../capture/turn-cursor";
 import { projectConfig, captureEnabled } from "../capture/config";
+import { nativeCoworkAllowed } from "../capture/cowork-task";
 import { readStdin } from "../runtime/node";
 import { AUTO_RECALL_BUDGET_MS, runAutoRecall } from "./auto-recall";
 
@@ -37,10 +38,12 @@ hardExit.unref();
 let transcriptPath: string | undefined;
 let cwd: string | undefined;
 let prompt: unknown;
+let sessionId: string | undefined;
 try {
-  const payload = JSON.parse(await readStdin()) as { transcript_path?: unknown; cwd?: unknown; prompt?: unknown };
+  const payload = JSON.parse(await readStdin()) as { transcript_path?: unknown; cwd?: unknown; prompt?: unknown; session_id?: unknown };
   if (typeof payload.transcript_path === "string") transcriptPath = payload.transcript_path;
   if (typeof payload.cwd === "string") cwd = payload.cwd;
+  if (typeof payload.session_id === "string") sessionId = payload.session_id;
   prompt = payload.prompt;
 } catch {
   /* no / non-JSON stdin — fine */
@@ -49,6 +52,7 @@ try {
 // Best-effort turn bookkeeping — never block the prompt over it.
 try {
   const cfg = projectConfig(cwd);
+  if (cfg && !nativeCoworkAllowed(cfg.projectRoot, sessionId, transcriptPath)) process.exit(0);
   if (transcriptPath && cfg && captureEnabled(cfg)) {
     recordHealth(cfg.projectRoot, "dispatch", "started");
     new TurnState(cfg.projectRoot).bump(transcriptPath);

@@ -16,7 +16,7 @@
  * Run: bun test capture/outbox.test.ts
  */
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, appendFileSync, statSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, appendFileSync, statSync, readFileSync, writeFileSync, truncateSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -97,6 +97,29 @@ describe("Outbox", () => {
     const { records, hasMore } = box.readPending();
     expect(records.map(tag)).toEqual([0, 1, 2]);
     expect(hasMore).toBe(false);
+  });
+
+  test.each([false, true])("an interrupted transactional append recovers once (partial=%s)", partial => {
+    const receipt = join(home, ".augenta", "state", "receipt.json");
+    mkdirSync(receipt, { recursive: true });
+    const events = [ev(1, "first"), ev(2, "second")];
+    // A failed receipt rename leaves the journal and appended bytes in place.
+    expect(() => box.appendWithReceipt(events, receipt, { seen: [1, 2] })).toThrow();
+    const bytes = readFileSync(box.spoolPath);
+    if (partial) truncateSync(box.spoolPath, Math.floor(bytes.length / 2));
+    expect(box.readPending().records).toEqual([]);
+    // Distinct from the cap's `false`: a pending journal is "finish me", and a
+    // caller that read it as an overflow would burn the one loud drop marker.
+    expect(() => box.append([ev(3)])).toThrow();
+    expect(() => box.forceAppend([ev(3)])).toThrow();
+    box.compact();
+    expect(box.hasPendingAppend()).toBe(true);
+    rmSync(receipt, { recursive: true });
+    expect(box.finishPendingAppend()).toBe(2);
+    expect(box.finishPendingAppend()).toBe(0);
+    expect(readFileSync(box.spoolPath)).toEqual(bytes);
+    expect(JSON.parse(readFileSync(receipt, "utf8"))).toEqual({ seen: [1, 2] });
+    expect(box.readPending().records).toEqual(events);
   });
 
   test("the outbox round-trips a supplied raw record without applying another transform", () => {

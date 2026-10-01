@@ -264,6 +264,11 @@ in and joins it.
 | Cowork in the cloud | No. The plugin runs on Anthropic's machine while your project folder stays on your computer, so connect can't connect it. Use a local Cowork session instead. On Team and Enterprise plans an Owner controls this in Organization settings → Cowork → "Run Cowork in the cloud". From October 6, 2026, new Pro and Max Cowork tasks run only in the cloud. |
 | Codex cloud | Untested. Internet access is off by default; turn it on and allow the hosts below. |
 
+Experimental Cowork capture commands are available for a controlled
+[native and OTLP pilot](docs/cowork-pilot.md). They require an explicit task-to-project
+binding and the project's affirmed Workspace set. Real Cowork delivery remains
+unverified; the existing connect skill does not connect a split cloud/device runtime.
+
 Wherever commands run behind a network allowlist, allow `augenta.ai`,
 `auth.augenta.ai` and `api.augenta.ai`:
 

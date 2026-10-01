@@ -39,10 +39,12 @@
  * builtins only, so this runs from the installed plugin location with no
  * node_modules.
  */
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import type { CaptureEvent, DocumentRecord, RawRecord } from "./event";
 import { ensureAugentaDir } from "./augenta-dir";
+import { captureLock } from "./capture-lock";
 import { documentTimestamp } from "./documents";
 
 const NEWLINE = 0x0a;
@@ -176,9 +178,17 @@ export class Outbox {
   /** Append records (events, raws, and/or documents) to the spool. No-op for
    *  an empty batch. Returns false — without writing anything — when the spool is
    *  already at cap, so the caller (capture.ts) can surface the drop loudly
-   *  instead of records silently vanishing. */
+   *  instead of records silently vanishing.
+   *
+   *  A pending append journal THROWS instead, exactly as {@link forceAppend}
+   *  does. It is a "finish me" condition, not a drop: a caller reading it as the
+   *  cap would spend the episode's ONE loud overflow marker on it and then fail
+   *  to spool that marker, leaving a later genuine overflow silent — the outcome
+   *  {@link markDropped} exists to prevent. {@link finishPendingAppend} clears
+   *  it; capture, the relay and the shipper all run that under the lock first. */
   append(records: SpoolRecord[]): boolean {
     if (records.length === 0) return true;
+    if (existsSync(this.appendJournalPath())) throw new Error("An outbox append needs recovery");
     this.ensure();
     try {
       if (statSync(this.spoolPath).size >= this.maxSpoolBytes) return false; // cap: drop rather than fill the disk
@@ -194,8 +204,56 @@ export class Outbox {
    *  the backend even while ordinary appends are being dropped. */
   forceAppend(records: SpoolRecord[]): void {
     if (records.length === 0) return;
+    if (existsSync(this.appendJournalPath())) throw new Error("An outbox append needs recovery");
     this.ensure();
     appendFileSync(this.spoolPath, records.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  }
+
+  private appendJournalPath(): string { return join(this.dir, "append-transaction.json"); }
+  hasPendingAppend(): boolean { return existsSync(this.appendJournalPath()); }
+
+  private publish(path: string, value: unknown): void {
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const temp = `${path}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temp, JSON.stringify(value), { mode: 0o600, flag: "wx" });
+      renameSync(temp, path);
+    } finally { try { unlinkSync(temp); } catch { /* renamed or never created */ } }
+  }
+
+  /** Commit source deduplication state with its spool append. Caller holds captureLock. */
+  appendWithReceipt(records: SpoolRecord[], receiptPath: string, receipt: unknown): boolean {
+    this.ensure();
+    if (dirname(receiptPath) !== join(this.projectRoot, ".augenta", "state")) throw new Error("Invalid outbox receipt path");
+    if (existsSync(this.appendJournalPath())) throw new Error("An outbox append needs recovery");
+    if (!records.length) { this.publish(receiptPath, receipt); return true; }
+    appendFileSync(this.spoolPath, "");
+    const before = statSync(this.spoolPath);
+    if (before.size >= this.maxSpoolBytes) return false;
+    this.publish(this.appendJournalPath(), { version: 1, offset: before.size, inode: before.ino,
+      content: records.map(record => JSON.stringify(record)).join("\n") + "\n", receiptName: basename(receiptPath), receipt });
+    this.finishPendingAppend();
+    return true;
+  }
+
+  /** Recover a killed append without replaying its complete or partial bytes. Caller holds captureLock. */
+  finishPendingAppend(): number {
+    const path = this.appendJournalPath();
+    if (!existsSync(path)) return 0;
+    if (statSync(path).size > MAX_SPOOL_BYTES) throw new Error("Invalid outbox append journal");
+    const journal = JSON.parse(readFileSync(path, "utf8"));
+    if (journal.version !== 1 || !Number.isSafeInteger(journal.offset) || journal.offset < 0 ||
+      typeof journal.content !== "string" || !journal.content.endsWith("\n") ||
+      typeof journal.receiptName !== "string" || !/^[a-zA-Z0-9_-]+\.json$/.test(journal.receiptName)) throw new Error("Invalid outbox append journal");
+    const spool = statSync(this.spoolPath);
+    const content = Buffer.from(journal.content);
+    const tail = readFileSync(this.spoolPath).subarray(journal.offset);
+    if (spool.ino !== journal.inode || spool.size < journal.offset || tail.length > content.length ||
+      !tail.equals(content.subarray(0, tail.length))) throw new Error("Outbox append journal no longer matches its spool");
+    if (tail.length < content.length) appendFileSync(this.spoolPath, content.subarray(tail.length));
+    this.publish(join(this.projectRoot, ".augenta", "state", journal.receiptName), journal.receipt);
+    unlinkSync(path);
+    return journal.content.split("\n").length - 1;
   }
 
   private dropEpisodePath(): string {
@@ -533,6 +591,7 @@ export class Outbox {
    */
   readPending(maxBatch = Infinity, destKey?: string, maxBytes = Infinity): PendingBatch {
     const shipped = this.shippedOffset(destKey);
+    if (this.hasPendingAppend()) return { records: [], endOffset: shipped, hasMore: false };
     if (!existsSync(this.spoolPath)) return { records: [], endOffset: shipped, hasMore: false };
 
     const buf = readFileSync(this.spoolPath);
@@ -625,6 +684,13 @@ export class Outbox {
    */
   compact(): void {
     if (!existsSync(this.spoolPath)) return;
+    const release = captureLock(this.projectRoot);
+    if (!release) return;
+    try { if (!this.hasPendingAppend()) this.compactUnderLock(); }
+    finally { release(); }
+  }
+
+  private compactUnderLock(): void {
     let size: number;
     try {
       size = statSync(this.spoolPath).size;
