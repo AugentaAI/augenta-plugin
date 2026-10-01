@@ -420,7 +420,7 @@ jobs:
             --allowed-tools
             "Read,Grep,Glob,Edit,Write,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git show:*),Bash(git rev-parse:*),Bash(git fetch:*),Bash(git merge:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*),Bash(git reset:*),Bash(git checkout:*),Bash(bun install:*),Bash(bun run:*),Bash(bun test:*),Bash(bash .github/gates/claude-allowlist-shape.sh:*),Bash(bash .github/gates/claude-fix-resolution.sh:*),Bash(bash .github/gates/claude-fix-rounds.sh:*),Bash(bash .github/gates/workflow-pipefail-grep.sh:*),Bash(ls:*),Bash(cat:*),Bash(grep:*),Bash(find:*),Bash(jq:*)"
             --model
-            claude-opus-5
+            claude-opus-5-5
 
       # `claude-code-action` exits SUCCESS when it declines to run, so a green step is not
       # evidence the work happened. This job PUSHES CODE, so assert the artifact. Captured,

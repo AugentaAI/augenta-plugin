@@ -17,8 +17,10 @@
 #   2. the flag is spelled `--allowed-tools` (one canonical spelling to grep for)
 #   3. `Bash(...)` patterns use the `:*` prefix wildcard, not a bare ` *`
 #   4. neither review half is granted approve/merge, and the reviewer stays read-only
-#   5. the direct reviewer pins Opus 5, stays in agent mode, exposes full output, and
+#   5. the direct reviewer pins Opus, stays in agent mode, exposes full output, and
 #      returns a typed summary that the workflow itself posts and asserts
+#   6. every claude-code-action run pins `--model` to a full model id, and every pin of a
+#      model family is the one id this gate expects for that family
 #
 # Usage: .github/gates/claude-allowlist-shape.sh
 set -euo pipefail
@@ -26,6 +28,24 @@ set -euo pipefail
 REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)" \
   || REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
+
+# The model each family's pins must name — the one place a Claude model version is
+# written for the agent workflows. The pins themselves stay literal in each workflow so a
+# model change is a reviewed commit, never a silent move; this table is what stops them
+# drifting apart. A workflow was once moved to a new Opus by hand while two siblings stayed
+# behind, and nothing went red. To move a family: change its line here and every pin
+# check 6 then reports, in the same commit.
+EXPECTED_OPUS=claude-opus-5-5
+EXPECTED_SONNET=claude-sonnet-5-5
+EXPECTED_HAIKU=claude-haiku-4-5-20251001
+
+expected_model() {
+  case "$1" in
+    opus)   printf '%s' "$EXPECTED_OPUS" ;;
+    sonnet) printf '%s' "$EXPECTED_SONNET" ;;
+    haiku)  printf '%s' "$EXPECTED_HAIKU" ;;
+  esac
+}
 
 fail=0
 note() { echo "  ✅ $1"; }
@@ -48,6 +68,21 @@ allowlist_values() {
       print
     }
   ' "$1"
+}
+
+# Extract each `--model` VALUE from a workflow, one per line, quotes stripped. Accepts the
+# value on the flag's own line (`--model x`, `--model=x`) or on the next one, the form
+# `claude_args: >-` blocks use. Only a line that STARTS with the flag counts, so a comment
+# mentioning it is prose, as above. A flag whose next line is another flag, a YAML item or
+# a comment has lost its value and yields an empty pin, never that line's first word.
+model_pins() {
+  awk '
+    /^[[:space:]]*--model[[:space:]]*$/ { want = 1; next }
+    want && NF { print ($1 ~ /^(-|#)/ ? "" : $1); want = 0; next }
+    /^[[:space:]]*--model[[:space:]=]/ {
+      v = $0; sub(/^[[:space:]]*--model[[:space:]=]+/, "", v); split(v, a, " "); print a[1]
+    }
+  ' "$1" | tr -d "\"'"
 }
 
 # ---------------------------------------------------------------------------
@@ -151,7 +186,7 @@ fi
 #    multi-agent plugin. Measured once: that plugin ran 15 turns across three model tiers,
 #    recorded 14 permission denials that the default log mode hid, and exited green
 #    without posting a review. Keep the direct flow observable and deterministic:
-#    Opus 5, agent mode on the checked-out merge ref, full SDK output in the Actions
+#    Opus, agent mode on the checked-out merge ref, full SDK output in the Actions
 #    log, typed summary output, and the exact read/comment tools the prompt says
 #    it will use. A formatted but incomplete grant otherwise exits green after permission
 #    denials without posting a review.
@@ -175,10 +210,11 @@ if [[ -f "$RO" ]]; then
   done
   [[ "$missing" -eq 0 ]] && note "$RO grants every read/comment tool required by the direct review prompt"
 
-  if grep -q -- '--model' "$RO" && grep -q '"claude-opus-5"' "$RO"; then
-    note "$RO pins the direct reviewer to claude-opus-5"
+  # The family is this check's; the version is check 6's, through EXPECTED_OPUS.
+  if [[ "$(model_pins "$RO")" == "$EXPECTED_OPUS" ]]; then
+    note "$RO pins the direct reviewer to $EXPECTED_OPUS"
   else
-    bad "$RO must pin the direct reviewer with --model \"claude-opus-5\""
+    bad "$RO must pin the direct reviewer to Opus with --model \"$EXPECTED_OPUS\""
   fi
 
   if grep -q '^[[:space:]]*track_progress:[[:space:]]*true' "$RO"; then
@@ -334,6 +370,47 @@ if grep -q 'never modify a' "$FIX" &&
 else
   bad "$FIX must forbid workflow-definition YAML edits without banning other workflow-directory files"
 fi
+
+# ---------------------------------------------------------------------------
+# 6. Model pins. A run with no `--model` takes whatever the action defaults to, and an
+#    alias (`opus`, `sonnet`) resolves to whatever is newest — either way the model moves
+#    with no commit. So every action run pins a full id, and every pin of a family is the
+#    single id the table at the top expects, which turns a half-done model bump red
+#    instead of leaving the workflows on different models.
+# ---------------------------------------------------------------------------
+# One pattern for both the file search and the per-file count: a count that disagreed with
+# the search would find 0 runs, and `grep -c` exiting 1 would stop the gate under `set -e`
+# with no explanation. A quoted `uses:` value is valid YAML, so it is matched too.
+action_re="^[[:space:]]*(- )?uses:[[:space:]]*[\"']?anthropics/claude-code-action"
+mapfile -t action_files < <(grep -rlE --include='*.yml' --include='*.yaml' -- \
+  "$action_re" .github/workflows/ 2>/dev/null | sort)
+if [[ "${#action_files[@]}" -eq 0 ]]; then
+  bad "no workflow uses anthropics/claude-code-action — did this gate lose track of the agent workflows?"
+fi
+for f in "${action_files[@]}"; do
+  runs="$(grep -cE -- "$action_re" "$f")"
+  mapfile -t pins < <(model_pins "$f")
+  if [[ "${#pins[@]}" -ne "$runs" ]]; then
+    bad "$f runs claude-code-action $runs time(s) but pins --model ${#pins[@]} time(s) — an unpinned run takes the action's default model"
+  fi
+  for pin in "${pins[@]}"; do
+    if [[ -z "$pin" ]]; then
+      bad "$f passes --model with no value — the line after the flag must be the model id"
+      continue
+    fi
+    family="$(sed -nE 's/^claude-([a-z]+)-[0-9].*$/\1/p' <<<"$pin")"
+    expected="$(expected_model "$family")"
+    if [[ -z "$family" ]]; then
+      bad "$f pins --model '$pin', which is not a claude-<family>-<version> id — an alias moves on its own, so pin the current id for its family"
+    elif [[ -z "$expected" ]]; then
+      bad "$f pins $pin, but this gate expects no $family model — add EXPECTED_${family^^} to the table at the top"
+    elif [[ "$pin" != "$expected" ]]; then
+      bad "$f pins $pin; every $family pin must be $expected (EXPECTED_${family^^}) — move them together"
+    else
+      note "$f pins $pin"
+    fi
+  done
+done
 
 echo
 if [[ "$fail" -ne 0 ]]; then
