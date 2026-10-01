@@ -41,6 +41,32 @@ function removePayload(content: string, mime: string, payloads: Map<string, Remo
   return `${REFERENCE_PREFIX}${hash} ${bytes.length}B ${mime}]`;
 }
 
+/**
+ * Cheap shape test for a string that could be a serialized tool result holding
+ * binary bytes: a declared payload field, or a base64 data URL. Parsing every
+ * transcript string would be wasteful, so only a string matching this is parsed.
+ */
+const EMBEDDED_PAYLOAD_HINT = /"(?:base64|blob|data)"\s*:\s*"|;base64,/i;
+
+/**
+ * Sanitize a JSON document that arrives as a STRING. Codex records an MCP tool
+ * result by serializing it into `function_call_output.output` (and the
+ * custom_tool/local_shell equivalents), so an `{content:[{type:"image",data}]}`
+ * result sits inside a string and is on no object path this walk would reach.
+ * The original text is returned byte-for-byte unless sanitation changed it.
+ */
+function sanitizeEmbeddedJson(text: string, payloads: Map<string, RemovedPayload>, inheritedMime?: string): string {
+  if (!/^\s*[{[]/.test(text) || !EMBEDDED_PAYLOAD_HINT.test(text)) return text;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  const json = JSON.stringify(sanitize(parsed, payloads, inheritedMime));
+  return json === undefined || json === JSON.stringify(parsed) ? text : json;
+}
+
 function normalizedKey(key: string): string {
   return key.replace(/[_-]/g, "").toLowerCase();
 }
@@ -62,7 +88,8 @@ function sanitize(value: unknown, payloads: Map<string, RemovedPayload>, inherit
   if (typeof value === "string") {
     // Codex UI events put image URLs in arrays, not only named object fields.
     const dataUrl = /^data:([^;,]+);base64,([\s\S]*)$/i.exec(value);
-    return dataUrl ? removePayload(dataUrl[2]!, mediaType(dataUrl[1]), payloads) : value;
+    if (dataUrl) return removePayload(dataUrl[2]!, mediaType(dataUrl[1]), payloads);
+    return sanitizeEmbeddedJson(value, payloads, inheritedMime);
   }
   if (Array.isArray(value)) return value.map(child => sanitize(child, payloads, inheritedMime));
   if (!value || typeof value !== "object") return value;
@@ -76,7 +103,9 @@ function sanitize(value: unknown, payloads: Map<string, RemovedPayload>, inherit
     const normalized = normalizedKey(key);
     if (isOpaqueKey(key)) continue;
     let sanitizedChild: unknown;
-    if (typeof child === "string" && (key === "base64" || (key === "data" && ["base64", "image"].includes(object.type as string)))) {
+    // `blob` is MCP's BlobResourceContents field; `audio` its AudioContent type.
+    if (typeof child === "string" && (key === "base64" || key === "blob" ||
+      (key === "data" && ["base64", "image", "audio"].includes(object.type as string)))) {
       sanitizedChild = removePayload(child, mime, payloads);
     } else {
       sanitizedChild = sanitize(child, payloads, mime);

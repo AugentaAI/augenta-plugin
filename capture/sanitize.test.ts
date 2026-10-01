@@ -97,6 +97,39 @@ describe("embedded attachment sanitation", () => {
     expect(sanitizeTelemetryRecord(record.json)!.json).toBe(record.json);
     expect(sanitizeTelemetryRecord(record.json)!.payloads.size).toBe(0);
   });
+  test("strips MCP audio data and embedded blob resources", () => {
+    const audio = Buffer.from("fixture audio bytes").toString("base64");
+    const blob = Buffer.from("fixture blob bytes").toString("base64");
+    const record = sanitizeTelemetryRecord(JSON.stringify({ content: [
+      { type: "audio", data: audio, mimeType: "audio/wav" },
+      { type: "resource", resource: { uri: "file:///project/report.pdf", mimeType: "application/pdf", blob } },
+    ] }))!;
+    const value = record.value as any;
+    expect(record.json).not.toContain(audio);
+    expect(record.json).not.toContain(blob);
+    expect(record.payloads.get(attachmentHash(value.content[0].data)!)).toMatchObject({ mediaType: "audio/wav", content: audio });
+    expect(record.payloads.get(attachmentHash(value.content[1].resource.blob)!)).toMatchObject({ mediaType: "application/pdf", content: blob });
+    expect(value.content[1].resource.uri).toBe("file:///project/report.pdf");
+    expect(sanitizeTelemetryRecord(record.json)!.json).toBe(record.json);
+  });
+  test("strips bytes from a tool result serialized into a string, leaving other strings byte-identical", () => {
+    const image = Buffer.from("fixture serialized image").toString("base64");
+    const result = JSON.stringify({ content: [{ type: "image", data: image, mimeType: "image/png" }, { type: "text", text: "keep this" }] });
+    const record = sanitizeTelemetryRecord(JSON.stringify({ payload: {
+      type: "function_call_output", output: result,
+      // Neither of these is a payload-bearing document: both survive unchanged.
+      note: '{"data":"plain text, not a declared payload"}', prose: "an ordinary {not json} line",
+    } }))!;
+    const value = record.value as any;
+    expect(record.json).not.toContain(image);
+    const sanitizedResult = JSON.parse(value.payload.output);
+    expect(sanitizedResult.content[1].text).toBe("keep this");
+    expect(sanitizedResult.content[0].data).toContain("[augenta attachment sha256:");
+    expect(value.payload.note).toBe('{"data":"plain text, not a declared payload"}');
+    expect(value.payload.prose).toBe("an ordinary {not json} line");
+    expect(sanitizeTelemetryRecord(record.json)!.json).toBe(record.json);
+    expect(sanitizeTelemetryRecord(record.json)!.payloads.size).toBe(0);
+  });
   test("a malformed reference prefix cannot bypass removal of a declared binary field", () => {
     const value = "[augenta attachment sha256:malformed]" + content;
     const record = sanitizeTelemetryRecord(JSON.stringify({ type: "image", data: value, mimeType: "image/png" }))!;

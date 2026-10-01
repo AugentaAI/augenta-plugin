@@ -46,7 +46,10 @@ test("Codex UI image copies and nested MCP results are sanitized before either c
   const lines = [
     item({ type: "message", role: "user", content: [{ type: "input_image", image_url: `data:image/png;base64,${content}` }] }),
     item({ type: "user_message", message: "Inspect the image", images: [`data:image/png;base64,${content}`], local_images: [] }, "event_msg"),
-    item({ type: "function_call_output", call_id: "mcp-image", output: { content: [{ type: "image", data: content, mimeType: "image/png" }] } }),
+    // Codex serializes an MCP tool result INTO the output string, so the image
+    // bytes sit inside JSON text rather than on an object path of their own.
+    item({ type: "function_call_output", call_id: "mcp-image",
+      output: JSON.stringify({ content: [{ type: "image", data: content, mimeType: "image/png" }] }) }),
     item({ type: "message", role: "assistant", content: [{ type: "output_text", text: "turn tail survives" }] }),
   ];
   const seen: string[] = [];

@@ -49,8 +49,10 @@ No reconnect or renewed hook approval is required.
 ### Fixed
 
 - Embedded document and image bytes are replaced by hash, size and media-type
-  references in captured telemetry, including Codex UI image copies and images
-  returned by MCP tools. PDF tool results no longer send base64
+  references in captured telemetry, including Codex UI image copies and the
+  images, audio and binary resources returned by MCP tools — whether a tool
+  result arrives as structured data or as serialized JSON text, as Codex
+  records it. PDF tool results no longer send base64
   through the secret scrubber or crowd later raw records out of the turn.
 - Older queued raw transcripts are stripped before delivery too. This release
   does not turn attachments into Workspace documents; that needs separate consent.

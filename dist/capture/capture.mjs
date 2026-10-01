@@ -123,6 +123,19 @@ function removePayload(content, mime, payloads) {
   payloads.set(hash, { hash, content: valid ? bytes.toString("base64") : "", mediaType: mime, bytes: bytes.length, valid });
   return `${REFERENCE_PREFIX}${hash} ${bytes.length}B ${mime}]`;
 }
+var EMBEDDED_PAYLOAD_HINT = /"(?:base64|blob|data)"\s*:\s*"|;base64,/i;
+function sanitizeEmbeddedJson(text, payloads, inheritedMime) {
+  if (!/^\s*[{[]/.test(text) || !EMBEDDED_PAYLOAD_HINT.test(text))
+    return text;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  const json = JSON.stringify(sanitize(parsed, payloads, inheritedMime));
+  return json === undefined || json === JSON.stringify(parsed) ? text : json;
+}
 function normalizedKey(key) {
   return key.replace(/[_-]/g, "").toLowerCase();
 }
@@ -142,7 +155,9 @@ function isEmptyReasoningValue(value) {
 function sanitize(value, payloads, inheritedMime) {
   if (typeof value === "string") {
     const dataUrl = /^data:([^;,]+);base64,([\s\S]*)$/i.exec(value);
-    return dataUrl ? removePayload(dataUrl[2], mediaType(dataUrl[1]), payloads) : value;
+    if (dataUrl)
+      return removePayload(dataUrl[2], mediaType(dataUrl[1]), payloads);
+    return sanitizeEmbeddedJson(value, payloads, inheritedMime);
   }
   if (Array.isArray(value))
     return value.map((child) => sanitize(child, payloads, inheritedMime));
@@ -156,7 +171,7 @@ function sanitize(value, payloads, inheritedMime) {
     if (isOpaqueKey(key))
       continue;
     let sanitizedChild;
-    if (typeof child === "string" && (key === "base64" || key === "data" && ["base64", "image"].includes(object.type))) {
+    if (typeof child === "string" && (key === "base64" || key === "blob" || key === "data" && ["base64", "image", "audio"].includes(object.type))) {
       sanitizedChild = removePayload(child, mime, payloads);
     } else {
       sanitizedChild = sanitize(child, payloads, mime);

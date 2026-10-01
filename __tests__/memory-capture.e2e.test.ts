@@ -267,7 +267,8 @@ test("built capture and shipper strip Codex UI and MCP image copies, including o
       line("event_msg", { type: "task_started", turn_id: "fixture-turn" }),
       line("response_item", { type: "message", role: "user", content: [{ type: "input_image", image_url: ui.images[0] }] }),
       line("event_msg", ui),
-      line("response_item", { type: "function_call_output", call_id: "mcp-image", output: mcp }),
+      // Codex stringifies an MCP tool result into `output`; the UI copy below keeps it an object.
+      line("response_item", { type: "function_call_output", call_id: "mcp-image", output: JSON.stringify(mcp) }),
       line("event_msg", { type: "mcp_tool_call_end", result: mcp }),
       line("response_item", { type: "message", role: "assistant", content: [{ type: "output_text", text: "turn tail survives" }] }),
       line("event_msg", { type: "task_complete", turn_id: "fixture-turn" }),
