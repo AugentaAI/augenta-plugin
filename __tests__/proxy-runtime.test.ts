@@ -62,6 +62,36 @@ describe("shipped Node network behavior", () => {
     } finally { proxy.closeAllConnections(); proxy.close(); rmSync(home, { recursive: true, force: true }); }
   });
 
+  test.skipIf(!PROXY_CAPABLE)("an untrusted intercepting proxy gives CA guidance without sign-in data", async () => {
+    const home = mkdtempSync(join(tmpdir(), "aug-untrusted-proxy-"));
+    const key = join(home, "key.pem"), cert = join(home, "cert.pem");
+    execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, "-days", "1", "-subj", "/CN=augenta.ai", "-addext", "subjectAltName=DNS:augenta.ai,DNS:auth.augenta.ai,DNS:api.augenta.ai"], { stdio: "ignore" });
+    const origin = createHttpsServer({ key: readFileSync(key), cert: readFileSync(cert) }, (_req, res) => { res.end("{}"); });
+    const tlsPort = await listen(origin);
+    const sockets = new Set<import("node:stream").Duplex>();
+    const proxy = createServer();
+    proxy.on("connect", (_req, socket, head) => {
+      const upstream = connect(tlsPort, "127.0.0.1", () => {
+        socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length) upstream.write(head);
+        socket.pipe(upstream).pipe(socket);
+      });
+      for (const stream of [socket, upstream]) { sockets.add(stream); stream.on("close", () => sockets.delete(stream)); stream.on("error", () => stream.destroy()); }
+      socket.on("close", () => upstream.destroy());
+    });
+    const port = await listen(proxy);
+    try {
+      for (const verb of ["--probe", "--login", "--await-login"]) {
+        const result = await run(home, "scripts/connect.mjs", ["--project", home, "--json", verb], { HTTPS_PROXY: `http://127.0.0.1:${port}` });
+        const payload = JSON.parse(result.stdout);
+        expect(result.exitCode).toBe(1);
+        expect(payload).toMatchObject({ code: "network_blocked", hosts: [ { host: "augenta.ai", kind: "tls" }, { host: "auth.augenta.ai", kind: "tls" }, { host: "api.augenta.ai", kind: "tls" } ] });
+        expect(payload.message).toContain("trusted proxy CA");
+        expect(result.stdout).not.toMatch(/access_token|refresh_token|device_code|Bearer /i);
+      }
+    } finally { for (const socket of sockets) socket.destroy(); proxy.closeAllConnections(); proxy.close(); origin.closeAllConnections(); origin.close(); rmSync(home, { recursive: true, force: true }); }
+  });
+
   for (const mode of ["direct", "tunnel", "intercept", "no_proxy"]) {
   test.skipIf(!PROXY_CAPABLE && mode !== "direct")(`connect, ship and recall work over ${mode}`, async () => {
     const home = mkdtempSync(join(tmpdir(), "aug-network-"));
