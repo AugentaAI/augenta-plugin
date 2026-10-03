@@ -40,7 +40,7 @@ import { captureAgentMemory } from "./memory";
 import { spawnShipper } from "./shipper";
 import { isCodexHarness, sniffHarness } from "../hooks/harness";
 import { isMain, readStdin, reexecForEnvProxy } from "../runtime/node";
-import { nativeCoworkAllowed } from "./cowork-task";
+import { nativeCoworkAllowed, nativeCoworkBindingRequired, nativeCoworkProject } from "./cowork-task";
 import { coworkCommandFailure, runCoworkCommand } from "./cowork-command";
 
 export interface CapturePayload {
@@ -547,7 +547,8 @@ function captureUnderLock(
 
 /** A short project lock also protects the shared cursor map for concurrent sessions. */
 export function runCapture(payload: CapturePayload, opts: RunCaptureOptions = {}): { appended: number; flushed: boolean } {
-  const root = opts.projectRoot ?? resolveProjectRoot(payload.cwd);
+  const root = opts.projectRoot ?? (nativeCoworkBindingRequired()
+    ? nativeCoworkProject(payload.session_id) : resolveProjectRoot(payload.cwd));
   if (!root) return { appended: 0, flushed: false };
   if (!nativeCoworkAllowed(root, payload.session_id, payload.transcript_path)) return { appended: 0, flushed: false };
   const release = captureLock(root);
@@ -571,7 +572,7 @@ export function runCapture(payload: CapturePayload, opts: RunCaptureOptions = {}
         return { appended: 0, flushed: false };
       }
     }
-    return captureUnderLock(payload, opts);
+    return captureUnderLock(payload, { ...opts, projectRoot: root });
   } finally { release(); }
 }
 
@@ -595,7 +596,8 @@ if (isMain(import.meta.url)) {
     // capture, always exit 0.
     try {
       const payload = JSON.parse(await readStdin()) as CapturePayload;
-      const cfg = projectConfig(payload.cwd);
+      const root = nativeCoworkBindingRequired() ? nativeCoworkProject(payload.session_id) : undefined;
+      const cfg = nativeCoworkBindingRequired() ? (root ? loadProjectConfig(root) : undefined) : projectConfig(payload.cwd);
       if (cfg && captureEnabled(cfg)) {
         recordHealth(cfg.projectRoot, "dispatch", "started");
         // An API-key config holds its key, so it never keeps the shared ignore

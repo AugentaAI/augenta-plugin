@@ -34,9 +34,9 @@ var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, 
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // capture/health.ts
-import { existsSync as existsSync6, mkdirSync as mkdirSync7, readFileSync as readFileSync8, renameSync as renameSync5, writeFileSync as writeFileSync7 } from "node:fs";
-import { join as join10 } from "node:path";
-import { randomUUID as randomUUID5 } from "node:crypto";
+import { existsSync as existsSync8, mkdirSync as mkdirSync9, readFileSync as readFileSync10, realpathSync as realpathSync6, renameSync as renameSync7, writeFileSync as writeFileSync9 } from "node:fs";
+import { join as join12 } from "node:path";
+import { randomUUID as randomUUID6 } from "node:crypto";
 
 // capture/config.ts
 import { readFileSync as readFileSync5 } from "node:fs";
@@ -1635,95 +1635,15 @@ class Outbox {
   }
 }
 
-// capture/health.ts
-var STAGES = ["dispatch", "capture", "attachments", "delivery"];
-var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full", "too_large", "skipped"]);
-function read(projectRoot, stage) {
-  try {
-    const s = JSON.parse(readFileSync8(join10(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
-    if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
-      return;
-    return {
-      at: new Date(s.at).toISOString(),
-      outcome: s.outcome,
-      count: s.count,
-      successes: s.successes,
-      ...Number.isFinite(Date.parse(s.lastSuccessAt)) ? { lastSuccessAt: new Date(s.lastSuccessAt).toISOString() } : {}
-    };
-  } catch {
-    return;
-  }
-}
-function recordHealth(projectRoot, stage, outcome, count = 0) {
-  try {
-    const dir = join10(ensureAugentaDir(projectRoot), "state");
-    mkdirSync7(dir, { recursive: true });
-    const old = read(projectRoot, stage);
-    const at = new Date().toISOString();
-    const success = outcome === "captured" || outcome === "accepted";
-    const value = {
-      at,
-      outcome,
-      count,
-      successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
-      ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
-    };
-    const file = join10(dir, `health-${stage}.json`);
-    const tmp = `${file}.${randomUUID5()}.tmp`;
-    writeFileSync7(tmp, JSON.stringify(value), { mode: 384 });
-    renameSync5(tmp, file);
-  } catch {}
-}
-function captureHealth(projectRoot) {
-  const cfg = loadProjectConfig(projectRoot);
-  const activity = Object.fromEntries(STAGES.map((stage) => [stage, read(projectRoot, stage) ?? null]));
-  const gate = cfg ? captureGate(cfg) : undefined;
-  return {
-    configured: !!cfg,
-    enabled: gate === "live",
-    ...gate ? { gate } : {},
-    configuration: cfg ? "valid" : existsSync6(join10(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
-    activityScope: "project",
-    hostDispatch: "unverified",
-    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg && !cfg.keyTracked ? 1 : 0,
-    pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
-    ...activity,
-    hostApproval: "unknown",
-    ingestion: "unverified",
-    nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in" : cfg.gatewayMismatch ? cfg.gatewayMismatch.cause === "environment" ? "unset_gateway_override" : "review_config_gateway" : gate === "not_adopted" ? "adopt" : gate === "key_tracked" ? cfg.keyTracked === "tracked" ? "untrack_config" : "make_git_available" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
-  };
-}
-
-// capture/harness.ts
-function detectedHarness(explicit, env = process.env) {
-  if (explicit)
-    return explicit;
-  const codex = Boolean(env.CODEX_THREAD_ID || env.CODEX_SANDBOX || env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE === "Codex Desktop");
-  const claude = env.CLAUDECODE === "1";
-  if (codex === claude)
-    return;
-  return codex ? "codex" : "claude-code";
-}
-
-// scripts/connect.ts
-import { chmodSync as chmodSync3, existsSync as existsSync9, readFileSync as readFileSync11, renameSync as renameSync8, rmSync as rmSync4, writeFileSync as writeFileSync10 } from "node:fs";
-import { basename as basename4, join as join13 } from "node:path";
-import { randomUUID as randomUUID7 } from "node:crypto";
-import { createInterface } from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
-
-// runtime/version.ts
-var PLUGIN_VERSION = "0.15.0";
-
 // capture/cowork-task.ts
-import { createHash as createHash4, randomUUID as randomUUID6 } from "node:crypto";
-import { dirname as dirname6, join as join12 } from "node:path";
-import { existsSync as existsSync8, linkSync, mkdirSync as mkdirSync9, readFileSync as readFileSync10, realpathSync as realpathSync5, renameSync as renameSync7, rmSync as rmSync3, statSync as statSync5, writeFileSync as writeFileSync9 } from "node:fs";
+import { createHash as createHash4, randomUUID as randomUUID5 } from "node:crypto";
+import { dirname as dirname6, join as join11 } from "node:path";
+import { existsSync as existsSync7, linkSync, mkdirSync as mkdirSync8, readFileSync as readFileSync9, realpathSync as realpathSync5, renameSync as renameSync6, rmSync as rmSync3, statSync as statSync5, writeFileSync as writeFileSync8 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 
 // capture/capture-cursor.ts
-import { join as join11, dirname as dirname5 } from "node:path";
-import { mkdirSync as mkdirSync8, existsSync as existsSync7, readFileSync as readFileSync9, writeFileSync as writeFileSync8, renameSync as renameSync6 } from "node:fs";
+import { join as join10, dirname as dirname5 } from "node:path";
+import { mkdirSync as mkdirSync7, existsSync as existsSync6, readFileSync as readFileSync8, writeFileSync as writeFileSync7, renameSync as renameSync5 } from "node:fs";
 
 // capture/auto-recall-marker.ts
 var AUTO_RECALL_SENTINEL = "[augenta-recall:v1]";
@@ -2456,13 +2376,13 @@ class CaptureState {
   projectRoot;
   constructor(projectRoot) {
     this.projectRoot = projectRoot;
-    this.path = join11(projectRoot, ".augenta", "state", "capture.json");
+    this.path = join10(projectRoot, ".augenta", "state", "capture.json");
   }
   readAll() {
-    if (!existsSync7(this.path))
+    if (!existsSync6(this.path))
       return {};
     try {
-      const parsed = JSON.parse(readFileSync9(this.path, "utf8"));
+      const parsed = JSON.parse(readFileSync8(this.path, "utf8"));
       return parsed && typeof parsed === "object" ? parsed : {};
     } catch {
       return {};
@@ -2484,12 +2404,12 @@ class CaptureState {
   }
   set(transcriptPath, cursor) {
     ensureAugentaDir(this.projectRoot);
-    mkdirSync8(dirname5(this.path), { recursive: true });
+    mkdirSync7(dirname5(this.path), { recursive: true });
     const all = this.readAll();
     all[transcriptPath] = cursor;
     const tmp = this.path + ".tmp";
-    writeFileSync8(tmp, JSON.stringify(all));
-    renameSync6(tmp, this.path);
+    writeFileSync7(tmp, JSON.stringify(all));
+    renameSync5(tmp, this.path);
   }
 }
 
@@ -2505,21 +2425,21 @@ function validCoworkId(value) {
   return typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_.:/-]{0,255}$/.test(value);
 }
 function coworkBindingsPath(root) {
-  return join12(root, ".augenta", "state", "cowork-tasks.json");
+  return join11(root, ".augenta", "state", "cowork-tasks.json");
 }
 function writeCoworkState(path, value) {
-  mkdirSync9(dirname6(path), { recursive: true, mode: 448 });
-  const temp = `${path}.${randomUUID6()}.tmp`;
+  mkdirSync8(dirname6(path), { recursive: true, mode: 448 });
+  const temp = `${path}.${randomUUID5()}.tmp`;
   try {
-    writeFileSync9(temp, JSON.stringify(value), { mode: 384, flag: "wx" });
-    renameSync7(temp, path);
+    writeFileSync8(temp, JSON.stringify(value), { mode: 384, flag: "wx" });
+    renameSync6(temp, path);
   } finally {
     rmSync3(temp, { force: true });
   }
 }
 function readBindings(root) {
   try {
-    const value = JSON.parse(readFileSync10(coworkBindingsPath(root), "utf8"));
+    const value = JSON.parse(readFileSync9(coworkBindingsPath(root), "utf8"));
     if (value.version !== 1 || !Array.isArray(value.tasks))
       return [];
     return value.tasks.filter((x) => x && validCoworkId(x.sessionId) && (x.transport === "native" || x.transport === "otlp") && typeof x.connection === "string" && /^[a-f0-9]{64}$/.test(x.connection) && Number.isFinite(Date.parse(x.boundAt)) && (x.transport !== "native" || typeof x.transcriptPath === "string"));
@@ -2529,7 +2449,7 @@ function readBindings(root) {
 }
 function coworkTaskBinding(root, sessionId) {
   try {
-    const claimed = JSON.parse(readFileSync10(taskClaimPath(sessionId), "utf8"));
+    const claimed = JSON.parse(readFileSync9(taskClaimPath(sessionId), "utf8"));
     if (claimed.version !== 1 || claimed.projectRoot !== realpathSync5(root))
       return;
     const matches = readBindings(root).filter((x) => x.sessionId === sessionId && JSON.stringify(x) === JSON.stringify(claimed.binding));
@@ -2539,22 +2459,39 @@ function coworkTaskBinding(root, sessionId) {
   }
 }
 function taskClaimPath(sessionId) {
-  const base = process.env.AUGENTA_AUTH_HOME || join12(homedir2(), ".augenta");
-  return join12(base, "cowork", "tasks", createHash4("sha256").update(sessionId).digest("hex") + ".json");
+  const base = process.env.AUGENTA_AUTH_HOME || join11(homedir2(), ".augenta");
+  return join11(base, "cowork", "tasks", createHash4("sha256").update(sessionId).digest("hex") + ".json");
+}
+function nativeCoworkProject(sessionId) {
+  if (!validCoworkId(sessionId))
+    return;
+  try {
+    const claim = JSON.parse(readFileSync9(taskClaimPath(sessionId), "utf8"));
+    if (typeof claim.projectRoot !== "string")
+      return;
+    const binding = coworkTaskBinding(claim.projectRoot, sessionId);
+    const cfg = loadProjectConfig(claim.projectRoot);
+    return binding?.transport === "native" && cfg && coworkConnection(cfg) === binding.connection ? realpathSync5(claim.projectRoot) : undefined;
+  } catch {
+    return;
+  }
+}
+function nativeCoworkBindingRequired() {
+  return process.env.AUGENTA_COWORK_NATIVE === "1" || process.env.CLAUDE_CODE_REMOTE === "true";
 }
 function claimTask(root, binding) {
   const path = taskClaimPath(binding.sessionId);
-  mkdirSync9(dirname6(path), { recursive: true, mode: 448 });
+  mkdirSync8(dirname6(path), { recursive: true, mode: 448 });
   const value = { version: 1, projectRoot: realpathSync5(root), binding };
-  const temp = `${path}.${randomUUID6()}.tmp`;
+  const temp = `${path}.${randomUUID5()}.tmp`;
   try {
-    writeFileSync9(temp, JSON.stringify(value), { mode: 384, flag: "wx" });
+    writeFileSync8(temp, JSON.stringify(value), { mode: 384, flag: "wx" });
     try {
       linkSync(temp, path);
     } catch (error) {
       if (error.code !== "EEXIST")
         throw error;
-      const prior = JSON.parse(readFileSync10(path, "utf8"));
+      const prior = JSON.parse(readFileSync9(path, "utf8"));
       if (prior.projectRoot !== value.projectRoot || prior.binding?.transport !== binding.transport || prior.binding?.connection !== binding.connection || prior.binding?.transcriptPath !== binding.transcriptPath) {
         throw new CoworkError("task_already_bound", "This task is already bound to a project and transport. Start a new task to change either.");
       }
@@ -2671,18 +2608,146 @@ async function bindCoworkTask(root, sessionId, transport, options = {}) {
     release();
   }
 }
-function nativeCoworkAllowed(root, sessionId, transcriptPath, requireBinding = process.env.AUGENTA_COWORK_NATIVE === "1") {
+function nativeCoworkAllowed(root, sessionId, transcriptPath, requireBinding = nativeCoworkBindingRequired()) {
   if (!sessionId)
     return !requireBinding;
   const binding = coworkTaskBinding(root, sessionId);
   if (!binding)
-    return !requireBinding && !existsSync8(taskClaimPath(sessionId));
+    return !requireBinding && !existsSync7(taskClaimPath(sessionId));
   if (binding.transport !== "native" || !boundCoworkConfig(root, binding))
     return false;
   try {
     return realpathSync5(transcriptPath) === binding.transcriptPath;
   } catch {
     return false;
+  }
+}
+
+// capture/health.ts
+var STAGES = ["dispatch", "capture", "attachments", "delivery"];
+var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full", "too_large", "skipped"]);
+function read(projectRoot, stage) {
+  try {
+    const s = JSON.parse(readFileSync10(join12(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
+      return;
+    return {
+      at: new Date(s.at).toISOString(),
+      outcome: s.outcome,
+      count: s.count,
+      successes: s.successes,
+      ...Number.isFinite(Date.parse(s.lastSuccessAt)) ? { lastSuccessAt: new Date(s.lastSuccessAt).toISOString() } : {}
+    };
+  } catch {
+    return;
+  }
+}
+function recordHealth(projectRoot, stage, outcome, count = 0) {
+  try {
+    const dir = join12(ensureAugentaDir(projectRoot), "state");
+    mkdirSync9(dir, { recursive: true });
+    const old = read(projectRoot, stage);
+    const at = new Date().toISOString();
+    const success = outcome === "captured" || outcome === "accepted";
+    const value = {
+      at,
+      outcome,
+      count,
+      successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
+      ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
+    };
+    const file = join12(dir, `health-${stage}.json`);
+    const tmp = `${file}.${randomUUID6()}.tmp`;
+    writeFileSync9(tmp, JSON.stringify(value), { mode: 384 });
+    renameSync7(tmp, file);
+  } catch {}
+}
+function captureHealth(projectRoot) {
+  const cfg = loadProjectConfig(projectRoot);
+  const activity = Object.fromEntries(STAGES.map((stage) => [stage, read(projectRoot, stage) ?? null]));
+  const gate = cfg ? captureGate(cfg) : undefined;
+  let taskBound = !nativeCoworkBindingRequired();
+  try {
+    taskBound ||= nativeCoworkProject(process.env.CLAUDE_CODE_SESSION_ID) === realpathSync6(projectRoot);
+  } catch {}
+  return {
+    configured: !!cfg,
+    enabled: gate === "live" && taskBound,
+    ...gate ? { gate } : {},
+    configuration: cfg ? "valid" : existsSync8(join12(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    activityScope: "project",
+    hostDispatch: "unverified",
+    destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg && !cfg.keyTracked ? 1 : 0,
+    pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
+    ...activity,
+    hostApproval: "unknown",
+    ingestion: "unverified",
+    nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in" : cfg.gatewayMismatch ? cfg.gatewayMismatch.cause === "environment" ? "unset_gateway_override" : "review_config_gateway" : gate === "not_adopted" ? "adopt" : gate === "key_tracked" ? cfg.keyTracked === "tracked" ? "untrack_config" : "make_git_available" : !taskBound ? "bind_task" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
+  };
+}
+
+// capture/harness.ts
+function detectedHarness(explicit, env = process.env) {
+  if (explicit)
+    return explicit;
+  const codex = Boolean(env.CODEX_THREAD_ID || env.CODEX_SANDBOX || env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE === "Codex Desktop");
+  const claude = env.CLAUDECODE === "1";
+  if (codex === claude)
+    return;
+  return codex ? "codex" : "claude-code";
+}
+
+// scripts/connect.ts
+import { chmodSync as chmodSync3, existsSync as existsSync9, readFileSync as readFileSync11, renameSync as renameSync8, rmSync as rmSync4, writeFileSync as writeFileSync10 } from "node:fs";
+import { basename as basename4, join as join14 } from "node:path";
+import { randomUUID as randomUUID7 } from "node:crypto";
+import { createInterface } from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
+
+// runtime/version.ts
+var PLUGIN_VERSION = "0.16.0";
+
+// capture/claude-cloud.ts
+import { accessSync as accessSync2, constants as constants3, lstatSync as lstatSync3, realpathSync as realpathSync7 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { join as join13, resolve as resolve6 } from "node:path";
+function claudeCloud(env = process.env) {
+  return env.CLAUDE_CODE_REMOTE === "true";
+}
+function currentClaudeCloudTask(projectRoot, cwd = process.cwd(), env = process.env) {
+  if (!claudeCloud(env))
+    return;
+  const sessionId = env.CLAUDE_CODE_SESSION_ID;
+  if (!sessionId || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(sessionId))
+    return;
+  const base = env.CLAUDE_CONFIG_DIR || join13(homedir3(), ".claude");
+  const paths = new Set;
+  for (const dir of new Set([resolve6(cwd), resolve6(projectRoot)])) {
+    const candidate = join13(base, "projects", dir.replace(/[^a-zA-Z0-9-]/g, "-"), `${sessionId}.jsonl`);
+    try {
+      if (!lstatSync3(candidate).isFile())
+        continue;
+      accessSync2(candidate, constants3.R_OK);
+      paths.add(realpathSync7(candidate));
+    } catch {}
+  }
+  return paths.size === 1 ? { sessionId, transcriptPath: [...paths][0] } : undefined;
+}
+async function bindCurrentClaudeCloudTask(projectRoot) {
+  if (!claudeCloud())
+    return;
+  const task = currentClaudeCloudTask(projectRoot);
+  if (!task)
+    return { status: "error", code: "missing_transcript", message: "The project is connected, but this cloud task's engine session and transcript could not be confirmed. Native capture and automatic recall remain off. Confirm them on this runtime and bind the task with --cowork-task, --cowork-transport native and --cowork-transcript." };
+  try {
+    const binding = await bindCoworkTask(projectRoot, task.sessionId, "native", { transcriptPath: task.transcriptPath });
+    return { status: "bound", ...task, boundAt: binding.boundAt };
+  } catch (error) {
+    return {
+      status: "error",
+      code: error instanceof CoworkError ? error.code : "binding_failed",
+      message: error instanceof CoworkError ? error.message : "The project is connected but this cloud task could not be bound; native capture and automatic recall remain off."
+    };
   }
 }
 
@@ -2848,7 +2913,7 @@ function writeApiKeyConfig(projectRoot, apiKey, endpoint2, details = {}) {
   }
   const dir = ensureAugentaDir(projectRoot);
   setAugentaIgnore(projectRoot, "local");
-  const path = join13(dir, "config.json");
+  const path = join14(dir, "config.json");
   const consentedAt = new Date().toISOString();
   writeFileSync10(path, `${JSON.stringify({
     authMode: "api-key",
@@ -2871,7 +2936,7 @@ function writeOAuthConfig(projectRoot, connection) {
     throw new Error("an OAuth connection requires at least one Connector");
   }
   const dir = ensureAugentaDir(projectRoot);
-  const path = join13(dir, "config.json");
+  const path = join14(dir, "config.json");
   const joinedAt = new Date().toISOString();
   const tmp = `${path}.${process.pid}.tmp`;
   try {
@@ -3231,7 +3296,7 @@ class GatewayOverrideError extends Error {
   }
 }
 function priorConnection(projectRoot) {
-  if (!existsSync9(join13(projectRoot, ".augenta", "config.json")))
+  if (!existsSync9(join14(projectRoot, ".augenta", "config.json")))
     return;
   try {
     const existing = loadProjectConfig(projectRoot);
@@ -3320,13 +3385,13 @@ async function linkWorkspaces(projectRoot, args, profileId, gateway, owner, work
   }
   return results;
 }
-function ephemeralProjectMessage(projectRoot) {
-  const session = sessionEnvironment();
-  return `this session's machine is discarded when the session ends (${session.signals.join(", ")}), and ` + `${projectRoot} is not inside a Git checkout, so a connection written here could not outlast it; ` + "connect from a local session instead (in Cowork, a local session with the project folder attached)";
-}
 async function connectProject(projectRoot, args) {
-  if (ephemeralProject(projectRoot))
-    throw new Error(ephemeralProjectMessage(projectRoot));
+  if (sessionEnvironment().ephemeral) {
+    console.log("This session's machine is discarded at the end; its sign-in and unshipped records last only for this session.");
+  }
+  if (ephemeralProject(projectRoot)) {
+    console.log(`This temporary project is ${projectRoot}. Its sign-in, connection and unshipped records disappear when this session's container is discarded. A new session must sign in and choose its Workspaces again.`);
+  }
   const { oauth, gateway, control, discovered, discoveredGateway } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
   const environment = environmentLabel(control);
@@ -3382,6 +3447,9 @@ async function connectProject(projectRoot, args) {
     }
     console.log("Eligible documents observed after this checkout's consent go to every selected Workspace. PDF bytes and raw transcripts are not secret-scrubbed. Images remain placeholders.");
     console.log(`Automatic recall is ${autoRecall ? "on" : "off"} for this project.`);
+    const nativeCapture = await bindCurrentClaudeCloudTask(projectRoot);
+    if (nativeCapture)
+      console.log(nativeCapture.status === "bound" ? "This cloud task is bound for native capture; only subsequent activity is eligible." : `Cloud capture is off: ${nativeCapture.message}`);
   } else {
     console.log("No destination could be linked. No config was written.");
   }
@@ -3714,6 +3782,14 @@ function blockedNetworkMessage(hosts) {
   return `this network does not let connect reach ${blocked.map((host) => `${host.host} (${host.reason})`).join(", ")}; ` + `connect needs ${needed}. Allow these hosts in this environment's network settings, or ask your administrator to allow them. ` + "In Cowork, the setting is Organization settings → Capabilities → Code execution → Allow network egress " + "(also called Admin settings → Capabilities → Network egress). Start a new task after the setting changes; existing tasks keep their original settings." + (blocked.some((host) => host.kind === "tls") ? " If your network intercepts TLS, ask your administrator to supply its trusted proxy CA for Node." : "");
 }
 async function runJsonVerb(resolved, args) {
+  if (ephemeralProject(resolved.projectRoot) && !args.project && (args.workspaces !== undefined || args.adopt || args.createWorkspace !== undefined)) {
+    return {
+      status: "error",
+      code: "project_required",
+      projectRoot: resolved.projectRoot,
+      message: "Name this temporary cloud project with --project and disclose that its sign-in, connection and unshipped records last only for this session before asking for Workspaces. Nothing was changed."
+    };
+  }
   if ((args.coworkTask || args.coworkTransport || args.coworkTranscript) && !args.project) {
     return { status: "error", code: "project_required", message: "Task binding requires an explicit --project directory; attached paths and the current directory do not choose its route." };
   }
@@ -3722,11 +3798,20 @@ async function runJsonVerb(resolved, args) {
     environment: environmentLabel(args.repairHarness ? cfg?.controlUrl : controlUrl(cfg, args.controlUrl)),
     ...args.repairHarness ? {} : environmentChange(cfg, args),
     ...args.probe && cfg ? { current: savedConnection(cfg) } : {},
-    ...args.probe ? { session: sessionEnvironment() } : {}
+    ...args.probe || ephemeralProject(resolved.projectRoot) ? {
+      session: { ...sessionEnvironment(), temporaryProject: ephemeralProject(resolved.projectRoot) }
+    } : {}
   };
   const disclosures = {};
   try {
-    return { ...await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot, disclosures }), ...metadata, ...disclosures };
+    const payload = await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot, disclosures });
+    const nativeCapture = claudeCloud() && ["connected", "partially_connected", "adopted"].includes(payload.status) ? await bindCurrentClaudeCloudTask(resolved.projectRoot) : undefined;
+    return {
+      ...payload,
+      ...metadata,
+      ...disclosures,
+      ...nativeCapture ? { nativeCapture, captureHealth: captureHealth(resolved.projectRoot) } : {}
+    };
   } catch (error) {
     if (error instanceof CoworkError)
       return { status: "error", code: error.code, message: error.message, ...metadata, ...disclosures };
@@ -3979,15 +4064,6 @@ async function dispatchJsonVerb(resolved, args) {
       message: "--create-workspace and --workspace are separate steps; create first, then ask for the complete destination set again and pass it with --workspace"
     };
   }
-  if ((args.probe || args.login || args.awaitLogin || args.createWorkspace !== undefined || args.workspaces?.length || args.adopt) && ephemeralProject(resolved.projectRoot)) {
-    const session = sessionEnvironment();
-    return {
-      status: "error",
-      code: "ephemeral_project",
-      session,
-      message: ephemeralProjectMessage(resolved.projectRoot)
-    };
-  }
   if (args.adopt) {
     if (args.workspaces?.length || args.createWorkspace !== undefined || args.login || args.awaitLogin || args.probe || args.verifyOnly || args.autoRecall !== undefined || args.endpoint || args.controlUrl || args.profile) {
       return {
@@ -4101,7 +4177,8 @@ if (isMain(import.meta.url)) {
     if (args.createWorkspace !== undefined && !args.json) {
       throw new Error("--create-workspace is a --json verb; the interactive flow offers Create a new Workspace in its menu");
     }
-    const resolved = resolveProject(args, process.cwd());
+    const boundRoot = !args.project && nativeCoworkBindingRequired() ? nativeCoworkProject(process.env.CLAUDE_CODE_SESSION_ID) : undefined;
+    const resolved = resolveProject({ ...args, ...boundRoot ? { project: boundRoot } : {} }, process.cwd());
     const projectRoot = resolved.projectRoot;
     if (args.json) {
       const payload = await runJsonVerb(resolved, args);
@@ -4119,7 +4196,7 @@ if (isMain(import.meta.url)) {
       console.log(`The platform key in .augenta/config.json is accepted by ${gateway} and resolves to Connector ${connector.id} (${connector.status}, ${connector.direction}). Nothing was written.`);
     } else if (args.apiKey?.trim()) {
       console.log("This checkout will capture supplied text documents and PDFs supplied or referenced in supported file-tool records, including temporary PDFs, after this connection. PDF bytes are not secret-scrubbed and go to the key's assigned Workspace. Upgrade every installed harness before enabling attachments; AUGENTA_CAPTURE_ATTACHMENTS=0 disables new attachment capture.");
-      const existed = existsSync9(join13(projectRoot, ".augenta", "config.json"));
+      const existed = existsSync9(join14(projectRoot, ".augenta", "config.json"));
       const { path, connector } = await connectWithApiKey(projectRoot, args.apiKey.trim(), args.endpoint, args.autoRecall);
       console.log(`${existed ? "Updated" : "Wrote"} ${path} (0600). Platform-key capture is enabled through Connector ${connector.id}.`);
       console.log("Off switch: delete .augenta/config.json, or set AUGENTA_CAPTURE_ENABLED=0.");

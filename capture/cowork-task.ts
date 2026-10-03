@@ -63,6 +63,27 @@ function taskClaimPath(sessionId: string): string {
   return join(base, "cowork", "tasks", createHash("sha256").update(sessionId).digest("hex") + ".json");
 }
 
+/** The task's claim chooses the project even when hooks keep the container cwd.
+ * A claim alone is insufficient: require matching checkout state and consent. */
+export function nativeCoworkProject(sessionId?: string): string | undefined {
+  if (!validCoworkId(sessionId)) return undefined;
+  try {
+    const claim = JSON.parse(readFileSync(taskClaimPath(sessionId), "utf8"));
+    if (typeof claim.projectRoot !== "string") return undefined;
+    const binding = coworkTaskBinding(claim.projectRoot, sessionId);
+    // Resolve identity independently of the capture kill switch: explicit
+    // recall still uses the chosen project when sending is disabled. Every
+    // capture caller separately checks nativeCoworkAllowed/captureEnabled.
+    const cfg = loadProjectConfig(claim.projectRoot);
+    return binding?.transport === "native" && cfg && coworkConnection(cfg) === binding.connection
+      ? realpathSync(claim.projectRoot) : undefined;
+  } catch { return undefined; }
+}
+
+export function nativeCoworkBindingRequired(): boolean {
+  return process.env.AUGENTA_COWORK_NATIVE === "1" || process.env.CLAUDE_CODE_REMOTE === "true";
+}
+
 /** Atomic per-session claim: a task cannot bind to two projects or transports. */
 function claimTask(root: string, binding: CoworkTaskBinding): void {
   const path = taskClaimPath(binding.sessionId);
@@ -180,7 +201,7 @@ export async function bindCoworkTask(root: string, sessionId: string, transport:
 
 /** Ordinary coding sessions retain their existing gate. A bound task is exclusive. */
 export function nativeCoworkAllowed(root: string, sessionId?: string, transcriptPath?: string,
-  requireBinding = process.env.AUGENTA_COWORK_NATIVE === "1"): boolean {
+  requireBinding = nativeCoworkBindingRequired()): boolean {
   if (!sessionId) return !requireBinding;
   const binding = coworkTaskBinding(root, sessionId);
   if (!binding) return !requireBinding && !existsSync(taskClaimPath(sessionId));

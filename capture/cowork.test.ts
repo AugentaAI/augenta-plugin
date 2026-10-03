@@ -1,21 +1,23 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveDeviceProfile } from "./auth";
 import { writeOAuthProject } from "../__tests__/fixtures";
-import { bindCoworkTask, coworkBindingsPath, nativeCoworkAllowed } from "./cowork-task";
+import { bindCoworkTask, coworkBindingsPath, nativeCoworkAllowed, nativeCoworkProject } from "./cowork-task";
 import { ingestCoworkOtlp } from "./cowork-otlp";
 import { runCapture } from "./capture";
 import { TurnState } from "./turn-cursor";
 import { groupIntoExperiences, drainAll } from "./ship";
 import { startCoworkReceiver } from "./cowork-command";
 import { parseArgs, resolveProject, runJsonVerb } from "../scripts/connect";
+import { bindCurrentClaudeCloudTask, currentClaudeCloudTask } from "./claude-cloud";
+import { captureHealth } from "./health";
 import { AUTO_RECALL_SENTINEL } from "./auto-recall-marker";
 
 const GATEWAY = "https://cowork-gateway.example.com";
 const realFetch = globalThis.fetch;
-const sandbox = ["AUGENTA_AUTH_HOME", "AUGENTA_API_URL", "AUGENTA_INGEST_URL", "AUGENTA_CAPTURE_ENABLED", "AUGENTA_EPHEMERAL", "AUGENTA_COWORK_NATIVE", "CLAUDE_CODE_REMOTE"];
+const sandbox = ["AUGENTA_AUTH_HOME", "AUGENTA_API_URL", "AUGENTA_INGEST_URL", "AUGENTA_CAPTURE_ENABLED", "AUGENTA_EPHEMERAL", "AUGENTA_COWORK_NATIVE", "CLAUDE_CODE_REMOTE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR"];
 let env: Record<string, string | undefined>;
 let project: string;
 let authHome: string;
@@ -82,6 +84,52 @@ function records(): any[] {
 }
 
 describe("explicit Cowork task binding", () => {
+  test("a cloud task binds the actual runtime transcript and captures from a different hook cwd", async () => {
+    const session = "b89fcfdc-dfc7-5eb5-99f3-f9da2d6ebbc2";
+    process.env.CLAUDE_CODE_REMOTE = "true";
+    process.env.CLAUDE_CODE_SESSION_ID = session;
+    process.env.CLAUDE_CONFIG_DIR = join(authHome, "claude");
+    const dir = join(process.env.CLAUDE_CONFIG_DIR, "projects", project.replace(/[^a-zA-Z0-9-]/g, "-"));
+    mkdirSync(dir, { recursive: true });
+    const transcript = join(dir, `${session}.jsonl`);
+    const line = (role: string, content: string) => JSON.stringify({ type: role, sessionId: session,
+      timestamp: new Date(start + 1000).toISOString(), message: { role, content } }) + "\n";
+    writeFileSync(transcript, line("user", "earlier private history"));
+    expect(nativeCoworkAllowed(project, session, transcript)).toBe(false);
+    expect(captureHealth(project)).toMatchObject({ enabled: false, nextStep: "bind_task" });
+    expect(await bindCurrentClaudeCloudTask(project)).toMatchObject({ status: "bound", sessionId: session });
+    expect(nativeCoworkProject(session)).toBe(project);
+    expect(captureHealth(project).enabled).toBe(true);
+    new TurnState(project).bump(transcript);
+    appendFileSync(transcript, line("user", "cloud prompt") + line("assistant", "cloud answer"));
+    const payload = { cwd: authHome, session_id: session, transcript_path: transcript, hook_event_name: "Stop" };
+    expect(runCapture(payload, { spawnShipper: false }).appended).toBe(2);
+    expect(runCapture(payload, { spawnShipper: false }).appended).toBe(0);
+    expect(JSON.stringify(records())).not.toContain("earlier private history");
+    expect(groupIntoExperiences(records())).toMatchObject([{ type: "trajectory", events: [{ text: "cloud prompt" }, { text: "cloud answer" }] }]);
+    expect(runCapture({ ...payload, session_id: "another-session" }, { spawnShipper: false }).appended).toBe(0);
+    expect(runCapture({ ...payload, transcript_path: join(authHome, "other.jsonl") }, { spawnShipper: false }).appended).toBe(0);
+    process.env.AUGENTA_CAPTURE_ENABLED = "0";
+    expect(nativeCoworkProject(session)).toBe(project);
+    expect(runCapture(payload, { spawnShipper: false }).appended).toBe(0);
+  });
+
+  test("missing or ambiguous runtime coordinates leave a connected cloud task unbound", async () => {
+    process.env.CLAUDE_CODE_REMOTE = "true";
+    process.env.CLAUDE_CODE_SESSION_ID = "cse_display_id";
+    expect(currentClaudeCloudTask(project)).toBeUndefined();
+    expect(await bindCurrentClaudeCloudTask(project)).toMatchObject({ status: "error", code: "missing_transcript" });
+    expect(requests).toEqual([]);
+    expect(nativeCoworkAllowed(project)).toBe(false);
+    const session = "b89fcfdc-dfc7-5eb5-99f3-f9da2d6ebbc2";
+    const base = join(authHome, "claude");
+    for (const cwd of [project, authHome]) {
+      const dir = join(base, "projects", cwd.replace(/[^a-zA-Z0-9-]/g, "-"));
+      mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, `${session}.jsonl`), "");
+    }
+    expect(currentClaudeCloudTask(project, authHome, { CLAUDE_CODE_REMOTE: "true", CLAUDE_CODE_SESSION_ID: session, CLAUDE_CONFIG_DIR: base })).toBeUndefined();
+  });
+
   test("binding output is safe and the project must be explicit", async () => {
     const resolved = resolveProject({ project }, project);
     expect(await runJsonVerb(resolved, parseArgs(["--json", "--cowork-task", "session-1", "--cowork-transport", "otlp"])))

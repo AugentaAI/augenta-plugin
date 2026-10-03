@@ -59,6 +59,14 @@ native capture. Ordinary Code and Codex sessions retain their existing behavior.
 
 ## Native transcript transport
 
+The normal connect skill now supports a named temporary cloud project and binds
+the confirmed current engine session and transcript after Workspace consent.
+Claude cloud hooks require that binding without an environment flag and use its
+project even when their cwd stays at the container home. Missing or ambiguous
+runtime coordinates leave capture and automatic recall off with an actionable
+binding result. The commands below remain the manual path for a runtime whose
+transcript location must be confirmed separately.
+
 Resolve both bundles from the plugin version whose skill directory was supplied.
 The following placeholders must be replaced with confirmed absolute paths and
 the engine session ID:

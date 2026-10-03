@@ -165,10 +165,12 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
     }
   });
 
-  test("a throwaway session outside any checkout is not prompted: connect would refuse it", () => {
+  test("a temporary cloud project gets onboarding with its state lifetime disclosed", () => {
+    const out = fire({ transcript_path: CLAUDE_TP, cwd: project }, { AUGENTA_EPHEMERAL: "1" });
+    expect(out).toContain("temporary cloud project");
+    expect(out).toContain("unshipped records disappear");
+    expect(out).toContain("/augenta:connect");
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project }, { AUGENTA_EPHEMERAL: "1" })).toBe("");
-    // Nothing was recorded either, so a lasting session there still gets its one prompt.
-    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).not.toBe("");
   });
 
   test("a throwaway session in a checkout is still prompted", () => {

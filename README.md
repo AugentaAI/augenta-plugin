@@ -261,13 +261,19 @@ in and joins it.
 | Where | Does Augenta run there? |
 | --- | --- |
 | Claude Code in the cloud (claude.ai/code) | No. Cloud sessions don't install plugins that your repository or your own settings turn on. The only route is your organization's server-managed settings, set by a Team or Enterprise Owner, and Augenta hasn't been tested that way. |
-| Cowork in the cloud | No. The plugin runs on Anthropic's machine while your project folder stays on your computer, so connect can't connect it. Use a local Cowork session instead. On Team and Enterprise plans an Owner controls this in Organization settings → Cowork → "Run Cowork in the cloud". From October 6, 2026, new Pro and Max Cowork tasks run only in the cloud. |
+| Cowork in the cloud | Partially; live Experience delivery and recall are not yet verified. Connect supports a named temporary project inside the cloud container and binds its native engine session and readable transcript. Sign-in, temporary config and unshipped records disappear at task end; each new task connects again. A folder on a separate device is a different runtime. Use a local Cowork session where available until cloud delivery is verified. |
 | Codex cloud | Untested. Internet access is off by default; turn it on and allow the hosts below. |
 
 Experimental Cowork capture commands are available for a controlled
 [native and OTLP pilot](docs/cowork-pilot.md). They require an explicit task-to-project
 binding and the project's affirmed Workspace set. Real Cowork delivery remains
 unverified; the existing connect skill does not connect a split cloud/device runtime.
+
+On Team and Enterprise plans, an Owner controls cloud execution in
+**Organization settings → Cowork → Run Cowork in the cloud**. Local sessions
+remain available for existing desktop deployments; availability depends on your
+plan and surface. Check [Claude's current execution-mode guidance](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview)
+and [organization controls](https://support.claude.com/en/articles/13455879-use-claude-cowork-on-team-and-enterprise-plans).
 
 Wherever commands run behind a network allowlist, allow `augenta.ai`,
 `auth.augenta.ai` and `api.augenta.ai`:
@@ -277,6 +283,17 @@ Wherever commands run behind a network allowlist, allow `augenta.ai`,
 | Cowork, local or cloud | Organization settings → Capabilities → Code execution → Allow network egress. It applies to sessions created afterwards. |
 | Claude Code in the cloud | The environment's Network access, set to Custom. |
 | Codex cloud | The environment's internet access, with all HTTP methods allowed. The GET, HEAD and OPTIONS-only setting blocks sign-in, capture and recall. |
+
+For Cowork on Team or Enterprise, an organization owner opens **Organization
+settings → Capabilities → Code execution**, finds **Domain allowlist**, and adds
+all three hosts individually under **Additional allowed domains**. Allow HTTPS requests, including POST, for discovery,
+browser sign-in, Experience uploads, and recall. Start a **new Cowork task** after
+saving the setting. [Claude's network settings guide](https://support.claude.com/en/articles/13455879-use-claude-cowork-on-team-and-enterprise-plans)
+describes the owner controls.
+
+![Claude organization settings showing where to add allowed domains](docs/images/cowork-network-allowlist.png)
+
+The screenshot shows `augenta.ai`; also add `auth.augenta.ai` and `api.augenta.ai`.
 
 If a host is blocked, connect tells you which one and why, and what to ask your
 administrator to allow. In Cowork, start a new task after the setting changes;

@@ -40,6 +40,7 @@
 import { isMain, reexecForEnvProxy } from "../runtime/node";
 import { describeError } from "../capture/platform";
 import { resolveProject, type ResolvedProject } from "../capture/project";
+import { nativeCoworkBindingRequired, nativeCoworkProject } from "../capture/cowork-task";
 import { askWorkspaces, type RecallPayload } from "../capture/recall-client";
 
 export {
@@ -245,7 +246,8 @@ if (isMain(import.meta.url)) {
   const wantsJson = argv.includes("--json");
   try {
     const args = parseArgs(argv);
-    const resolved = resolveProject(args, process.cwd());
+    const boundRoot = !args.project && nativeCoworkBindingRequired() ? nativeCoworkProject(process.env.CLAUDE_CODE_SESSION_ID) : undefined;
+    const resolved = resolveProject({ ...args, ...(boundRoot ? { project: boundRoot } : {}) }, process.cwd());
     const payload = await runRecall(resolved, args);
     /* `projectRoot` comes from the payload, not from `resolved`: the config is
        found by walking UPWARD, so the directory recall actually used is often an

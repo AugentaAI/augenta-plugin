@@ -1,10 +1,11 @@
 /** Local, bounded diagnostics. No payloads, paths, tokens, IDs or error strings. */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { captureGate, loadProjectConfig } from "./config";
 import { ensureAugentaDir } from "./augenta-dir";
 import { Outbox } from "./outbox";
+import { nativeCoworkBindingRequired, nativeCoworkProject } from "./cowork-task";
 
 const STAGES = ["dispatch", "capture", "attachments", "delivery"] as const;
 type Stage = typeof STAGES[number];
@@ -41,7 +42,9 @@ export function captureHealth(projectRoot: string) {
   // Why capture is off matters more than that it is: signing in and joining a
   // committed config are different fixes from the kill switch.
   const gate = cfg ? captureGate(cfg) : undefined;
-  return { configured: !!cfg, enabled: gate === "live", ...(gate ? { gate } : {}),
+  let taskBound = !nativeCoworkBindingRequired();
+  try { taskBound ||= nativeCoworkProject(process.env.CLAUDE_CODE_SESSION_ID) === realpathSync(projectRoot); } catch { /* absent project */ }
+  return { configured: !!cfg, enabled: gate === "live" && taskBound, ...(gate ? { gate } : {}),
     configuration: cfg ? "valid" : existsSync(join(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
     activityScope: "project", hostDispatch: "unverified",
     destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg && !cfg.keyTracked ? 1 : 0,
@@ -57,7 +60,7 @@ export function captureHealth(projectRoot: string) {
     // moved (cfg.gatewayMismatch.cause).
     nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in"
       : cfg.gatewayMismatch ? (cfg.gatewayMismatch.cause === "environment" ? "unset_gateway_override" : "review_config_gateway")
-      : gate === "not_adopted" ? "adopt" : gate === "key_tracked" ? (cfg.keyTracked === "tracked" ? "untrack_config" : "make_git_available") : !activity.dispatch
+      : gate === "not_adopted" ? "adopt" : gate === "key_tracked" ? (cfg.keyTracked === "tracked" ? "untrack_config" : "make_git_available") : !taskBound ? "bind_task" : !activity.dispatch
       ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript"
       ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity" };
 }

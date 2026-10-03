@@ -44,11 +44,12 @@ Only if your harness did not give you this file's directory, find the install:
 ```bash
 ls -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/*/augenta/*/dist/scripts/connect.mjs \
       "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/augenta/*/dist/scripts/connect.mjs \
+      "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/synced/*/augenta/dist/scripts/connect.mjs \
       "$HOME/Library/Application Support/Claude/local-agent-mode-sessions/"*/*/rpm/plugin_*/dist/scripts/connect.mjs 2>/dev/null
 ```
 
 The last layout is Cowork desktop's account-scoped plugin cache, which is
-per session: several copies of the same install are normal there. For an RPM
+per session: several copies of the same install are normal there. For a synced or RPM
 candidate, read `../../.claude-plugin/plugin.json` from the script's directory
 and keep it only when its name is `augenta`. Then compare the surviving
 candidates' `version`: if they all report the same one, use any of them; if they
@@ -56,11 +57,11 @@ disagree, stop and report the ambiguity rather than guessing which install these
 instructions came from. A cache path does not establish that the project and
 plugin share a runtime.
 
-If none of these finds the script, do not keep searching other machines or shells. In a
-cloud session whose shell reaches the user's folder through a separate device
-shell (a Cowork cloud task), the plugin is not in that shell: say that connect
-cannot run in this session, and suggest a local session with the project folder
-attached.
+If none of these finds the script, report that Augenta is not installed on this
+runtime and stop. Do not search a separate device shell for a cloud installation.
+In Cowork cloud, the container project and transcript belong to that runtime; a
+folder reached through a device shell belongs to a different runtime and is not
+automatically the project being connected.
 
 Every verb below is then:
 
@@ -154,12 +155,17 @@ Read-only. It starts no sign-in, so nothing has happened yet and you can still
 explain and ask. `alreadyConnected: true` means reconnecting will verify or change
 which Workspaces this project feeds — continue, do not stop.
 
-When `session.ephemeral` is `true`, this session runs on a machine that is
-discarded when the session ends. Say so before any sign-in: the sign-in lasts only
-for this session, and each new session signs in again. The connection itself is
-kept only through the repository, when its `.augenta/config.json` is committed.
-On `ephemeral_project`, report `message` and stop: the project folder is not in a
-repository, so nothing connect writes here would outlast the session.
+When `session.ephemeral` is `true`, say before any sign-in that the machine,
+its sign-in and unshipped records are discarded at the end. Each new session
+signs in and joins again; a repository may carry its committed config forward.
+When `session.temporaryProject` is `true`, name `projectRoot` as **this cloud
+task's temporary project**, whose connection also disappears at task end. Include
+that project and lifetime in the Workspace question so the answer chooses both
+the project scope and its complete audience; do not add a redundant yes/no.
+Pass `--project <projectRoot>` with this exact absolute path in every subsequent
+verb, including creation, connection and adoption. On `project_required`, report
+the message and use the named project after this disclosure; never set
+`AUGENTA_EPHEMERAL=0` or invent a Git repository to bypass it.
 
 `current` describes the saved connection before live checks: its `environment`,
 `organization`, and `destinations` (including saved names). Use it for context;
@@ -359,6 +365,25 @@ Creation and connection are separate calls: never pass `--create-workspace` and
 
 ## 4. Confirm
 
+For a Claude cloud task, connection automatically binds its confirmed engine
+session and readable transcript to the selected project. `nativeCapture.status: "bound"`
+means subsequent activity is eligible, not that delivery has happened.
+If `nativeCapture.status` is `error`, report its code/message: the project
+configuration was written, but native capture and automatic recall remain off.
+`missing_transcript` requires the engine session ID and transcript path confirmed
+on this runtime, then the existing binding verb:
+
+```bash
+node "$CONNECT" --harness <harness> --json --project <projectRoot> --cowork-task <engine-session-id> --cowork-transport native --cowork-transcript <confirmed-absolute-transcript-path>
+```
+
+Never use the `cse_` task/display ID as the engine ID, search transcript contents,
+or substitute a device-side path. If confirmation is unavailable, stop and
+report the remaining binding requirement. `task_already_bound` requires a new
+task to change its project, transport or connection; do not delete the claim.
+A health `nextStep` of `bind_task` has the same requirement. Ordinary local
+connections retain their existing behavior.
+
 Connector creation proves configuration only. After the next completed turn,
 run the same installed `dist/scripts/connect.mjs` with `--project <projectRoot> --json --health` to check activity. A `nextStep` of `sign_in` means this machine has no saved sign-in for the project, and `adopt` means this checkout has not joined its connection (see step 1); both are fixed by running connect again here. `review_config_gateway` means the project's config points Augenta somewhere this checkout's sign-in was not made for, so nothing is sent: suggest checking the history of `.augenta/config.json`, then connecting again here and choosing the Workspaces. `unset_gateway_override` means only `AUGENTA_API_URL` or `AUGENTA_INGEST_URL` does that; unsetting it is the fix, and reconnecting is not. `make_git_available` means a platform-key project cannot confirm with git that its config is not committed, so capture is off: either `git` is not on the coding app's PATH, or git refuses the repository (usually a checkout owned by another user; `git config --global --add safe.directory <path>` allows it). `git status` in the project shows which. A `nextStep` of `untrack_config` means
 this project's config holds a platform key that git tracks: connect cannot fix that,
@@ -376,7 +401,9 @@ structurally sanitized but **not** secret-scrubbed, and that this now applies to
 every destination you just named. PDF bytes are also **not secret-scrubbed** and go to every selected Workspace. Say that this checkout now captures eligible documents observed after consent, with images excluded. Say whether automatic recall is on or off, from
 `autoRecall`.
 
-Also say that `.augenta/config.json` holds no sign-in token and may be committed,
+For a temporary cloud project, restate that this connection lasts only for the
+current task and the next task needs its own sign-in and Workspace choice.
+For a repository, also say that `.augenta/config.json` holds no sign-in token and may be committed,
 so every checkout of this project points at the same Workspaces; each checkout
 still joins with connect. If the project should keep it private, the user can add
 `.augenta/` to the repository's `.gitignore`.

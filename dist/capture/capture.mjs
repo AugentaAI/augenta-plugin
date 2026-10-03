@@ -1619,9 +1619,9 @@ class CaptureState {
 }
 
 // capture/health.ts
-import { existsSync as existsSync7, mkdirSync as mkdirSync8, readFileSync as readFileSync9, renameSync as renameSync6, writeFileSync as writeFileSync8 } from "node:fs";
-import { join as join11 } from "node:path";
-import { randomUUID as randomUUID5 } from "node:crypto";
+import { existsSync as existsSync8, mkdirSync as mkdirSync9, readFileSync as readFileSync10, realpathSync as realpathSync6, renameSync as renameSync7, writeFileSync as writeFileSync9 } from "node:fs";
+import { join as join12 } from "node:path";
+import { randomUUID as randomUUID6 } from "node:crypto";
 
 // capture/config.ts
 import { readFileSync as readFileSync8 } from "node:fs";
@@ -2607,12 +2607,226 @@ function attachmentCaptureMode(env = process.env) {
   return ["0", "off", "false"].includes((env.AUGENTA_CAPTURE_ATTACHMENTS ?? "").trim().toLowerCase()) ? "off" : "documents";
 }
 
+// capture/cowork-task.ts
+import { createHash as createHash4, randomUUID as randomUUID5 } from "node:crypto";
+import { dirname as dirname6, join as join11 } from "node:path";
+import { existsSync as existsSync7, linkSync, mkdirSync as mkdirSync8, readFileSync as readFileSync9, realpathSync as realpathSync5, renameSync as renameSync6, rmSync as rmSync3, statSync as statSync5, writeFileSync as writeFileSync8 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+class CoworkError extends Error {
+  code;
+  constructor(code, message) {
+    super(message);
+    this.code = code;
+  }
+}
+function validCoworkId(value) {
+  return typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_.:/-]{0,255}$/.test(value);
+}
+function coworkBindingsPath(root) {
+  return join11(root, ".augenta", "state", "cowork-tasks.json");
+}
+function writeCoworkState(path, value) {
+  mkdirSync8(dirname6(path), { recursive: true, mode: 448 });
+  const temp = `${path}.${randomUUID5()}.tmp`;
+  try {
+    writeFileSync8(temp, JSON.stringify(value), { mode: 384, flag: "wx" });
+    renameSync6(temp, path);
+  } finally {
+    rmSync3(temp, { force: true });
+  }
+}
+function readBindings(root) {
+  try {
+    const value = JSON.parse(readFileSync9(coworkBindingsPath(root), "utf8"));
+    if (value.version !== 1 || !Array.isArray(value.tasks))
+      return [];
+    return value.tasks.filter((x) => x && validCoworkId(x.sessionId) && (x.transport === "native" || x.transport === "otlp") && typeof x.connection === "string" && /^[a-f0-9]{64}$/.test(x.connection) && Number.isFinite(Date.parse(x.boundAt)) && (x.transport !== "native" || typeof x.transcriptPath === "string"));
+  } catch {
+    return [];
+  }
+}
+function coworkTaskBinding(root, sessionId) {
+  try {
+    const claimed = JSON.parse(readFileSync9(taskClaimPath(sessionId), "utf8"));
+    if (claimed.version !== 1 || claimed.projectRoot !== realpathSync5(root))
+      return;
+    const matches = readBindings(root).filter((x) => x.sessionId === sessionId && JSON.stringify(x) === JSON.stringify(claimed.binding));
+    return matches.length === 1 ? matches[0] : undefined;
+  } catch {
+    return;
+  }
+}
+function taskClaimPath(sessionId) {
+  const base = process.env.AUGENTA_AUTH_HOME || join11(homedir2(), ".augenta");
+  return join11(base, "cowork", "tasks", createHash4("sha256").update(sessionId).digest("hex") + ".json");
+}
+function nativeCoworkProject(sessionId) {
+  if (!validCoworkId(sessionId))
+    return;
+  try {
+    const claim = JSON.parse(readFileSync9(taskClaimPath(sessionId), "utf8"));
+    if (typeof claim.projectRoot !== "string")
+      return;
+    const binding = coworkTaskBinding(claim.projectRoot, sessionId);
+    const cfg = loadProjectConfig(claim.projectRoot);
+    return binding?.transport === "native" && cfg && coworkConnection(cfg) === binding.connection ? realpathSync5(claim.projectRoot) : undefined;
+  } catch {
+    return;
+  }
+}
+function nativeCoworkBindingRequired() {
+  return process.env.AUGENTA_COWORK_NATIVE === "1" || process.env.CLAUDE_CODE_REMOTE === "true";
+}
+function claimTask(root, binding) {
+  const path = taskClaimPath(binding.sessionId);
+  mkdirSync8(dirname6(path), { recursive: true, mode: 448 });
+  const value = { version: 1, projectRoot: realpathSync5(root), binding };
+  const temp = `${path}.${randomUUID5()}.tmp`;
+  try {
+    writeFileSync8(temp, JSON.stringify(value), { mode: 384, flag: "wx" });
+    try {
+      linkSync(temp, path);
+    } catch (error) {
+      if (error.code !== "EEXIST")
+        throw error;
+      const prior = JSON.parse(readFileSync9(path, "utf8"));
+      if (prior.projectRoot !== value.projectRoot || prior.binding?.transport !== binding.transport || prior.binding?.connection !== binding.connection || prior.binding?.transcriptPath !== binding.transcriptPath) {
+        throw new CoworkError("task_already_bound", "This task is already bound to a project and transport. Start a new task to change either.");
+      }
+      binding.boundAt = prior.binding.boundAt;
+    }
+  } finally {
+    rmSync3(temp, { force: true });
+  }
+}
+function coworkConnection(cfg) {
+  return createHash4("sha256").update(JSON.stringify({
+    authMode: cfg.authMode,
+    profileId: cfg.profileId,
+    userId: cfg.profileId ? storedProfileUserId(cfg.profileId) : undefined,
+    projectKey: cfg.projectKey,
+    captureSince: cfg.captureSince,
+    gateway: gatewayBase(cfg),
+    ingestUrl: cfg.ingestUrl,
+    destinations: cfg.destinations,
+    apiKey: cfg.apiKey
+  })).digest("hex");
+}
+function boundCoworkConfig(root, binding) {
+  const cfg = loadProjectConfig(root);
+  return cfg && captureEnabled(cfg) && coworkConnection(cfg) === binding.connection ? cfg : undefined;
+}
+async function verifyCoworkRoutes(cfg) {
+  const gateway = gatewayBase(cfg);
+  if (cfg.authMode === "oauth")
+    assertSignInTarget(cfg.profileId, gateway);
+  const token = cfg.authMode === "oauth" ? await accessTokenForProfile(cfg.profileId) : cfg.apiKey;
+  const headers = { authorization: cfg.authMode === "oauth" ? `Bearer ${token}` : `AugentaKey ${token}` };
+  const get = async (path) => {
+    let response;
+    try {
+      response = await fetch(`${gateway.replace(/\/+$/, "")}${path}`, { headers, signal: AbortSignal.timeout(5000) });
+    } catch {
+      throw new CoworkError("connector_unavailable", "Cannot verify the project's Connectors; no Cowork content was queued.");
+    }
+    if (!response.ok)
+      throw new CoworkError("connector_unavailable", `A selected Connector could not be verified (${response.status}); no Cowork content was queued.`);
+    try {
+      return await response.json();
+    } catch {
+      throw new CoworkError("connector_unavailable", "The Connector check returned an invalid answer; no Cowork content was queued.");
+    }
+  };
+  if (cfg.authMode === "api-key") {
+    const assigned = (await get("/v1/connectors")).connectors;
+    if (!Array.isArray(assigned) || assigned.length !== 1 || assigned[0]?.status !== "active" || !["inbound", "bidirectional"].includes(assigned[0]?.direction) || !validCoworkId(assigned[0]?.id) || !validCoworkId(assigned[0]?.workspaceId) || !validCoworkId(assigned[0]?.orgId) || cfg.destinations?.length && (cfg.destinations.length !== 1 || cfg.destinations[0].connectorId !== assigned[0].id || cfg.destinations[0].workspaceId !== assigned[0].workspaceId)) {
+      throw new CoworkError("connector_unavailable", "The platform key must have exactly one active inbound Connector with the recorded assignment.");
+    }
+    return;
+  }
+  const owner = storedProfileUserId(cfg.profileId);
+  for (const destination of cfg.destinations ?? []) {
+    const connector = (await get(`/v1/connectors/${encodeURIComponent(destination.connectorId)}`)).connector;
+    if (!connector || connector.id !== destination.connectorId || connector.workspaceId !== destination.workspaceId || connector.ownerUserId !== owner || connector.status !== "active" || !["inbound", "bidirectional"].includes(connector.direction)) {
+      throw new CoworkError("connector_unavailable", "Every selected Workspace needs this person's own active inbound Connector; no Cowork content was queued.");
+    }
+  }
+  if (!cfg.destinations?.length)
+    throw new CoworkError("not_joined", "Join the project's complete Workspace set before binding a Cowork task.");
+}
+async function bindCoworkTask(root, sessionId, transport, options = {}) {
+  if (!validCoworkId(sessionId))
+    throw new CoworkError("invalid_task", "Use the confirmed Cowork engine session.id, not an attached folder or display title.");
+  if (transport !== "native" && transport !== "otlp")
+    throw new CoworkError("invalid_transport", "Choose native or otlp explicitly.");
+  const cfg = loadProjectConfig(root);
+  if (!cfg || !captureEnabled(cfg))
+    throw new CoworkError("not_joined", "Connect and join this project's complete Workspace set here before binding a Cowork task.");
+  let transcriptPath;
+  if (transport === "native") {
+    try {
+      transcriptPath = realpathSync5(options.transcriptPath);
+      if (!statSync5(transcriptPath).isFile())
+        throw new Error;
+    } catch {
+      throw new CoworkError("missing_transcript", "Native capture needs the confirmed transcript on this runtime. If Cowork separates the project and transcript, use a local task or the OTLP relay.");
+    }
+  } else if (options.transcriptPath)
+    throw new CoworkError("conflicting_verbs", "An OTLP task does not take a native transcript path.");
+  await verifyCoworkRoutes(cfg);
+  const release = captureLock(root);
+  if (!release)
+    throw new CoworkError("busy", "Project capture is busy; retry the task binding.");
+  try {
+    const connection = coworkConnection(cfg);
+    const latest = loadProjectConfig(root);
+    if (!latest || !captureEnabled(latest) || coworkConnection(latest) !== connection)
+      throw new CoworkError("connection_changed", "The project connection changed; bind a new task after joining it again.");
+    const prior = coworkTaskBinding(root, sessionId);
+    if (prior) {
+      if (prior.transport !== transport || prior.connection !== connection || prior.transcriptPath !== transcriptPath) {
+        throw new CoworkError("task_already_bound", "This task already has a transport and project connection. Start a new task to change either; capture cannot replay through both transports.");
+      }
+      return prior;
+    }
+    const boundAt = options.now ?? new Date().toISOString();
+    if (!Number.isFinite(Date.parse(boundAt)))
+      throw new CoworkError("invalid_time", "The binding time is invalid.");
+    const binding = { sessionId, transport, boundAt, connection, ...transcriptPath ? { transcriptPath } : {} };
+    claimTask(root, binding);
+    if (transcriptPath) {
+      const cursor = new CaptureState(root);
+      const priorCursor = cursor.get(transcriptPath);
+      cursor.set(transcriptPath, { ...priorCursor, offset: statSync5(transcriptPath).size });
+    }
+    ensureAugentaDir(root);
+    writeCoworkState(coworkBindingsPath(root), { version: 1, tasks: [...readBindings(root).filter((x) => x.sessionId !== sessionId), binding] });
+    return binding;
+  } finally {
+    release();
+  }
+}
+function nativeCoworkAllowed(root, sessionId, transcriptPath, requireBinding = nativeCoworkBindingRequired()) {
+  if (!sessionId)
+    return !requireBinding;
+  const binding = coworkTaskBinding(root, sessionId);
+  if (!binding)
+    return !requireBinding && !existsSync7(taskClaimPath(sessionId));
+  if (binding.transport !== "native" || !boundCoworkConfig(root, binding))
+    return false;
+  try {
+    return realpathSync5(transcriptPath) === binding.transcriptPath;
+  } catch {
+    return false;
+  }
+}
+
 // capture/health.ts
 var STAGES = ["dispatch", "capture", "attachments", "delivery"];
 var outcomes = new Set(["started", "captured", "idle", "missing_transcript", "failed", "accepted", "rejected", "retry", "spool_full", "too_large", "skipped"]);
 function read(projectRoot, stage) {
   try {
-    const s = JSON.parse(readFileSync9(join11(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
+    const s = JSON.parse(readFileSync10(join12(projectRoot, ".augenta", "state", `health-${stage}.json`), "utf8"));
     if (!Number.isFinite(Date.parse(s.at)) || !outcomes.has(s.outcome) || !Number.isSafeInteger(s.count) || s.count < 0 || !Number.isSafeInteger(s.successes) || s.successes < 0)
       return;
     return {
@@ -2628,8 +2842,8 @@ function read(projectRoot, stage) {
 }
 function recordHealth(projectRoot, stage, outcome, count = 0) {
   try {
-    const dir = join11(ensureAugentaDir(projectRoot), "state");
-    mkdirSync8(dir, { recursive: true });
+    const dir = join12(ensureAugentaDir(projectRoot), "state");
+    mkdirSync9(dir, { recursive: true });
     const old = read(projectRoot, stage);
     const at = new Date().toISOString();
     const success = outcome === "captured" || outcome === "accepted";
@@ -2640,21 +2854,25 @@ function recordHealth(projectRoot, stage, outcome, count = 0) {
       successes: Math.min(Number.MAX_SAFE_INTEGER, (old?.successes ?? 0) + (success ? 1 : 0)),
       ...success ? { lastSuccessAt: at } : old?.lastSuccessAt ? { lastSuccessAt: old.lastSuccessAt } : {}
     };
-    const file = join11(dir, `health-${stage}.json`);
-    const tmp = `${file}.${randomUUID5()}.tmp`;
-    writeFileSync8(tmp, JSON.stringify(value), { mode: 384 });
-    renameSync6(tmp, file);
+    const file = join12(dir, `health-${stage}.json`);
+    const tmp = `${file}.${randomUUID6()}.tmp`;
+    writeFileSync9(tmp, JSON.stringify(value), { mode: 384 });
+    renameSync7(tmp, file);
   } catch {}
 }
 function captureHealth(projectRoot) {
   const cfg = loadProjectConfig(projectRoot);
   const activity = Object.fromEntries(STAGES.map((stage) => [stage, read(projectRoot, stage) ?? null]));
   const gate = cfg ? captureGate(cfg) : undefined;
+  let taskBound = !nativeCoworkBindingRequired();
+  try {
+    taskBound ||= nativeCoworkProject(process.env.CLAUDE_CODE_SESSION_ID) === realpathSync6(projectRoot);
+  } catch {}
   return {
     configured: !!cfg,
-    enabled: gate === "live",
+    enabled: gate === "live" && taskBound,
     ...gate ? { gate } : {},
-    configuration: cfg ? "valid" : existsSync7(join11(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
+    configuration: cfg ? "valid" : existsSync8(join12(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
     activityScope: "project",
     hostDispatch: "unverified",
     destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg && !cfg.keyTracked ? 1 : 0,
@@ -2662,25 +2880,25 @@ function captureHealth(projectRoot) {
     ...activity,
     hostApproval: "unknown",
     ingestion: "unverified",
-    nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in" : cfg.gatewayMismatch ? cfg.gatewayMismatch.cause === "environment" ? "unset_gateway_override" : "review_config_gateway" : gate === "not_adopted" ? "adopt" : gate === "key_tracked" ? cfg.keyTracked === "tracked" ? "untrack_config" : "make_git_available" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
+    nextStep: !cfg ? "connect" : gate === "killed" ? "capture_disabled" : gate === "signed_out" ? "sign_in" : cfg.gatewayMismatch ? cfg.gatewayMismatch.cause === "environment" ? "unset_gateway_override" : "review_config_gateway" : gate === "not_adopted" ? "adopt" : gate === "key_tracked" ? cfg.keyTracked === "tracked" ? "untrack_config" : "make_git_available" : !taskBound ? "bind_task" : !activity.dispatch ? "check_host_hook_approval_and_activation" : activity.capture?.outcome === "missing_transcript" ? "check_host_transcript_payload" : "complete_a_turn_then_check_activity"
   };
 }
 
 // capture/turn-cursor.ts
-import { join as join12, dirname as dirname6 } from "node:path";
-import { mkdirSync as mkdirSync9, existsSync as existsSync8, readFileSync as readFileSync10, writeFileSync as writeFileSync9, renameSync as renameSync7 } from "node:fs";
+import { join as join13, dirname as dirname7 } from "node:path";
+import { mkdirSync as mkdirSync10, existsSync as existsSync9, readFileSync as readFileSync11, writeFileSync as writeFileSync10, renameSync as renameSync8 } from "node:fs";
 class TurnState {
   path;
   projectRoot;
   constructor(projectRoot) {
     this.projectRoot = projectRoot;
-    this.path = join12(projectRoot, ".augenta", "state", "turn.json");
+    this.path = join13(projectRoot, ".augenta", "state", "turn.json");
   }
   readAll() {
-    if (!existsSync8(this.path))
+    if (!existsSync9(this.path))
       return {};
     try {
-      const parsed = JSON.parse(readFileSync10(this.path, "utf8"));
+      const parsed = JSON.parse(readFileSync11(this.path, "utf8"));
       return parsed && typeof parsed === "object" ? parsed : {};
     } catch {
       return {};
@@ -2688,10 +2906,10 @@ class TurnState {
   }
   writeAll(all) {
     ensureAugentaDir(this.projectRoot);
-    mkdirSync9(dirname6(this.path), { recursive: true });
+    mkdirSync10(dirname7(this.path), { recursive: true });
     const tmp = this.path + ".tmp";
-    writeFileSync9(tmp, JSON.stringify(all));
-    renameSync7(tmp, this.path);
+    writeFileSync10(tmp, JSON.stringify(all));
+    renameSync8(tmp, this.path);
   }
   get(transcriptPath) {
     const v = this.readAll()[transcriptPath];
@@ -2708,14 +2926,14 @@ class TurnState {
 
 // capture/memory.ts
 import {
-  existsSync as existsSync9,
+  existsSync as existsSync10,
   lstatSync as lstatSync3,
-  readFileSync as readFileSync11,
+  readFileSync as readFileSync12,
   readdirSync,
-  statSync as statSync5
+  statSync as statSync6
 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { basename as basename4, dirname as dirname7, extname as extname2, join as join13, relative as relative3, resolve as resolve6 } from "node:path";
+import { homedir as homedir3 } from "node:os";
+import { basename as basename4, dirname as dirname8, extname as extname2, join as join14, relative as relative3, resolve as resolve6 } from "node:path";
 function validEntry(value) {
   const e = value;
   return !!e && (e.source === "claude-code" || e.source === "codex") && typeof e.documentId === "string" && typeof e.sourcePath === "string" && typeof e.title === "string" && typeof e.sourceUpdatedAt === "string" && typeof e.revision === "string" && Number.isInteger(e.chunkCount) && e.chunkCount > 0;
@@ -2733,9 +2951,9 @@ function markdownTitle(text, fallback) {
 function scanClaudeMemory(transcriptPath) {
   if (!transcriptPath)
     return { complete: false, documents: [] };
-  const root = join13(dirname7(transcriptPath), "memory");
+  const root = join14(dirname8(transcriptPath), "memory");
   try {
-    if (!existsSync9(root) || !lstatSync3(root).isDirectory())
+    if (!existsSync10(root) || !lstatSync3(root).isDirectory())
       return { complete: false, documents: [] };
   } catch {
     return { complete: false, documents: [] };
@@ -2757,7 +2975,7 @@ function scanClaudeMemory(transcriptPath) {
       return;
     }
     for (const entry of entries) {
-      const path = join13(dir, entry.name);
+      const path = join14(dir, entry.name);
       if (entry.isSymbolicLink())
         continue;
       if (entry.isDirectory()) {
@@ -2772,7 +2990,7 @@ function scanClaudeMemory(transcriptPath) {
           complete = false;
           continue;
         }
-        const text = readFileSync11(path, "utf8");
+        const text = readFileSync12(path, "utf8");
         const after = lstatSync3(path);
         if (!after.isFile() || !sameSnapshot(before, after)) {
           complete = false;
@@ -2867,18 +3085,18 @@ function codexHomeFromRollout(transcriptPath) {
   return match?.[1];
 }
 function scanCodexMemory(projectRoot, codexHome, transcriptPath) {
-  const root = codexHome ?? process.env.CODEX_HOME ?? codexHomeFromRollout(transcriptPath) ?? join13(homedir2(), ".codex");
-  const path = join13(root, "memories", "MEMORY.md");
+  const root = codexHome ?? process.env.CODEX_HOME ?? codexHomeFromRollout(transcriptPath) ?? join14(homedir3(), ".codex");
+  const path = join14(root, "memories", "MEMORY.md");
   try {
-    if (!existsSync9(path))
+    if (!existsSync10(path))
       return { complete: false, documents: [] };
     const linkBefore = lstatSync3(path);
-    const before = statSync5(path);
+    const before = statSync6(path);
     if (!before.isFile())
       return { complete: false, documents: [] };
-    const text = readFileSync11(path, "utf8");
+    const text = readFileSync12(path, "utf8");
     const linkAfter = lstatSync3(path);
-    const after = statSync5(path);
+    const after = statSync6(path);
     if (!after.isFile() || !sameSnapshot(linkBefore, linkAfter) || !sameSnapshot(before, after))
       return { complete: false, documents: [] };
     const sourceUpdatedAt = after.mtime.toISOString();
@@ -3015,15 +3233,15 @@ function captureAgentMemory(opts) {
 
 // capture/shipper.ts
 import { spawn } from "node:child_process";
-import { existsSync as existsSync10 } from "node:fs";
-import { dirname as dirname8, join as join14 } from "node:path";
+import { existsSync as existsSync11 } from "node:fs";
+import { dirname as dirname9, join as join15 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 function shipperEntry() {
   const self = fileURLToPath2(import.meta.url);
   const ext = self.endsWith(".ts") ? ".ts" : ".mjs";
-  const here = dirname8(self);
-  const sibling = join14(here, `ship${ext}`);
-  return existsSync10(sibling) ? sibling : join14(here, "..", "capture", `ship${ext}`);
+  const here = dirname9(self);
+  const sibling = join15(here, `ship${ext}`);
+  return existsSync11(sibling) ? sibling : join15(here, "..", "capture", `ship${ext}`);
 }
 function spawnShipper(projectRoot) {
   try {
@@ -3071,207 +3289,10 @@ function sniffHarness(line) {
   return;
 }
 
-// capture/cowork-task.ts
-import { createHash as createHash4, randomUUID as randomUUID6 } from "node:crypto";
-import { dirname as dirname9, join as join15 } from "node:path";
-import { existsSync as existsSync11, linkSync, mkdirSync as mkdirSync10, readFileSync as readFileSync12, realpathSync as realpathSync6, renameSync as renameSync8, rmSync as rmSync3, statSync as statSync6, writeFileSync as writeFileSync10 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
-class CoworkError extends Error {
-  code;
-  constructor(code, message) {
-    super(message);
-    this.code = code;
-  }
-}
-function validCoworkId(value) {
-  return typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_.:/-]{0,255}$/.test(value);
-}
-function coworkBindingsPath(root) {
-  return join15(root, ".augenta", "state", "cowork-tasks.json");
-}
-function writeCoworkState(path, value) {
-  mkdirSync10(dirname9(path), { recursive: true, mode: 448 });
-  const temp = `${path}.${randomUUID6()}.tmp`;
-  try {
-    writeFileSync10(temp, JSON.stringify(value), { mode: 384, flag: "wx" });
-    renameSync8(temp, path);
-  } finally {
-    rmSync3(temp, { force: true });
-  }
-}
-function readBindings(root) {
-  try {
-    const value = JSON.parse(readFileSync12(coworkBindingsPath(root), "utf8"));
-    if (value.version !== 1 || !Array.isArray(value.tasks))
-      return [];
-    return value.tasks.filter((x) => x && validCoworkId(x.sessionId) && (x.transport === "native" || x.transport === "otlp") && typeof x.connection === "string" && /^[a-f0-9]{64}$/.test(x.connection) && Number.isFinite(Date.parse(x.boundAt)) && (x.transport !== "native" || typeof x.transcriptPath === "string"));
-  } catch {
-    return [];
-  }
-}
-function coworkTaskBinding(root, sessionId) {
-  try {
-    const claimed = JSON.parse(readFileSync12(taskClaimPath(sessionId), "utf8"));
-    if (claimed.version !== 1 || claimed.projectRoot !== realpathSync6(root))
-      return;
-    const matches = readBindings(root).filter((x) => x.sessionId === sessionId && JSON.stringify(x) === JSON.stringify(claimed.binding));
-    return matches.length === 1 ? matches[0] : undefined;
-  } catch {
-    return;
-  }
-}
-function taskClaimPath(sessionId) {
-  const base = process.env.AUGENTA_AUTH_HOME || join15(homedir3(), ".augenta");
-  return join15(base, "cowork", "tasks", createHash4("sha256").update(sessionId).digest("hex") + ".json");
-}
-function claimTask(root, binding) {
-  const path = taskClaimPath(binding.sessionId);
-  mkdirSync10(dirname9(path), { recursive: true, mode: 448 });
-  const value = { version: 1, projectRoot: realpathSync6(root), binding };
-  const temp = `${path}.${randomUUID6()}.tmp`;
-  try {
-    writeFileSync10(temp, JSON.stringify(value), { mode: 384, flag: "wx" });
-    try {
-      linkSync(temp, path);
-    } catch (error) {
-      if (error.code !== "EEXIST")
-        throw error;
-      const prior = JSON.parse(readFileSync12(path, "utf8"));
-      if (prior.projectRoot !== value.projectRoot || prior.binding?.transport !== binding.transport || prior.binding?.connection !== binding.connection || prior.binding?.transcriptPath !== binding.transcriptPath) {
-        throw new CoworkError("task_already_bound", "This task is already bound to a project and transport. Start a new task to change either.");
-      }
-      binding.boundAt = prior.binding.boundAt;
-    }
-  } finally {
-    rmSync3(temp, { force: true });
-  }
-}
-function coworkConnection(cfg) {
-  return createHash4("sha256").update(JSON.stringify({
-    authMode: cfg.authMode,
-    profileId: cfg.profileId,
-    userId: cfg.profileId ? storedProfileUserId(cfg.profileId) : undefined,
-    projectKey: cfg.projectKey,
-    captureSince: cfg.captureSince,
-    gateway: gatewayBase(cfg),
-    ingestUrl: cfg.ingestUrl,
-    destinations: cfg.destinations,
-    apiKey: cfg.apiKey
-  })).digest("hex");
-}
-function boundCoworkConfig(root, binding) {
-  const cfg = loadProjectConfig(root);
-  return cfg && captureEnabled(cfg) && coworkConnection(cfg) === binding.connection ? cfg : undefined;
-}
-async function verifyCoworkRoutes(cfg) {
-  const gateway = gatewayBase(cfg);
-  if (cfg.authMode === "oauth")
-    assertSignInTarget(cfg.profileId, gateway);
-  const token = cfg.authMode === "oauth" ? await accessTokenForProfile(cfg.profileId) : cfg.apiKey;
-  const headers = { authorization: cfg.authMode === "oauth" ? `Bearer ${token}` : `AugentaKey ${token}` };
-  const get = async (path) => {
-    let response;
-    try {
-      response = await fetch(`${gateway.replace(/\/+$/, "")}${path}`, { headers, signal: AbortSignal.timeout(5000) });
-    } catch {
-      throw new CoworkError("connector_unavailable", "Cannot verify the project's Connectors; no Cowork content was queued.");
-    }
-    if (!response.ok)
-      throw new CoworkError("connector_unavailable", `A selected Connector could not be verified (${response.status}); no Cowork content was queued.`);
-    try {
-      return await response.json();
-    } catch {
-      throw new CoworkError("connector_unavailable", "The Connector check returned an invalid answer; no Cowork content was queued.");
-    }
-  };
-  if (cfg.authMode === "api-key") {
-    const assigned = (await get("/v1/connectors")).connectors;
-    if (!Array.isArray(assigned) || assigned.length !== 1 || assigned[0]?.status !== "active" || !["inbound", "bidirectional"].includes(assigned[0]?.direction) || !validCoworkId(assigned[0]?.id) || !validCoworkId(assigned[0]?.workspaceId) || !validCoworkId(assigned[0]?.orgId) || cfg.destinations?.length && (cfg.destinations.length !== 1 || cfg.destinations[0].connectorId !== assigned[0].id || cfg.destinations[0].workspaceId !== assigned[0].workspaceId)) {
-      throw new CoworkError("connector_unavailable", "The platform key must have exactly one active inbound Connector with the recorded assignment.");
-    }
-    return;
-  }
-  const owner = storedProfileUserId(cfg.profileId);
-  for (const destination of cfg.destinations ?? []) {
-    const connector = (await get(`/v1/connectors/${encodeURIComponent(destination.connectorId)}`)).connector;
-    if (!connector || connector.id !== destination.connectorId || connector.workspaceId !== destination.workspaceId || connector.ownerUserId !== owner || connector.status !== "active" || !["inbound", "bidirectional"].includes(connector.direction)) {
-      throw new CoworkError("connector_unavailable", "Every selected Workspace needs this person's own active inbound Connector; no Cowork content was queued.");
-    }
-  }
-  if (!cfg.destinations?.length)
-    throw new CoworkError("not_joined", "Join the project's complete Workspace set before binding a Cowork task.");
-}
-async function bindCoworkTask(root, sessionId, transport, options = {}) {
-  if (!validCoworkId(sessionId))
-    throw new CoworkError("invalid_task", "Use the confirmed Cowork engine session.id, not an attached folder or display title.");
-  if (transport !== "native" && transport !== "otlp")
-    throw new CoworkError("invalid_transport", "Choose native or otlp explicitly.");
-  const cfg = loadProjectConfig(root);
-  if (!cfg || !captureEnabled(cfg))
-    throw new CoworkError("not_joined", "Connect and join this project's complete Workspace set here before binding a Cowork task.");
-  let transcriptPath;
-  if (transport === "native") {
-    try {
-      transcriptPath = realpathSync6(options.transcriptPath);
-      if (!statSync6(transcriptPath).isFile())
-        throw new Error;
-    } catch {
-      throw new CoworkError("missing_transcript", "Native capture needs the confirmed transcript on this runtime. If Cowork separates the project and transcript, use a local task or the OTLP relay.");
-    }
-  } else if (options.transcriptPath)
-    throw new CoworkError("conflicting_verbs", "An OTLP task does not take a native transcript path.");
-  await verifyCoworkRoutes(cfg);
-  const release = captureLock(root);
-  if (!release)
-    throw new CoworkError("busy", "Project capture is busy; retry the task binding.");
-  try {
-    const connection = coworkConnection(cfg);
-    const latest = loadProjectConfig(root);
-    if (!latest || !captureEnabled(latest) || coworkConnection(latest) !== connection)
-      throw new CoworkError("connection_changed", "The project connection changed; bind a new task after joining it again.");
-    const prior = coworkTaskBinding(root, sessionId);
-    if (prior) {
-      if (prior.transport !== transport || prior.connection !== connection || prior.transcriptPath !== transcriptPath) {
-        throw new CoworkError("task_already_bound", "This task already has a transport and project connection. Start a new task to change either; capture cannot replay through both transports.");
-      }
-      return prior;
-    }
-    const boundAt = options.now ?? new Date().toISOString();
-    if (!Number.isFinite(Date.parse(boundAt)))
-      throw new CoworkError("invalid_time", "The binding time is invalid.");
-    const binding = { sessionId, transport, boundAt, connection, ...transcriptPath ? { transcriptPath } : {} };
-    claimTask(root, binding);
-    if (transcriptPath) {
-      const cursor = new CaptureState(root);
-      const priorCursor = cursor.get(transcriptPath);
-      cursor.set(transcriptPath, { ...priorCursor, offset: statSync6(transcriptPath).size });
-    }
-    ensureAugentaDir(root);
-    writeCoworkState(coworkBindingsPath(root), { version: 1, tasks: [...readBindings(root).filter((x) => x.sessionId !== sessionId), binding] });
-    return binding;
-  } finally {
-    release();
-  }
-}
-function nativeCoworkAllowed(root, sessionId, transcriptPath, requireBinding = process.env.AUGENTA_COWORK_NATIVE === "1") {
-  if (!sessionId)
-    return !requireBinding;
-  const binding = coworkTaskBinding(root, sessionId);
-  if (!binding)
-    return !requireBinding && !existsSync11(taskClaimPath(sessionId));
-  if (binding.transport !== "native" || !boundCoworkConfig(root, binding))
-    return false;
-  try {
-    return realpathSync6(transcriptPath) === binding.transcriptPath;
-  } catch {
-    return false;
-  }
-}
-
 // capture/cowork-command.ts
 import { createHash as createHash6, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
-import { realpathSync as realpathSync7 } from "node:fs";
+import { realpathSync as realpathSync8 } from "node:fs";
 
 // capture/cowork-otlp.ts
 import { createHash as createHash5 } from "node:crypto";
@@ -3535,7 +3556,7 @@ function parseCoworkCommand(argv) {
       if (!argv[i + 1] || argv[i + 1].startsWith("--"))
         throw new CoworkError("project_required", "Every --project requires an explicit connected project directory.");
       try {
-        projects.push(realpathSync7(argv[++i]));
+        projects.push(realpathSync8(argv[++i]));
       } catch {
         throw new CoworkError("project_required", "The project directory is unavailable on this runtime.");
       }
@@ -3894,7 +3915,7 @@ function captureUnderLock(payload, opts = {}) {
   return finish(events.length);
 }
 function runCapture(payload, opts = {}) {
-  const root = opts.projectRoot ?? resolveProjectRoot(payload.cwd);
+  const root = opts.projectRoot ?? (nativeCoworkBindingRequired() ? nativeCoworkProject(payload.session_id) : resolveProjectRoot(payload.cwd));
   if (!root)
     return { appended: 0, flushed: false };
   if (!nativeCoworkAllowed(root, payload.session_id, payload.transcript_path))
@@ -3914,7 +3935,7 @@ function runCapture(payload, opts = {}) {
         return { appended: 0, flushed: false };
       }
     }
-    return captureUnderLock(payload, opts);
+    return captureUnderLock(payload, { ...opts, projectRoot: root });
   } finally {
     release();
   }
@@ -3938,7 +3959,8 @@ if (isMain(import.meta.url)) {
   } else {
     try {
       const payload = JSON.parse(await readStdin());
-      const cfg = projectConfig(payload.cwd);
+      const root = nativeCoworkBindingRequired() ? nativeCoworkProject(payload.session_id) : undefined;
+      const cfg = nativeCoworkBindingRequired() ? root ? loadProjectConfig(root) : undefined : projectConfig(payload.cwd);
       if (cfg && captureEnabled(cfg)) {
         recordHealth(cfg.projectRoot, "dispatch", "started");
         if (cfg.authMode === "api-key")
