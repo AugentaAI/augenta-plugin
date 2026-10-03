@@ -50,6 +50,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { isCodexHarness } from "./harness";
 import { ephemeralProject } from "../capture/environment";
+import { nativeCoworkAllowed, nativeCoworkBindingRequired, nativeCoworkProject } from "../capture/cowork-task";
 import { captureEnabled, captureGate, configPath, controlUrl, describeGatewayMismatch, loadProjectConfig, resolveProjectRoot } from "../capture/config";
 import { environmentLabel } from "../capture/platform";
 import { Outbox } from "../capture/outbox";
@@ -63,10 +64,12 @@ import { readStdin } from "../runtime/node";
 // consume stdin either way so the process doesn't hang.
 let transcriptPath: string | undefined;
 let cwd: string | undefined;
+let sessionId: string | undefined;
 try {
-  const payload = JSON.parse(await readStdin()) as { transcript_path?: unknown; cwd?: unknown };
+  const payload = JSON.parse(await readStdin()) as { transcript_path?: unknown; cwd?: unknown; session_id?: unknown };
   if (typeof payload.transcript_path === "string") transcriptPath = payload.transcript_path;
   if (typeof payload.cwd === "string") cwd = payload.cwd;
+  if (typeof payload.session_id === "string") sessionId = payload.session_id;
 } catch {
   /* no / non-JSON stdin — fine */
 }
@@ -131,7 +134,7 @@ function staleConfigDigest(): string {
 }
 
 // --- Connected? An ancestor has a .augenta/config.json the parser ACCEPTS. ----
-const configuredRoot = resolveProjectRoot(projectPath);
+const configuredRoot = (nativeCoworkBindingRequired() ? nativeCoworkProject(sessionId) : undefined) ?? resolveProjectRoot(projectPath);
 const cfg = configuredRoot ? loadProjectConfig(configuredRoot) : undefined;
 /** A config file exists, but this plugin version cannot read it. */
 const staleConfig = Boolean(configuredRoot) && !cfg;
@@ -143,6 +146,13 @@ if (connectedRoot) {
   // noise. Leaving the marker unread also keeps it — it surfaces on the first
   // session after capture is re-enabled, which is when it becomes actionable.
   if (captureEnabled(cfg)) {
+    if (nativeCoworkBindingRequired() && !nativeCoworkAllowed(connectedRoot, sessionId, transcriptPath)) {
+      if (firstTime(`bind-task:${connectedRoot}:${sessionId ?? "unknown"}`)) {
+        process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext:
+          `Augenta's project connection is present, but this cloud task is not bound to it. Capture and automatic recall are off. Run ${connectAction} here to confirm the Workspaces and bind this task.` } }));
+      }
+      process.exit(0);
+    }
     recordHealth(connectedRoot, "dispatch", "started");
     const action = connectAction;
     const notices: string[] = [];
@@ -314,10 +324,6 @@ if (connectedRoot) {
 // config unreadable again must still say so rather than turn capture off in silence.
 const markerKey = staleConfig ? `reconnect:${projectPath}:${staleConfigDigest()}` : projectPath;
 if (!staleConfig && readMarkers(legacyMarkerPath)[projectPath]) process.exit(0);
-// A throwaway session outside any checkout cannot keep a connection (connect
-// refuses it), and its home, where this marker lives, is new every time: the
-// prompt could never succeed and would come back every session.
-if (ephemeralProject(projectPath)) process.exit(0);
 if (!firstTime(markerKey)) process.exit(0);
 
 // Codex may show additionalContext verbatim, so its wording stays clean and
@@ -342,7 +348,8 @@ const claudeContext = staleConfig
     "verbs itself so the user only answers one question and, at most, clicks one " +
     "sign-in link. Tokens and API keys must never be pasted into the chat.";
 
-const additionalContext = codex ? codexContext : claudeContext;
+const additionalContext = (codex ? codexContext : claudeContext) + (ephemeralProject(projectPath)
+  ? " This is a temporary cloud project: its sign-in, connection and unshipped records disappear when the task's container is discarded. Connect names this project and asks which Workspaces it should feed." : "");
 
 // The same two fields on both harnesses: Codex rejects any other SessionStart
 // key, and Claude Code's initialUserMessage is -p only (see the header).

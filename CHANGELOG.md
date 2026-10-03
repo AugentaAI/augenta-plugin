@@ -12,6 +12,28 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.16.0] — 2026-10-03
+
+No reconnect is required for local projects. Each fresh cloud task signs in and
+confirms its Workspaces; a temporary project connection lasts only for that task.
+
+### Changed
+
+- **Connect a temporary cloud project.** Connect no longer refuses a cloud
+  container's non-Git project. It names the temporary project, explains that its
+  sign-in, connection and unshipped records disappear when the container ends,
+  and requires an explicit project path with the Workspace selection.
+- **Bind the native cloud task after consent.** Connect uses the engine session
+  and a confirmed readable transcript to bind subsequent capture to this
+  project's selected Workspaces. Hooks use that binding even when their working
+  directory differs from the project. Unbound tasks and mismatched transcripts
+  stay silent; automatic recall also stays off. A failed binding is reported
+  separately from the saved project connection, and health names the next step.
+- **Cloud onboarding and network setup.** Temporary projects receive the normal
+  connect prompt. The skill handles the cloud's synced plugin location and the
+  README shows where an organization owner adds all three required hosts to the
+  allowlist. Start a fresh task after changing the setting.
+
 ## [0.15.0] — 2026-10-01
 
 No reconnect is required.
@@ -623,6 +645,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.16.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.13.0...v0.13.1

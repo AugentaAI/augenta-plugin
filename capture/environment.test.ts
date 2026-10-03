@@ -56,7 +56,7 @@ describe("a folder a connection could outlast the session in", () => {
     expect(insideGitCheckout(join(dir, "worktree"))).toBe(true);
   });
 
-  test("only a throwaway session outside any checkout is refused", () => {
+  test("only a throwaway session outside a checkout has a temporary project", () => {
     const cloud = { CLAUDE_CODE_REMOTE: "true" };
     expect(ephemeralProject(dir, cloud)).toBe(true);
     expect(ephemeralProject(dir, {})).toBe(false);

@@ -32,7 +32,8 @@ import { readLinks, writeLinks } from "../capture/links";
 import { displayOrigin, sameOrigin } from "../capture/url";
 import { ephemeralProject, sessionEnvironment } from "../capture/environment";
 import { classifyNetworkError, diagnoseHosts, type HostCheck } from "../capture/network";
-import { bindCoworkTask, CoworkError, type CoworkTransport } from "../capture/cowork-task";
+import { bindCoworkTask, CoworkError, nativeCoworkBindingRequired, nativeCoworkProject, type CoworkTransport } from "../capture/cowork-task";
+import { bindCurrentClaudeCloudTask, claudeCloud } from "../capture/claude-cloud";
 import {
   DEFAULT_CONTROL_URL,
   DEFAULT_GATEWAY,
@@ -1301,18 +1302,16 @@ async function linkWorkspaces(
   return results;
 }
 
-function ephemeralProjectMessage(projectRoot: string): string {
-  const session = sessionEnvironment();
-  return `this session's machine is discarded when the session ends (${session.signals.join(", ")}), and ` +
-    `${projectRoot} is not inside a Git checkout, so a connection written here could not outlast it; ` +
-    "connect from a local session instead (in Cowork, a local session with the project folder attached)";
-}
-
 export async function connectProject(
   projectRoot: string,
   args: Args,
 ): Promise<void> {
-  if (ephemeralProject(projectRoot)) throw new Error(ephemeralProjectMessage(projectRoot));
+  if (sessionEnvironment().ephemeral) {
+    console.log("This session's machine is discarded at the end; its sign-in and unshipped records last only for this session.");
+  }
+  if (ephemeralProject(projectRoot)) {
+    console.log(`This temporary project is ${projectRoot}. Its sign-in, connection and unshipped records disappear when this session's container is discarded. A new session must sign in and choose its Workspaces again.`);
+  }
   const { oauth, gateway, control, discovered, discoveredGateway } = await resolveOAuth(args, projectRoot);
   const prior = priorConnection(projectRoot);
   const environment = environmentLabel(control);
@@ -1413,6 +1412,10 @@ export async function connectProject(
     }
     console.log("Eligible documents observed after this checkout's consent go to every selected Workspace. PDF bytes and raw transcripts are not secret-scrubbed. Images remain placeholders.");
     console.log(`Automatic recall is ${autoRecall ? "on" : "off"} for this project.`);
+    const nativeCapture = await bindCurrentClaudeCloudTask(projectRoot);
+    if (nativeCapture) console.log(nativeCapture.status === "bound"
+      ? "This cloud task is bound for native capture; only subsequent activity is eligible."
+      : `Cloud capture is off: ${nativeCapture.message}`);
   } else {
     console.log("No destination could be linked. No config was written.");
   }
@@ -1947,6 +1950,13 @@ export async function runJsonVerb(
   resolved: ResolvedProject,
   args: Args,
 ): Promise<JsonPayload> {
+  // A probe/sign-in is allowed before the destination question. The answer
+  // connects the named project, never an implicitly inferred scratch folder.
+  if (ephemeralProject(resolved.projectRoot) && !args.project &&
+      (args.workspaces !== undefined || args.adopt || args.createWorkspace !== undefined)) {
+    return { status: "error", code: "project_required", projectRoot: resolved.projectRoot,
+      message: "Name this temporary cloud project with --project and disclose that its sign-in, connection and unshipped records last only for this session before asking for Workspaces. Nothing was changed." };
+  }
   if ((args.coworkTask || args.coworkTransport || args.coworkTranscript) && !args.project) {
     return { status: "error", code: "project_required", message: "Task binding requires an explicit --project directory; attached paths and the current directory do not choose its route." };
   }
@@ -1957,7 +1967,9 @@ export async function runJsonVerb(
     ...(args.probe && cfg ? { current: savedConnection(cfg) } : {}),
     // Always on a probe: a sign-in made in a throwaway session lasts only as
     // long as that session, and the user should hear it before signing in.
-    ...(args.probe ? { session: sessionEnvironment() } : {}),
+    ...((args.probe || ephemeralProject(resolved.projectRoot)) ? {
+      session: { ...sessionEnvironment(), temporaryProject: ephemeralProject(resolved.projectRoot) },
+    } : {}),
   };
   // Stated before any sign-in, like a non-production environment: this run
   // signs in for, and sends to, that gateway instead of discovery's. Known only
@@ -1966,7 +1978,11 @@ export async function runJsonVerb(
   // which gateway was being reached.
   const disclosures: Disclosures = {};
   try {
-    return { ...(await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot, disclosures })), ...metadata, ...disclosures };
+    const payload = await dispatchJsonVerb(resolved, { ...args, project: resolved.projectRoot, disclosures });
+    const nativeCapture = claudeCloud() && ["connected", "partially_connected", "adopted"].includes(payload.status)
+      ? await bindCurrentClaudeCloudTask(resolved.projectRoot) : undefined;
+    return { ...payload, ...metadata, ...disclosures,
+      ...(nativeCapture ? { nativeCapture, captureHealth: captureHealth(resolved.projectRoot) } : {}) };
   } catch (error) {
     if (error instanceof CoworkError) return { status: "error", code: error.code, message: error.message, ...metadata, ...disclosures };
     if (error instanceof GatewayOverrideError) {
@@ -2283,18 +2299,6 @@ async function dispatchJsonVerb(
         "--create-workspace and --workspace are separate steps; create first, then ask for the complete destination set again and pass it with --workspace",
     };
   }
-  // A throwaway machine with no checkout to carry the config: refuse before any
-  // sign-in starts or any link is made, rather than write a config no later
-  // session will ever read (and leave Connectors behind for it).
-  if ((args.probe || args.login || args.awaitLogin || args.createWorkspace !== undefined || args.workspaces?.length || args.adopt) && ephemeralProject(resolved.projectRoot)) {
-    const session = sessionEnvironment();
-    return {
-      status: "error",
-      code: "ephemeral_project",
-      session,
-      message: ephemeralProjectMessage(resolved.projectRoot),
-    };
-  }
   // Joining uses the recorded connection exactly as it is, so nothing that
   // would choose, create or re-point anything may ride along with it.
   if (args.adopt) {
@@ -2502,7 +2506,8 @@ if (isMain(import.meta.url)) {
         "--create-workspace is a --json verb; the interactive flow offers Create a new Workspace in its menu",
       );
     }
-    const resolved = resolveProject(args, process.cwd());
+    const boundRoot = !args.project && nativeCoworkBindingRequired() ? nativeCoworkProject(process.env.CLAUDE_CODE_SESSION_ID) : undefined;
+    const resolved = resolveProject({ ...args, ...(boundRoot ? { project: boundRoot } : {}) }, process.cwd());
     const projectRoot = resolved.projectRoot;
     if (args.json) {
       const payload = await runJsonVerb(resolved, args);

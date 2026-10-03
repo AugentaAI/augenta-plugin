@@ -94,7 +94,7 @@ const CONNECT = join(import.meta.dir, "connect.ts");
 const realFetch = globalThis.fetch;
 
 let project: string;
-const URL_ENV_KEYS = ["AUGENTA_CONTROL_URL", "AUGENTA_API_URL", "AUGENTA_INGEST_URL", "AUGENTA_EPHEMERAL"] as const;
+const URL_ENV_KEYS = ["AUGENTA_CONTROL_URL", "AUGENTA_API_URL", "AUGENTA_INGEST_URL", "AUGENTA_EPHEMERAL", "CLAUDE_CODE_REMOTE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR"] as const;
 let savedUrlEnv: Record<string, string | undefined>;
 beforeEach(() => {
   project = realpathSync(mkdtempSync(join(tmpdir(), "aug-connect-")));
@@ -2536,22 +2536,40 @@ describe("JSON verbs", () => {
       .toMatchObject({ status: "error", code: "failed", message: expect.stringContaining("connection was cut") });
   });
 
-  test("a throwaway session outside any checkout is refused before anything is asked or sent", async () => {
+  test("a temporary cloud project can probe but its mutation requires the named project", async () => {
     process.env.AUGENTA_EPHEMERAL = "1";
     route();
-    for (const extra of [{ probe: true }, { login: true }, { awaitLogin: true }, { createWorkspace: "Scratch" }, { workspaces: ["ws-default"] }, { adopt: true }]) {
+    expect(await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true }))
+      .toMatchObject({ status: "need_login", session: { ephemeral: true, temporaryProject: true } });
+    requests.length = 0;
+    for (const extra of [{ createWorkspace: "Scratch" }, { workspaces: ["ws-default"] }, { adopt: true }]) {
       expect(await runJsonVerb({ projectRoot: project }, { ...baseArgs, ...extra }))
-        .toMatchObject({ status: "error", code: "ephemeral_project", session: { ephemeral: true, kind: "declared" } });
+        .toMatchObject({ status: "error", code: "project_required" });
     }
     expect(requests).toEqual([]);
-    await expect(connectProject(project, { controlUrl: CONTROL })).rejects.toThrow("connect from a local session");
-    expect(requests).toEqual([]);
     expect(() => statSync(join(project, ".augenta"))).toThrow();
+  });
 
-    // The same session in a Git checkout keeps its config through the repo.
-    execFileSync("git", ["init", "-q"], { cwd: project });
-    const payload = await runJsonVerb({ projectRoot: project }, { ...baseArgs, probe: true });
-    expect(payload).toMatchObject({ status: "need_login", session: { ephemeral: true } });
+  test("explicit temporary project selection preserves the complete chosen Workspace set", async () => {
+    process.env.AUGENTA_EPHEMERAL = "1";
+    await signIn();
+    route();
+    const output = await runJsonVerb({ projectRoot: project }, {
+      ...baseArgs, project, workspaces: ["ws-default", "ws-scratch"], autoRecall: false,
+    });
+    expect(output).toMatchObject({ status: "connected", session: { temporaryProject: true } });
+    expect(loadProjectConfig(project)?.destinations?.map(d => d.workspaceId)).toEqual(["ws-default", "ws-scratch"]);
+    expect(readLinks(project)?.userId).toBe(TEST_USER_ID);
+    expect(JSON.stringify(output)).not.toMatch(/access-test|refresh-test|accessToken|refreshToken/);
+  });
+
+  test("cloud connection reports a binding failure separately from the saved connection", async () => {
+    process.env.AUGENTA_EPHEMERAL = "1";
+    process.env.CLAUDE_CODE_REMOTE = "true";
+    await signIn(); route();
+    const output = await runJsonVerb({ projectRoot: project }, { ...baseArgs, project, workspaces: ["ws-default"], autoRecall: false });
+    expect(output).toMatchObject({ status: "connected", nativeCapture: { status: "error", code: "missing_transcript" }, captureHealth: { enabled: false, nextStep: "bind_task" } });
+    expect(loadProjectConfig(project)?.join).toBe("joined");
   });
 
   test("an API-key project or no project has nothing to join", async () => {

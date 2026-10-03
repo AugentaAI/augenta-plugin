@@ -261,7 +261,7 @@ in and joins it.
 | Where | Does Augenta run there? |
 | --- | --- |
 | Claude Code in the cloud (claude.ai/code) | No. Cloud sessions don't install plugins that your repository or your own settings turn on. The only route is your organization's server-managed settings, set by a Team or Enterprise Owner, and Augenta hasn't been tested that way. |
-| Cowork in the cloud | Not yet. Augenta 0.15.0 loads and its Stop hook runs in the cloud container, but connect refuses temporary non-Git folders such as `/home/claude`, and an attached folder on a separate device is not the cloud project. Real Experience delivery and recall remain unverified. Use a local Cowork session instead. On Team and Enterprise plans an Owner controls this in Organization settings → Cowork → "Run Cowork in the cloud". From October 6, 2026, new Pro and Max Cowork tasks run only in the cloud. |
+| Cowork in the cloud | Connect supports a named temporary project inside the cloud container and binds its native engine session and readable transcript. Sign-in, temporary config and unshipped records disappear at task end; each new task connects again. A folder on a separate device is a different runtime. Completed-turn Experience delivery and recall still require the live acceptance check. |
 | Codex cloud | Untested. Internet access is off by default; turn it on and allow the hosts below. |
 
 Experimental Cowork capture commands are available for a controlled

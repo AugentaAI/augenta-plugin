@@ -21,7 +21,7 @@
 import { recordHealth } from "../capture/health";
 import { TurnState } from "../capture/turn-cursor";
 import { projectConfig, captureEnabled } from "../capture/config";
-import { nativeCoworkAllowed } from "../capture/cowork-task";
+import { nativeCoworkAllowed, nativeCoworkBindingRequired, nativeCoworkProject } from "../capture/cowork-task";
 import { readStdin } from "../runtime/node";
 import { AUTO_RECALL_BUDGET_MS, runAutoRecall } from "./auto-recall";
 
@@ -51,6 +51,11 @@ try {
 
 // Best-effort turn bookkeeping — never block the prompt over it.
 try {
+  if (nativeCoworkBindingRequired()) {
+    const root = nativeCoworkProject(sessionId);
+    if (!root || !nativeCoworkAllowed(root, sessionId, transcriptPath)) process.exit(0);
+    cwd = root;
+  }
   const cfg = projectConfig(cwd);
   if (cfg && !nativeCoworkAllowed(cfg.projectRoot, sessionId, transcriptPath)) process.exit(0);
   if (transcriptPath && cfg && captureEnabled(cfg)) {
