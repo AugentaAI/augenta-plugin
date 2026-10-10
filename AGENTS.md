@@ -27,6 +27,21 @@ Also run `claude --plugin-dir . plugin details augenta` and verify it reports
 the manifest version, both skills (`connect` and `recall`), every event in
 `hooks/hooks.json` (currently eight), and no load errors.
 
+CI runs the strict validation in `install-smoke`, against the newest Claude CLI
+nightly, because a CLI release can add a check this repository has never seen.
+
+This file reaches Claude Code through `.claude/CLAUDE.md` (`@../AGENTS.md`), not
+a root `CLAUDE.md`. The repository root is the plugin root, and strict validation
+rejects a `CLAUDE.md` or `CLAUDE.local.md` there because a plugin cannot ship
+context that way. The check has no opt-out. Claude Code loads `.claude/CLAUDE.md`
+as project memory just as it loads a root one, and a contract test keeps the root
+free of a `CLAUDE.md`. Keep the import even though Claude Code 2.1.296 also loads
+`AGENTS.md` by itself when a project has no `CLAUDE.md`. That fallback is
+feature-flagged, any user can turn it off with the `instructionFiles` setting,
+and older CLIs lack it. A personal `CLAUDE.local.md` is gitignored, but the
+validator reads the disk, so move it aside before running the gate, or keep
+those notes in `~/.claude/CLAUDE.md`.
+
 Codex trust-pins each hook by content hash in `~/.codex/config.toml`
 (`[hooks.state]`), so **any** edit to `hooks/hooks.json` re-prompts every Codex
 user for trust. Batch hook changes into a single deliberate release; never ship

@@ -181,6 +181,10 @@ jobs:
           # NAME masks a second skill that never loaded. Both come from the tree.
           skill_count="$(find skills -name SKILL.md | wc -l | tr -d ' ')"
           skill_names="$(find skills -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)"
+          # AGENTS.md's release gate, here because this job runs the newest CLI
+          # nightly: 2.1.296 began failing a root CLAUDE.md under --strict, and
+          # nothing noticed until a release gate was run by hand.
+          claude plugin validate . --strict
           claude plugin marketplace add ./
           claude plugin install augenta@augenta
           claude plugin details augenta@augenta | tee claude-plugin-details.txt

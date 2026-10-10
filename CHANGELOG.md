@@ -12,6 +12,21 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.16.1] — 2026-10-10
+
+Nothing changes for a connected project. No reconnect or renewed hook approval
+is required.
+
+### Changed
+
+- **Contributor instructions moved out of the plugin root.** The repository's
+  `CLAUDE.md` only pointed Claude Code at `AGENTS.md`. It now lives at
+  `.claude/CLAUDE.md`, because Claude Code 2.1.296 fails strict plugin
+  validation on a `CLAUDE.md` at a plugin's root. Neither harness reads either
+  file from an installed plugin, so capture, recall and the hooks behave exactly
+  as in 0.16.0. This release exists so each version names one exact set of
+  installed files.
+
 ## [0.16.0] — 2026-10-03
 
 No reconnect is required for local projects. Each fresh cloud task signs in and
@@ -645,6 +660,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.16.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.13.1...v0.14.0
