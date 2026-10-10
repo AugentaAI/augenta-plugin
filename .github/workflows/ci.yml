@@ -181,10 +181,6 @@ jobs:
           # NAME masks a second skill that never loaded. Both come from the tree.
           skill_count="$(find skills -name SKILL.md | wc -l | tr -d ' ')"
           skill_names="$(find skills -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)"
-          # AGENTS.md's release gate, here because this job runs the newest CLI
-          # nightly: 2.1.296 began failing a root CLAUDE.md under --strict, and
-          # nothing noticed until a release gate was run by hand.
-          claude plugin validate . --strict
           claude plugin marketplace add ./
           claude plugin install augenta@augenta
           claude plugin details augenta@augenta | tee claude-plugin-details.txt
@@ -365,3 +361,30 @@ jobs:
             | node "$codex_plugin_root/dist/hooks/user-prompt.mjs" > codex-prompt-out.txt
           test ! -s codex-prompt-out.txt
           test ! -d "$codex_project/.augenta"
+
+      # AGENTS.md's release gate, here because this job runs the newest CLI: 2.1.296
+      # began failing a root CLAUDE.md under --strict, and nothing noticed until the
+      # gate was run by hand. It is the job's LAST step, so a strict finding never
+      # hides whether the plugin installs and its hooks run.
+      #
+      # On a pull request, a strict finding fails only when the base branch passes
+      # under the same CLI, because only then did this PR introduce it. When the base
+      # fails too, the finding arrived with a CLI release: it is reported without
+      # blocking unrelated work, and the nightly and `main` runs stay red until it is
+      # fixed on its own. Errors fail everywhere.
+      - name: Validate the Claude package
+        run: |
+          if claude plugin validate . --strict; then
+            exit 0
+          fi
+          if [[ "$GITHUB_EVENT_NAME" != "pull_request" ]]; then
+            exit 1
+          fi
+          claude plugin validate .
+          git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF"
+          git worktree add --detach "$RUNNER_TEMP/base" FETCH_HEAD
+          if claude plugin validate "$RUNNER_TEMP/base" --strict; then
+            echo "This pull request introduced the strict validation finding above."
+            exit 1
+          fi
+          echo "::warning::Strict validation fails on $GITHUB_BASE_REF too under this Claude CLI, so this pull request did not cause it. The nightly run stays red until it is fixed."

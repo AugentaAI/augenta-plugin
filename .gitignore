@@ -7,8 +7,9 @@ node_modules/
 .codex/
 
 # Claude Code's local worktree checkouts. `.claude/` itself IS tracked (it holds the
-# repo's dev skills), so this has to be scoped to the one subdirectory that is
-# machine-local — otherwise every contributor's worktrees show up as untracked noise.
+# repo's dev skills and the CLAUDE.md that loads AGENTS.md into every contributor's
+# session), so this has to be scoped to the one subdirectory that is machine-local —
+# otherwise every contributor's worktrees show up as untracked noise.
 .claude/worktrees/
 
 # Claude Code's personal per-project memory — never source. Ignoring it is not

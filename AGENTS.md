@@ -27,8 +27,14 @@ Also run `claude --plugin-dir . plugin details augenta` and verify it reports
 the manifest version, both skills (`connect` and `recall`), every event in
 `hooks/hooks.json` (currently eight), and no load errors.
 
-CI runs the strict validation in `install-smoke`, against the newest Claude CLI
-nightly, because a CLI release can add a check this repository has never seen.
+CI runs the strict validation as the last step of `install-smoke`, on every pull
+request, push to `main` and nightly run, against the newest Claude CLI, because
+a CLI release can add a check this repository has never seen. A pull request
+fails a strict finding only when its base branch passes strict under the same
+CLI, because only then did the pull request introduce it. While the base fails
+too, the finding came with a CLI release: pull requests report it as a warning
+instead of blocking unrelated work, and the `main` and nightly runs stay red
+until it is fixed.
 
 This file reaches Claude Code through `.claude/CLAUDE.md` (`@../AGENTS.md`), not
 a root `CLAUDE.md`. The repository root is the plugin root, and strict validation
@@ -246,6 +252,11 @@ change that leaves the version alone may never reach an existing install, while
 new installs get it under the old number — which is how the user-facing changes
 from #40–#45 all shipped as 0.10.2 before 0.11.0. A contract test fails an
 `[Unreleased]` heading, and a newest heading that is not the release version.
+
+Once the release merges, tag its commit on `main` as `vX.Y.Z` and push the tag.
+Each CHANGELOG version links to a GitHub compare between two of those tags, and
+nothing creates them automatically. Tagging lapsed after `v0.10.2`, which left
+every later link a 404.
 
 **Do not cite private-repo issues or PRs in commit messages or PR
 descriptions.** This repository is public and its commit log is part of what
