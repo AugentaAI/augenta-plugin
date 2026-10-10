@@ -341,6 +341,11 @@ change instead.
 `recall`), every event in `hooks/hooks.json`, and no load errors. It cannot catch an over-declared
 hook timeout — only a real Codex install can. See `AGENTS.md`.
 
+If `claude plugin validate . --strict` fails on a `CLAUDE.local.md`, move that
+file aside and rerun. The plugin root may hold neither a `CLAUDE.md` nor a
+`CLAUDE.local.md`, and the validator reads the disk, so gitignoring one does not
+help.
+
 ## Capture health and native-turn acceptance
 
 Use the installed version's connect bundle for a local, read-only diagnostic:
