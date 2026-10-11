@@ -41,6 +41,11 @@ claude --plugin-dir . plugin details augenta
 Check that the details show the right version, both skills (`connect` and
 `recall`), all eight events in `hooks/hooks.json`, and no load errors.
 
+If you keep a personal `CLAUDE.local.md` at the repository root, move it aside
+before validating. Git ignores it, but the validator reads the disk and fails on
+one at the plugin root, which is this repository's root. CI runs the same check
+on every pull request.
+
 For an installed-copy check, use the checkout as a marketplace:
 
 ```bash

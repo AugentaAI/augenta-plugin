@@ -63,7 +63,7 @@ const CODEX_UI: Record<string, string[]> = {
 };
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.16.0";
+const RELEASE_VERSION = "0.16.1";
 /** How many values the release must set. AGENTS.md → Releases lists them, and a
  *  test below asserts its count is this one. */
 const RELEASE_SURFACES = 8;
@@ -235,12 +235,20 @@ describe("skill frontmatter", () => {
 });
 
 describe("repository guidance", () => {
-  test("AGENTS.md exists and CLAUDE.md imports it", () => {
+  // AGENTS.md → Commands: why the import lives in .claude/, not the plugin root.
+  test("AGENTS.md exists and .claude/CLAUDE.md imports it", () => {
     const agents = join(PLUGIN_ROOT, "AGENTS.md");
-    const claude = join(PLUGIN_ROOT, "CLAUDE.md");
+    const claude = join(PLUGIN_ROOT, ".claude", "CLAUDE.md");
     expect(existsSync(agents)).toBe(true);
     expect(existsSync(claude)).toBe(true);
-    expect(readFileSync(claude, "utf8").trim()).toBe("@AGENTS.md");
+    expect(readFileSync(claude, "utf8").trim()).toBe("@../AGENTS.md");
+  });
+
+  test("no CLAUDE.md at the plugin root", () => {
+    const rootMemory = readdirSync(PLUGIN_ROOT).filter(
+      (name) => name.toLowerCase() === "claude.md",
+    );
+    expect(rootMemory).toEqual([]);
   });
 });
 
