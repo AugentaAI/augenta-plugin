@@ -462,6 +462,38 @@ describe("classifyRecallResponse", () => {
     });
   });
 
+  test("the API's own not_found for an unrouted path also means recall is not deployed here", () => {
+    // Since the one error envelope, the platform answers an unregistered route in
+    // JSON too; every 404 recall itself answers carries a more specific code.
+    const envelope = (code: string, message: string) =>
+      ({ error: { code, message, retryable: false }, requestId: "req_1" });
+    expect(classifyRecallResponse(parts(404, envelope("not_found", "no route for POST /v1/recall")))).toEqual({
+      kind: "failed",
+      code: "recall_unavailable",
+      message: "recall is not available in this Augenta environment",
+    });
+    expect(classifyRecallResponse(parts(404, envelope("workspace_not_found", 'unknown workspace "ws-x"')))).toEqual({
+      kind: "failed",
+      code: "workspace_not_found",
+      message: 'unknown workspace "ws-x"',
+    });
+  });
+
+  test("the envelope's own codes are read on every status", () => {
+    const envelope = (code: string, retryable = false) =>
+      ({ error: { code, message: `said ${code}`, retryable }, requestId: "req_1" });
+    expect(classifyRecallResponse(parts(400, envelope("invalid_request")))).toEqual({
+      kind: "failed", code: "invalid_request", message: "said invalid_request",
+    });
+    expect(classifyRecallResponse(parts(409, envelope("workspace_archived")))).toEqual({
+      kind: "failed", code: "workspace_archived", message: "said workspace_archived",
+    });
+    expect(classifyRecallResponse({ ...parts(429, envelope("rate_limited", true)), retryAfter: "7" }))
+      .toEqual({ kind: "failed", code: "rate_limited", message: "said rate_limited", retryAfterSeconds: 7 });
+    expect(classifyRecallResponse(parts(401, envelope("unauthenticated")))).toMatchObject({ code: "need_login" });
+    expect(classifyRecallResponse(parts(403, envelope("connector_inactive")))).toMatchObject({ code: "not_entitled" });
+  });
+
   test("a 404 that DOES carry an error is reported as that error", () => {
     // The platform's own shape. Reporting it as "not deployed" would send the
     // reader to look at the environment instead of at the request.
@@ -1224,7 +1256,9 @@ describe("recorded destinations and live recall", () => {
     expect(recallCalls()).toEqual([]);
   });
 
-  for (const [status, code] of [[403, "forbidden"], [404, "not_found"], [409, "workspace_archived"], [400, "workspace_not_found"]] as const) {
+  // A typed 404 `not_found` is not here: from /v1/recall it is the platform's unrouted path,
+  // recall not deployed, which says nothing about the destination.
+  for (const [status, code] of [[403, "forbidden"], [404, "workspace_not_found"], [409, "workspace_archived"], [400, "workspace_not_found"]] as const) {
     test(`door ${status}/${code} reports inaccessible destinations`, async () => {
       await configure();
       route({ [`POST ${GATEWAY}/v1/recall`]: (init) =>

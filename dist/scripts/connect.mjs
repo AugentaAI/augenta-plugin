@@ -171,9 +171,15 @@ async function diagnoseHosts(controlUrl, options = {}) {
     gateway = options.gateway;
   const rest = await Promise.all([
     issuer ? check(fetcher, `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`, timeoutMs, (response, body) => response.ok && typeof body?.issuer === "string") : undefined,
-    gateway ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) => response.status === 401 && typeof body?.error === "string") : undefined
+    gateway ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) => response.status === 401 && isAugentaError(body)) : undefined
   ]);
   return [discovery, ...rest.filter((item) => Boolean(item))];
+}
+function isAugentaError(body) {
+  const error = body?.error;
+  if (typeof error === "string")
+    return true;
+  return !!error && typeof error === "object" && typeof error.code === "string";
 }
 
 // capture/url.ts
@@ -2705,7 +2711,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.16.1";
+var PLUGIN_VERSION = "0.16.2";
 
 // capture/claude-cloud.ts
 import { accessSync as accessSync2, constants as constants3, lstatSync as lstatSync3, realpathSync as realpathSync7 } from "node:fs";
