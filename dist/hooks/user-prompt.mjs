@@ -2817,6 +2817,8 @@ function describeError(error) {
 
 // capture/recall-client.ts
 var MAX_QUERY_CHARS = 4096;
+var RECALL_CONTENT = "content-v3";
+var CLAIM_BLOCKS = ["claim", "note"];
 var MIN_ATTEMPT_MS = 200;
 var RETRY_BACKOFF_MS = [150, 300];
 var NON_TRANSIENT_CODES = new Set([
@@ -2825,24 +2827,28 @@ var NON_TRANSIENT_CODES = new Set([
   "answerer_unavailable",
   "consent_required"
 ]);
-function blocksOf(body, type) {
+function blocksOf(body, ...types) {
   const content = body?.content;
   if (!Array.isArray(content))
     return [];
-  return content.filter((block) => !!block && typeof block === "object" && block.type === type);
+  return content.filter((block) => !!block && typeof block === "object" && types.includes(block.type));
 }
 function textOf(block) {
   return typeof block?.text === "string" ? block.text : "";
 }
 function renderContext(body) {
-  const { summaries, notes } = memoryOf(body);
-  return [...summaries, ...notes].join(`
+  const { summaries, claims } = memoryOf(body);
+  return [...summaries, ...claims].join(`
 
 `);
 }
 function memoryOf(body) {
-  const texts = (type) => blocksOf(body, type).map(textOf).filter((text) => text.trim());
-  return { summaries: texts("engram"), notes: texts("note") };
+  const texts = (...types) => blocksOf(body, ...types).map(textOf).filter((text) => text.trim());
+  return { summaries: texts("engram"), claims: texts(...CLAIM_BLOCKS) };
+}
+function claimsTruncated(body) {
+  const flags = body;
+  return flags?.claims_truncated === true || flags?.notes_truncated === true;
 }
 function errorFields(body, text) {
   const error = body?.error;
@@ -2875,7 +2881,7 @@ function retryAfterSeconds(raw) {
   const value = Number(trimmed);
   return Number.isFinite(value) && value >= 0 ? Math.ceil(value) : undefined;
 }
-function classifyRecallResponse(parts, withNotes = false) {
+function classifyRecallResponse(parts, withClaims = false) {
   const { status, body, text } = parts;
   if (status === 200) {
     const declared = body?.mode;
@@ -2895,8 +2901,8 @@ function classifyRecallResponse(parts, withNotes = false) {
       kind: "answered",
       answer,
       mode,
-      ...body.notes_truncated === true ? { notesTruncated: true } : {},
-      ...withNotes && mode === "context" ? { memory: memoryOf(body) } : {},
+      ...claimsTruncated(body) ? { notesTruncated: true } : {},
+      ...withClaims && mode === "context" ? { memory: memoryOf(body) } : {},
       ...typeof scope === "string" ? { scope } : {},
       ...parts.model ? { model: parts.model } : {},
       ...parts.renderer ? { renderer: parts.renderer } : {}
@@ -2991,7 +2997,8 @@ async function askOnce(ctx, destination, idempotencyKey) {
     return { outcome: outOfTime(), transient: false };
   const headers = {
     "content-type": "application/json",
-    "idempotency-key": idempotencyKey
+    "idempotency-key": idempotencyKey,
+    "x-augenta-content": RECALL_CONTENT
   };
   const body = JSON.stringify({
     query: ctx.query,
@@ -3020,7 +3027,7 @@ async function askOnce(ctx, destination, idempotencyKey) {
       model: response.headers.get("x-augenta-model") ?? undefined,
       renderer: response.headers.get("x-augenta-renderer") ?? undefined,
       retryAfter: response.headers.get("retry-after")
-    }, ctx.withNotes);
+    }, ctx.withClaims);
     const url = new URL(ctx.url);
     if (response.status === 503 && url.searchParams.get("mode") === "answer" && outcome.kind === "failed" && (outcome.code === "answerer_unavailable" || outcome.code === "consent_required")) {
       url.searchParams.set("mode", "context");
@@ -3238,7 +3245,7 @@ async function askWorkspaces(searchRoot, request) {
     query,
     origin: request.origin,
     ...request.budgetTokens ? { budgetTokens: request.budgetTokens(destinations.length) } : {},
-    withNotes: request.withNotes === true,
+    withClaims: request.withClaims === true,
     timeoutMs: request.timeoutMs,
     contextTimeoutMs: request.contextTimeoutMs,
     fetcher,
@@ -3368,7 +3375,7 @@ var TOKEN_WAIT_RESERVE_MS = 600;
 var DEFAULT_RATE_LIMIT_SECONDS = 60;
 var CUT_MARKER = `
 [… cut by the Augenta plugin to fit the prompt context]`;
-var SELECTION = " (a selection of its notes)";
+var SELECTION = " (a selection of its claims)";
 var DOOR_MIN_BUDGET_TOKENS = 100;
 var HEADING_ALLOWANCE = 120;
 var HARNESS_WRAPPER_TAG = /<(\/?system-reminder)/gi;
@@ -3442,13 +3449,13 @@ function autoRecallBudgetTokens(destinations) {
 var escaped = (text) => text.replace(HARNESS_WRAPPER_TAG, "&lt;$1");
 var droppedLine = (dropped) => `
 
-[${dropped} older note${dropped === 1 ? "" : "s"} left out by the Augenta plugin to fit the prompt context]`;
-function fitNotes(summaries, notes, share) {
+[${dropped} older claim${dropped === 1 ? "" : "s"} left out by the Augenta plugin to fit the prompt context]`;
+function fitClaims(summaries, claims, share) {
   const summary = summaries.join(`
 
 `);
-  for (let dropped = 0;dropped <= notes.length; dropped++) {
-    const kept = notes.slice(dropped);
+  for (let dropped = 0;dropped <= claims.length; dropped++) {
+    const kept = claims.slice(dropped);
     if (!summary && !kept.length)
       return;
     const body = [summary, ...kept].filter(Boolean).join(`
@@ -3462,14 +3469,14 @@ function fitNotes(summaries, notes, share) {
 function renderRecallContext(payload) {
   const header = recallHeader(payload.environment);
   const sections = payload.answers.filter((answer) => answer.answer.trim()).map((answer) => {
-    const kind = answer.mode === "answer" ? "Augenta's answer" : "remembered notes";
+    const kind = answer.mode === "answer" ? "Augenta's answer" : "remembered claims";
     const heading = (partial) => `
 
 ## ${label(answer)}: ${kind}${partial ? SELECTION : ""}
 `;
-    const memory = answer.mode === "context" && answer.memory ? { summaries: answer.memory.summaries.map((t) => escaped(t.trim())), notes: answer.memory.notes.map((t) => escaped(t.trim())) } : undefined;
+    const memory = answer.mode === "context" && answer.memory ? { summaries: answer.memory.summaries.map((t) => escaped(t.trim())), claims: answer.memory.claims.map((t) => escaped(t.trim())) } : undefined;
     return {
-      notesTruncated: answer.notesTruncated === true,
+      claimsTruncated: answer.notesTruncated === true,
       heading,
       memory,
       text: escaped(answer.answer.trim()),
@@ -3477,18 +3484,18 @@ function renderRecallContext(payload) {
       body: ""
     };
   });
-  const bySize = [...sections].sort((a, b) => a.heading(a.notesTruncated).length + a.text.length - (b.heading(b.notesTruncated).length + b.text.length));
+  const bySize = [...sections].sort((a, b) => a.heading(a.claimsTruncated).length + a.text.length - (b.heading(b.claimsTruncated).length + b.text.length));
   let remaining = MAX_CONTEXT_CHARS - header.length;
   bySize.forEach((section, index) => {
     const even = Math.floor(remaining / (bySize.length - index));
-    const whole = section.heading(section.notesTruncated);
+    const whole = section.heading(section.claimsTruncated);
     if (section.text.length <= even - whole.length) {
       section.shownHeading = whole;
       section.body = section.text;
     } else {
-      const heading = section.heading(section.notesTruncated || section.memory !== undefined);
+      const heading = section.heading(section.claimsTruncated || section.memory !== undefined);
       const share = even - heading.length;
-      const fitted = section.memory ? fitNotes(section.memory.summaries, section.memory.notes, share) : undefined;
+      const fitted = section.memory ? fitClaims(section.memory.summaries, section.memory.claims, share) : undefined;
       if (fitted !== undefined) {
         section.body = fitted;
       } else if (share > CUT_MARKER.length) {
@@ -3552,7 +3559,7 @@ async function runAutoRecall(input, options = {}) {
       mode: "context",
       origin: "auto",
       budgetTokens: autoRecallBudgetTokens,
-      withNotes: true,
+      withClaims: true,
       timeoutMs: remaining,
       contextTimeoutMs: remaining,
       deadlineAt,

@@ -12,6 +12,24 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.17.0] — 2026-10-13
+
+No reconnect or renewed hook approval is required.
+
+### Changed
+
+- **Recalled memory is called claims.** What a Workspace returns in context mode
+  is the engram's summary and the claims under it: statements a model wrote from
+  captured sessions, not anyone's own words. The plugin now asks the platform for
+  that response shape, and the automatic recall block heads a Workspace's
+  section "remembered claims", with "(a selection of its claims)" and "older
+  claims left out" where it shows only some. Recall still sends only the
+  question, to the same Workspaces.
+- **Older platforms keep working.** An Augenta environment that has not yet
+  rolled out the new shape still answers with "notes", and the plugin reads
+  those exactly as before. The recall command's `--json` output is unchanged,
+  including its `notesTruncated` field.
+
 ## [0.16.1] — 2026-10-10
 
 Nothing changes for a connected project. No reconnect or renewed hook approval
@@ -660,6 +678,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.17.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.14.0...v0.15.0

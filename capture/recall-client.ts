@@ -39,9 +39,18 @@
  * flat, ordered block list and makes trimming trivial (`type` + `text` on every
  * block, `text` first); it does not decide how small the rendering should be,
  * because that depends on whose context window it is about to enter. So
- * `renderContext` below keeps the engram summary and each note's text and drops
+ * `renderContext` below keeps the engram summary and each claim's text and drops
  * everything else — ids, timestamps, frames, metadata, lineage. Anything added
  * back is paid for in the user's own context window on every recall.
+ *
+ * ONE CONTENT SHAPE ASKED FOR, TWO READ. Every request names the shape it reads
+ * in `X-Augenta-Content` (RECALL_CONTENT). Under `content-v3` the remembered
+ * statements arrive as `claim` blocks beside `claims_truncated`: a claim is what
+ * a model wrote from captured sessions, not anyone's own words. A platform that
+ * predates the header ignores it and answers `content-v2`, where the same blocks
+ * are `note` and the flag is `notes_truncated`, and plugin installs and platform
+ * rollouts are not in lockstep. One response is one version, so every reader
+ * here takes both block types in content order and either flag.
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -68,6 +77,18 @@ import {
  *  over-long question costs one local error instead of one rejected round trip
  *  per destination. */
 export const MAX_QUERY_CHARS = 4096;
+
+/**
+ * The response shape every recall request asks for, in `X-Augenta-Content`. The
+ * door answers an unknown version with 406 `unsupported_content`, so this is the
+ * only value sent. A platform without the header serves `content-v2` regardless,
+ * which the readers below still accept (`CLAIM_BLOCKS`).
+ */
+export const RECALL_CONTENT = "content-v3";
+
+/** The remembered-statement block types, in either content version: `claim` from
+ *  `content-v3`, `note` from a `content-v2` platform that ignored the header. */
+const CLAIM_BLOCKS = ["claim", "note"];
 
 /**
  * The least time worth starting a request with, under a deadline. A request
@@ -114,24 +135,26 @@ export interface RecallAnswer extends Destination {
    *
    * In `answer` mode it is prose a model wrote. In `context` mode it is the
    * MEMORY ITSELF — the matched engram's summary followed by each supporting
-   * note — and the agent reading this payload is what turns it into an answer.
+   * claim — and the agent reading this payload is what turns it into an answer.
    * `mode` says which, and every consumer branches its wording on it: a recalled
-   * note presented as though Augenta had answered would attribute a claim to a
+   * claim presented as though Augenta had answered would credit an answer to a
    * summariser that never ran.
    */
   answer: string;
   /** Which mode produced `answer`. Read off the door's own `mode` field, not
    *  assumed from the flag that was passed. */
   mode: "context" | "answer";
-  /** Present and `true` only when the door capped the notes it sent, so an agent
-   *  answering from this memory can say it is working from part of it rather
-   *  than implying it saw everything. */
+  /** Present and `true` only when the door capped the claims it sent
+   *  (`claims_truncated`, or `notes_truncated` from a `content-v2` platform), so
+   *  an agent answering from this memory can say it is working from part of it
+   *  rather than implying it saw everything. Keeps the older name on purpose: it
+   *  is a field of the CLI's `--json` payload, which callers script against. */
   notesTruncated?: boolean;
   /**
    * The context-mode memory as the door sent it — the engram summaries, then the
-   * notes oldest first (the door's content order) — kept apart so a caller
-   * trimming to a budget can drop whole notes. Present only when the request set
-   * `withNotes`, so the CLI's `--json` payload is unchanged.
+   * claims oldest first (the door's content order) — kept apart so a caller
+   * trimming to a budget can drop whole claims. Present only when the request set
+   * `withClaims`, so the CLI's `--json` payload is unchanged.
    */
   memory?: RecallMemory;
   model?: string;
@@ -140,7 +163,7 @@ export interface RecallAnswer extends Destination {
 
 export interface RecallMemory {
   summaries: string[];
-  notes: string[];
+  claims: string[];
 }
 
 export type NothingRemembered = Destination & { fallback?: RecallFallback };
@@ -190,8 +213,8 @@ export interface RecallRequest {
   /** The `budget_tokens` to send, given how many destinations will be asked.
    *  Absent: none is sent and the door uses its default for `origin`. */
   budgetTokens?: (destinations: number) => number;
-  /** Keep each context answer's summaries and notes apart (`RecallAnswer.memory`). */
-  withNotes?: boolean;
+  /** Keep each context answer's summaries and claims apart (`RecallAnswer.memory`). */
+  withClaims?: boolean;
   /** Narrow the fan-out to these Workspace ids. Empty means every destination. */
   workspaces?: string[];
   /** Per-request ceiling for `mode`, in ms. */
@@ -266,12 +289,13 @@ export type Outcome = (
  *  IGNORED, never a parse failure. */
 type ContentBlock = { type?: unknown; text?: unknown };
 
-function blocksOf(body: unknown, type: string): ContentBlock[] {
+/** The blocks of any of `types`, in the door's content order. */
+function blocksOf(body: unknown, ...types: string[]): ContentBlock[] {
   const content = (body as { content?: unknown } | undefined)?.content;
   if (!Array.isArray(content)) return [];
   return content.filter(
     (block): block is ContentBlock =>
-      !!block && typeof block === "object" && (block as ContentBlock).type === type,
+      !!block && typeof block === "object" && types.includes((block as ContentBlock).type as string),
   );
 }
 
@@ -281,30 +305,39 @@ function textOf(block: ContentBlock | undefined): string {
 
 /**
  * The smallest useful rendering of a context response: the engram's summary,
- * then each supporting note, and nothing else.
+ * then each supporting claim, and nothing else.
  *
  * Everything dropped here is dropped on purpose, and each has a reason beyond
  * "fewer tokens": the engram id and node ids are handles this client has nothing
- * to do with, `frame`/`metadata` describe what KIND of observation a note was
+ * to do with, `frame`/`metadata` describe what KIND of observation a claim was
  * rather than what it says, and the lineage blocks are the engram's own history
  * — interesting to a console, noise inside a question's answer. Timestamps are
  * the one real loss (a temporal question is harder to answer without them) and
  * are the first thing to add back if that proves to matter; the door sends them
- * on every note and a `reference_date` beside them.
+ * on every claim and a `reference_date` beside them.
  *
- * Blank-line separated so the summary reads as a claim and the notes as the
- * evidence under it, with no invented labels asserting more structure than that.
+ * Blank-line separated so the summary reads as the headline and the claims as
+ * the evidence under it, with no invented labels asserting more structure than
+ * that.
  */
 export function renderContext(body: unknown): string {
-  const { summaries, notes } = memoryOf(body);
-  return [...summaries, ...notes].join("\n\n");
+  const { summaries, claims } = memoryOf(body);
+  return [...summaries, ...claims].join("\n\n");
 }
 
-/** The summaries and notes `renderContext` joins, blank ones dropped, in the
- *  door's order: the content contract sends notes oldest first. */
+/** The summaries and claims `renderContext` joins, blank ones dropped, in the
+ *  door's order: the content contract sends claims oldest first. `claim` and
+ *  `note` blocks are read together because one response is one content version
+ *  (see RECALL_CONTENT), so only one of the two kinds is ever present. */
 export function memoryOf(body: unknown): RecallMemory {
-  const texts = (type: string) => blocksOf(body, type).map(textOf).filter((text) => text.trim());
-  return { summaries: texts("engram"), notes: texts("note") };
+  const texts = (...types: string[]) => blocksOf(body, ...types).map(textOf).filter((text) => text.trim());
+  return { summaries: texts("engram"), claims: texts(...CLAIM_BLOCKS) };
+}
+
+/** True when the door capped the claims it sent, in either content version. */
+function claimsTruncated(body: unknown): boolean {
+  const flags = body as { claims_truncated?: unknown; notes_truncated?: unknown } | undefined;
+  return flags?.claims_truncated === true || flags?.notes_truncated === true;
 }
 
 function errorFields(
@@ -348,7 +381,7 @@ function retryAfterSeconds(raw: string | null | undefined): number | undefined {
   return Number.isFinite(value) && value >= 0 ? Math.ceil(value) : undefined;
 }
 
-export function classifyRecallResponse(parts: RecallResponseParts, withNotes = false): Outcome {
+export function classifyRecallResponse(parts: RecallResponseParts, withClaims = false): Outcome {
   const { status, body, text } = parts;
   if (status === 200) {
     /* The MODE is read off the response, never assumed from the flag that was
@@ -396,10 +429,8 @@ export function classifyRecallResponse(parts: RecallResponseParts, withNotes = f
       kind: "answered",
       answer,
       mode,
-      ...((body as { notes_truncated?: unknown }).notes_truncated === true
-        ? { notesTruncated: true }
-        : {}),
-      ...(withNotes && mode === "context" ? { memory: memoryOf(body) } : {}),
+      ...(claimsTruncated(body) ? { notesTruncated: true } : {}),
+      ...(withClaims && mode === "context" ? { memory: memoryOf(body) } : {}),
       ...(typeof scope === "string" ? { scope } : {}),
       ...(parts.model ? { model: parts.model } : {}),
       ...(parts.renderer ? { renderer: parts.renderer } : {}),
@@ -490,7 +521,7 @@ interface AskContext {
   query: string;
   origin: "auto" | "manual";
   budgetTokens?: number;
-  withNotes: boolean;
+  withClaims: boolean;
   timeoutMs: number;
   contextTimeoutMs: number;
   fetcher: AuthorizedFetch;
@@ -558,6 +589,9 @@ async function askOnce(
        is the point: a retry after a request the door did process is the same
        recall, and records no second activation. */
     "idempotency-key": idempotencyKey,
+    /* The response shape this client reads. Not content and not a body field:
+       it discloses nothing, and a platform that predates it ignores it. */
+    "x-augenta-content": RECALL_CONTENT,
   };
   const body = JSON.stringify({
     query: ctx.query,
@@ -586,7 +620,7 @@ async function askOnce(
       model: response.headers.get("x-augenta-model") ?? undefined,
       renderer: response.headers.get("x-augenta-renderer") ?? undefined,
       retryAfter: response.headers.get("retry-after"),
-    }, ctx.withNotes);
+    }, ctx.withClaims);
     const url = new URL(ctx.url);
     if (response.status === 503 && url.searchParams.get("mode") === "answer" &&
         outcome.kind === "failed" &&
@@ -999,7 +1033,7 @@ export async function askWorkspaces(searchRoot: string, request: RecallRequest):
     query,
     origin: request.origin,
     ...(request.budgetTokens ? { budgetTokens: request.budgetTokens(destinations.length) } : {}),
-    withNotes: request.withNotes === true,
+    withClaims: request.withClaims === true,
     timeoutMs: request.timeoutMs,
     contextTimeoutMs: request.contextTimeoutMs,
     fetcher,

@@ -164,19 +164,29 @@ const recallModes = () =>
 /**
  * What the door returns in the DEFAULT mode: the response envelope, model-free.
  *
- * `text` becomes the engram block's summary and `notes` the note blocks, so a test can say
+ * `text` becomes the engram block's summary and `claims` the claim blocks, so a test can say
  * exactly what the client should render and what it should drop. No renderer or model header,
  * because no prompt was rendered and no provider was called — asserting their ABSENCE is part
  * of the contract.
+ *
+ * `content-v3`, the shape every request asks for. `content: "content-v2"` is what a platform
+ * that predates the request header answers instead: the same blocks typed `note`, with
+ * `note_count` and `notes_truncated`.
  */
-const memoryResponse = (text: string, notes: string[] = [], extra: object = {}) =>
-  Response.json(
+const memoryResponse = (
+  text: string,
+  claims: string[] = [],
+  { content = "content-v3" }: { content?: "content-v2" | "content-v3" } = {},
+) => {
+  const v2 = content === "content-v2";
+  return Response.json(
     {
       scope: "org_1:ws-default",
       mode: "context",
       reference_date: "2026-09-03",
-      note_count: notes.length,
-      notes_truncated: false,
+      ...(v2
+        ? { note_count: claims.length, notes_truncated: false }
+        : { claim_count: claims.length, claims_truncated: false }),
       content: [
         {
           type: "engram",
@@ -187,9 +197,9 @@ const memoryResponse = (text: string, notes: string[] = [], extra: object = {}) 
           contradiction: false,
           quality_verdict: "good",
         },
-        ...notes.map((note, index) => ({
-          type: "note",
-          text: note,
+        ...claims.map((claim, index) => ({
+          type: v2 ? "note" : "claim",
+          text: claim,
           timestamp: `2026-09-0${index + 1}T00:00:00Z`,
           question: false,
           frame: { class: "procedural" },
@@ -204,10 +214,10 @@ const memoryResponse = (text: string, notes: string[] = [], extra: object = {}) 
           members_after: 2,
         },
       ],
-      ...extra,
     },
-    { headers: { "X-Augenta-Content": "content-v1" } },
+    { headers: { "X-Augenta-Content": content } },
   );
+};
 
 /** What the door returns for `?mode=answer`: the same envelope with the model's prose first. */
 const answerResponse = (answer: string) =>
@@ -216,19 +226,19 @@ const answerResponse = (answer: string) =>
       scope: "org_1:ws-default",
       mode: "answer",
       reference_date: "2026-09-03",
-      note_count: 1,
-      notes_truncated: false,
+      claim_count: 1,
+      claims_truncated: false,
       content: [
         { type: "answer", text: answer },
         { type: "engram", text: "how this project deploys", engram_id: "e001" },
-        { type: "note", text: "deployed with the chart", timestamp: "2026-09-01T00:00:00Z" },
+        { type: "claim", text: "deployed with the chart", timestamp: "2026-09-01T00:00:00Z" },
       ],
     },
     {
       headers: {
         "X-Augenta-Renderer": "prose-v1",
         "X-Augenta-Model": "some-model",
-        "X-Augenta-Content": "content-v1",
+        "X-Augenta-Content": "content-v3",
       },
     },
   );
@@ -314,7 +324,19 @@ describe("parseArgs", () => {
 describe("classifyRecallResponse", () => {
   const parts = (status: number, body?: unknown, text = "") => ({ status, body, text });
 
+  /** A `content-v3` envelope, the shape every request asks for. */
   const envelope = (mode: string, content: unknown[], extra: object = {}) => ({
+    scope: "org_1:ws-default",
+    mode,
+    reference_date: "2026-09-03",
+    claim_count: 1,
+    claims_truncated: false,
+    content,
+    ...extra,
+  });
+
+  /** The `content-v2` envelope a platform that predates the request header still answers. */
+  const envelopeV2 = (mode: string, content: unknown[], extra: object = {}) => ({
     scope: "org_1:ws-default",
     mode,
     reference_date: "2026-09-03",
@@ -332,7 +354,7 @@ describe("classifyRecallResponse", () => {
           envelope("answer", [
             { type: "answer", text: "we chose /app" },
             { type: "engram", text: "how the landing path was chosen" },
-            { type: "note", text: "moved the landing path to /app" },
+            { type: "claim", text: "moved the landing path to /app" },
           ]),
         ),
         model: "m",
@@ -348,22 +370,19 @@ describe("classifyRecallResponse", () => {
     });
   });
 
-  test("a context 200 renders the memory itself: the summary, then each note", () => {
+  const contextBlocks = (claimType: "claim" | "note") => [
+    { type: "engram", text: "the landing path is /app", engram_id: "e001" },
+    { type: claimType, text: "moved the landing path to /app", timestamp: "2026-09-01" },
+    { type: claimType, text: "the old /home route now redirects", metadata: { turn: 4 } },
+    { type: "lineage", text: "BORN (0->2 members)", kind: "born" },
+  ];
+
+  test("a context 200 renders the memory itself: the summary, then each claim", () => {
     /* THE default path. What the client publishes is the smallest useful form —
        every other field on those blocks (ids, timestamps, frame, metadata) and
        the lineage blocks entirely are dropped, because each one is paid for in
        the reading agent's own context window on every recall. */
-    const outcome = classifyRecallResponse(
-      parts(
-        200,
-        envelope("context", [
-          { type: "engram", text: "the landing path is /app", engram_id: "e001" },
-          { type: "note", text: "moved the landing path to /app", timestamp: "2026-09-01" },
-          { type: "note", text: "the old /home route now redirects", metadata: { turn: 4 } },
-          { type: "lineage", text: "BORN (0->2 members)", kind: "born" },
-        ]),
-      ),
-    );
+    const outcome = classifyRecallResponse(parts(200, envelope("context", contextBlocks("claim"))));
     expect(outcome).toEqual({
       kind: "answered",
       mode: "context",
@@ -377,6 +396,30 @@ describe("classifyRecallResponse", () => {
     for (const dropped of ["e001", "2026-09-01", "BORN", "lineage", "turn"]) {
       expect(rendered).not.toContain(dropped);
     }
+  });
+
+  test("a content-v2 platform's note blocks render exactly as claims do", () => {
+    /* A platform that predates `X-Augenta-Content` ignores it and answers
+       content-v2, and plugin installs and platform rollouts are not in lockstep.
+       Same blocks under their older type, so the same rendering, the same
+       structured memory for the prompt hook, and the same truncation flag. */
+    const v3 = envelope("context", contextBlocks("claim"), { claim_count: 162, claims_truncated: true });
+    const v2 = envelopeV2("context", contextBlocks("note"), { note_count: 162, notes_truncated: true });
+    expect(classifyRecallResponse(parts(200, v2), true)).toEqual(classifyRecallResponse(parts(200, v3), true));
+    expect(classifyRecallResponse(parts(200, v2), true)).toEqual({
+      kind: "answered",
+      mode: "context",
+      answer:
+        "the landing path is /app\n\n" +
+        "moved the landing path to /app\n\n" +
+        "the old /home route now redirects",
+      notesTruncated: true,
+      memory: {
+        summaries: ["the landing path is /app"],
+        claims: ["moved the landing path to /app", "the old /home route now redirects"],
+      },
+      scope: "org_1:ws-default",
+    });
   });
 
   test("an unknown block type is ignored rather than failing the read", () => {
@@ -396,20 +439,36 @@ describe("classifyRecallResponse", () => {
   });
 
   test("truncation is surfaced, so an agent does not imply it saw everything", () => {
+    // `notesTruncated` keeps its name in the payload: the CLI's `--json` callers script it.
     expect(
       classifyRecallResponse(
         parts(
           200,
           envelope("context", [{ type: "engram", text: "a big engram" }], {
+            claim_count: 162,
+            claims_truncated: true,
+          }),
+        ),
+      ),
+    ).toMatchObject({ notesTruncated: true });
+    // A content-v2 platform's flag counts the same.
+    expect(
+      classifyRecallResponse(
+        parts(
+          200,
+          envelopeV2("context", [{ type: "engram", text: "a big engram" }], {
             note_count: 162,
             notes_truncated: true,
           }),
         ),
       ),
     ).toMatchObject({ notesTruncated: true });
-    // Absent, not `false`, when nothing was left out.
+    // Absent, not `false`, when nothing was left out, in either version.
     expect(
       classifyRecallResponse(parts(200, envelope("context", [{ type: "engram", text: "small" }]))),
+    ).not.toHaveProperty("notesTruncated");
+    expect(
+      classifyRecallResponse(parts(200, envelopeV2("context", [{ type: "engram", text: "small" }]))),
     ).not.toHaveProperty("notesTruncated");
   });
 
@@ -737,6 +796,7 @@ describe("the fan-out", () => {
       expect(body.query).toBe("what did we decide");
       expect(body.origin).toBe("manual");
       expect(call.headers.get("authorization")).toBe("Bearer access-live");
+      expect(call.headers.get("x-augenta-content")).toBe("content-v3");
     }
     expect(calls.map((c) => JSON.parse(String(c.body)).workspace)).toEqual([
       "ws-default",
@@ -764,6 +824,29 @@ describe("the fan-out", () => {
     expect(bodies[0]).toEqual(bodies[1]);
   });
 
+  test("every request asks for content-v3, and a content-v2 platform answers the same", async () => {
+    /* The header names the shape this client reads. A platform that predates it
+       ignores it and answers content-v2, whose `note` blocks must reach the
+       caller exactly as the `claim` blocks of a current one do. */
+    await connectedProject(["connector_a"]);
+    let content: "content-v2" | "content-v3" = "content-v3";
+    route({
+      [`POST ${GATEWAY}/v1/recall`]: () =>
+        memoryResponse("how this project deploys", ["deployed with the chart", "rolled back once"], { content }),
+    });
+    const current = await runRecall({ projectRoot: project }, args({ context: true }));
+    content = "content-v2";
+    const older = await runRecall({ projectRoot: project }, args({ context: true }));
+    expect(current.answers[0]).toMatchObject({
+      mode: "context",
+      answer: "how this project deploys\n\ndeployed with the chart\n\nrolled back once",
+    });
+    expect(older.answers).toEqual(current.answers);
+    const calls = recallCalls();
+    expect(calls).toHaveLength(2);
+    for (const call of calls) expect(call.headers.get("x-augenta-content")).toBe("content-v3");
+  });
+
   for (const reason of ["answerer_unavailable", "consent_required"] as const) {
     for (const explicitAnswer of [false, true]) {
       test(`${reason} falls back once for ${explicitAnswer ? "explicit" : "default"} answer`, async () => {
@@ -785,6 +868,8 @@ describe("the fan-out", () => {
         // The SAME key: the refused answer leg recorded nothing at the door, and
         // the context leg is the same question, so it is one recall.
         expect(calls[0]!.headers.get("idempotency-key")).toBe(calls[1]!.headers.get("idempotency-key"));
+        // The context leg reads the same content shape the answer leg asked for.
+        for (const call of calls) expect(call.headers.get("x-augenta-content")).toBe("content-v3");
       });
     }
   }
@@ -1388,6 +1473,7 @@ describe("platform-key projects", () => {
     const call = recallCalls()[0]!;
     expect(JSON.parse(String(call.body))).toEqual({ query: "what did we decide", origin: "manual" });
     expect(call.headers.get("authorization")).toBe("AugentaKey sk-aug-live.secret");
+    expect(call.headers.get("x-augenta-content")).toBe("content-v3");
     // No Workspace list and no Connector lookup: there is nothing to resolve.
     expect(requests).toHaveLength(1);
     // The credential never reaches anything the agent reads.

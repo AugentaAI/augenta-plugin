@@ -367,6 +367,14 @@ deliberate:
 - **A young Workspace is not an error.** `empty_scope` means "nothing remembered
   yet"; reporting it as a failure sends a user to look for a fault that is not
   there, and invites a reconnect that would change nothing.
+- **Ask for one content shape, read the older one too.** Every request sends
+  `X-Augenta-Content: content-v3` (`RECALL_CONTENT`), under which remembered
+  statements arrive as `claim` blocks beside `claims_truncated`. A platform that
+  predates the header ignores it and answers `content-v2`, with `note` blocks and
+  `notes_truncated`, and installs and platform rollouts are not in lockstep, so
+  the readers take both block types in content order and either flag. Send no
+  other version: the door refuses an unknown one with 406. The CLI's `--json`
+  keeps `notesTruncated`, because callers script against it.
 
 **Automatic recall asks with the prompt, and has invariants of its own.** The
 UserPromptSubmit hook (`hooks/auto-recall.ts`) asks every recorded destination
