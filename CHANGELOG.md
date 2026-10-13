@@ -12,6 +12,24 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.16.2] — 2026-10-13
+
+Nothing changes for a connected project. No reconnect or renewed hook approval
+is required.
+
+### Changed
+
+- **Ready for the platform's one error shape.** The Augenta API is moving every
+  failure to one envelope, `{"error": {"code", "message", "retryable"},
+  "requestId"}`, where its own refusals used to answer a bare
+  `{"error": "…"}`. Connect's host check now recognizes either as Augenta's own
+  401 — with only the old shape recognized, a reachable gateway would have been
+  diagnosed as blocked. Recall reads either shape, and treats the API's own
+  `not_found` for a route it does not serve as "recall is not available in this
+  Augenta environment", as it already did for a 404 with no body, rather than
+  as a destination that needs reconnecting. This release ships before the API
+  change, so installs are ready when it arrives.
+
 ## [0.16.1] — 2026-10-10
 
 Nothing changes for a connected project. No reconnect or renewed hook approval
@@ -660,6 +678,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.16.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.1...v0.16.2
 [0.16.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.14.0...v0.15.0

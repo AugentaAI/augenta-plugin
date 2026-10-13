@@ -152,8 +152,21 @@ export async function diagnoseHosts(
       : undefined,
     gateway
       ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) =>
-          response.status === 401 && typeof (body as { error?: unknown } | undefined)?.error === "string")
+          response.status === 401 && isAugentaError(body))
       : undefined,
   ]);
   return [discovery, ...rest.filter((item): item is HostCheck => Boolean(item))];
+}
+
+/**
+ * Whether a body is Augenta's own JSON error: the envelope
+ * `{"error": {"code", "message", "retryable"}, "requestId"}`, or the bare
+ * `{"error": "…"}` an API older than that envelope still answers. Both, because
+ * plugin installs and API rollouts are not in lockstep, and a gateway that
+ * answers as Augenta does must not be diagnosed as a proxy for its shape.
+ */
+function isAugentaError(body: unknown): boolean {
+  const error = (body as { error?: unknown } | undefined)?.error;
+  if (typeof error === "string") return true;
+  return !!error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string";
 }

@@ -222,14 +222,15 @@ export interface RecallRequest {
 /* -------------------------------------------------------------------------
  * Response classification.
  *
- * Two error shapes reach this client for one logical call, and both are real:
+ * The platform answers every failure in one envelope, its own refusals and the
+ * retrieval service's alike:
  *
- *   {"error": "workspace is required"}                        — the platform door
- *   {"error": {code, message, retryable}, "scope", "request_id"} — the retrieval
- *                                                                 service, passed
- *                                                                 through verbatim
+ *   {"error": {code, message, retryable}, "requestId"}
  *
- * The typed one's `code` IS the contract — `empty_scope` is a 404 that means
+ * An API older than that envelope answered its own refusals with a bare string
+ * (`{"error": "workspace is required"}`, with a sibling `code` on its 429), and
+ * plugin installs and API rollouts are not in lockstep, so that shape is still
+ * read. The typed `code` IS the contract — `empty_scope` is a 404 that means
  * "this Workspace is young", not a fault — so it is read first and only then
  * fallen back on. Kept as a pure function over the parts of a response so the
  * whole table can be exercised without a server.
@@ -321,7 +322,7 @@ function errorFields(
     };
   }
   if (typeof error === "string") {
-    // The platform door's own shape. Its 429 carries a sibling `code`.
+    // An older API's own refusals. Its 429 carries a sibling `code`.
     const sibling = (body as { code?: unknown }).code;
     return {
       code: typeof sibling === "string" ? sibling : undefined,
@@ -411,10 +412,13 @@ export function classifyRecallResponse(parts: RecallResponseParts, withNotes = f
     // NOT an error. A Workspace nobody has fed yet has nothing to remember, and
     // saying "recall failed" about that would send the user to look for a fault.
     if (code === "empty_scope") return { kind: "nothing_remembered" };
-    if (!structured) {
-      // No error body at all means the route is not registered — recall is not
-      // deployed in this Augenta environment, which is a property of the
-      // environment rather than of the question or the credential.
+    if (!structured || code === "not_found") {
+      // The route is not registered — recall is not deployed in this Augenta
+      // environment, which is a property of the environment rather than of the
+      // question or the credential. An API with the one error envelope answers
+      // an unrouted path `not_found`; every 404 recall itself answers carries a
+      // more specific code (`workspace_not_found`, `empty_scope`). An older API
+      // answered it with no error body at all.
       return {
         kind: "failed",
         code: "recall_unavailable",
