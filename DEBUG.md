@@ -10,8 +10,8 @@ so it records at most one reuse activation, as every transient retry does.
 Bash budget of at least 180 seconds for answer and 90 seconds for explicit context
 with the default ceilings; increase the budget when overriding them.
 
-Contributor notes. Nothing here is user-facing, and `README.md` deliberately does
-not link this file: every lever below either points a real project at a
+Public contributor notes. `README.md` deliberately does not link this file:
+every lever below either points a real project at a
 non-production Augenta or rewrites local sign-in state, which is contributor work
 and never something to walk a user through.
 
@@ -25,8 +25,8 @@ script, every `--json` verb, and the connect skill alike:
 export AUGENTA_CONTROL_URL=<control-url>
 ```
 
-The control URL for a non-production Augenta is not recorded in this public
-repository; get it from the platform team.
+Use only a service you are authorized to test. Keep its non-production URLs and
+deployment details out of this repository and public reports.
 
 The variable selects one environment's **complete** login discovery — issuer,
 public client id, and gateway together — by fetching
@@ -286,15 +286,6 @@ usual ones are:
 asks the same question and reports which of those it was. Running the hook
 bumps the turn ordinal for that transcript path, so use a scratch path like the
 one above.
-
-## Known non-production wrinkle
-
-Prod's issuer is Augenta's own `auth.augenta.ai`, which is what keeps the identity
-provider out of every user-facing string. A dev deployment whose issuer is still a
-raw vendor hostname discloses that provider in the sign-in URL itself, and the
-agent has to print that URL. That is a dev topology gap, not a plugin regression:
-do not read a dev transcript as evidence the invariant is broken, and do not
-"fix" it in the plugin. The fix is a custom domain on the non-production issuer.
 
 ## Before opening a PR
 

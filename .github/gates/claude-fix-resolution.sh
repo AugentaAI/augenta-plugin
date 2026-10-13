@@ -81,7 +81,7 @@ grep -Fq '1 fixed/resolved, 1 deliberately left open' "$tmp_dir/pass.out"
 # resolve step after the fixes are already pushed and the report already posted — the one
 # moment a refusal says the opposite of what happened.
 : > "$GH_STUB_LOG"
-(cd "$test_repo" && REPO='AugentaAI/AugentaAI' \
+(cd "$test_repo" && REPO='example/another-repository' \
   bash "$REPO_ROOT/.github/scripts/resolve-fixed-review-threads.sh") > "$tmp_dir/same-name.out" 2>&1
 grep -Fq '1 fixed/resolved, 1 deliberately left open' "$tmp_dir/same-name.out"
 

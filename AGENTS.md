@@ -53,8 +53,8 @@ Codex trust-pins each hook by content hash in `~/.codex/config.toml`
 user for trust. Batch hook changes into a single deliberate release; never ship
 them incrementally.
 
-For a hosted dev release, follow the platform team's deployment runbook. Connect
-a disposable project with:
+To test against an authorized non-production service, connect a disposable
+project with:
 
 ```bash
 bun scripts/connect.ts \
@@ -66,7 +66,7 @@ bun scripts/dev-e2e.ts \
 ```
 
 This is the positive human OAuth gate. GitHub Actions intentionally verifies
-the platform-key path and must never receive a human WorkOS access or refresh
+the platform-key path and must never receive a human access or refresh
 token. `--endpoint` overrides only the gateway; use `--control-url` when
 selecting a non-production issuer/client/gateway set.
 
@@ -258,12 +258,14 @@ Each CHANGELOG version links to a GitHub compare between two of those tags, and
 nothing creates them automatically. Tagging lapsed after `v0.10.2`, which left
 every later link a 404.
 
-**Do not cite private-repo issues or PRs in commit messages or PR
-descriptions.** This repository is public and its commit log is part of what
-users read; a bare `#123` against a repository nobody can open is noise at best
-and a disclosure of internal planning at worst. Describe the platform-side
-change in words instead — "pairs with the platform change that pages
-`GET /v1/workspaces`" says everything the number was carrying.
+**Keep every public surface self-contained.** Files, fixtures, screenshots,
+branch names, commit messages, issues, PR descriptions, and review comments must
+contain no private repository references, private ticket identifiers or links,
+internal deployment details, or internal product terminology. Explain only the
+plugin behavior and public API contract needed to use or contribute to it.
+Do not repeat offending text when reporting a finding publicly. Run
+`bun run audit:public` before opening a PR; CI also checks new commit messages
+and PR titles, descriptions, and branch names. Images require manual review.
 
 ## Privacy invariants
 
@@ -582,13 +584,11 @@ the opposite of the truth for records that were deleted. Lag is measured against
 the furthest destination rather than the nearest so that two simultaneously wedged
 destinations cannot shield each other while the spool fills anyway.
 
-**The identity provider appears nowhere in the plugin.** Augenta sign-in runs on
-WorkOS AuthKit behind `auth.augenta.ai`, and that fact lives only in comments. The
-project config's `authMode` is `oauth`; a stored profile holds `userId`/`orgId`,
-taken from Augenta's own `/v1/me` `user.id` and `org.id`. The IdP's separate
-`org.workosOrgId` is deliberately unused — identity keys on Augenta's ids, not the
-provider's. A contract test fails on any casing of the vendor name in runtime code
-outside a comment; keep it that way.
+**Use Augenta's identity contract.** The project config's `authMode` is `oauth`;
+a stored profile holds `userId`/`orgId`, taken from Augenta's own `/v1/me`
+`user.id` and `org.id`. Do not use upstream identity-provider identifiers or
+expose vendor names in the plugin's names, values, or output. The contract test
+enforces this in runtime code.
 
 **Stale configs are reconnected, never migrated.** Pre-release versions are not
 carried forward. A config this version cannot parse becomes session-start's

@@ -86,7 +86,9 @@ Explain what changed, why it helps, and which checks passed.
   `RELEASE_VERSION` in the contract test, and the changelog together. See
   [Releases](AGENTS.md#releases) for the exact files.
 - Write release notes for users. Say whether they need to reconnect.
-- Keep private repository names, issue numbers, and PR links out of public
-  commits and PR descriptions. Describe the related change in words.
+- Keep private repository references, ticket identifiers, internal terminology,
+  and deployment details out of files, images, branches, commits, issues, PRs,
+  and review comments. Describe the plugin behavior in words. Run
+  `bun run audit:public`; inspect images manually before publishing them.
 - Wait for CI to pass, including the marketplace install test. Merging to
   `main` requires one approving review and a squash merge.

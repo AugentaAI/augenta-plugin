@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
   # Nightly, because `install-smoke` installs the `claude` and `codex` CLIs
@@ -25,6 +26,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  public-surface:
+    name: Public files and metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun run audit:public
+
   proxy-runtime:
     name: Node 22.21 proxy runtime
     runs-on: ubuntu-latest

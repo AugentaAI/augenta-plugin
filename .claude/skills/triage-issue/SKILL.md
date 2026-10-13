@@ -120,6 +120,10 @@ gh issue edit <number> --add-label "bug,codex"
 
 ## Step 5: Post Triage Comment
 
+Keep public comments self-contained. Never repeat private repository references,
+ticket identifiers, internal terminology, or deployment details from the issue.
+Describe the plugin behavior and affected public surface without quoting them.
+
 Post a single structured comment. Everything goes in one comment — do not post follow-ups.
 
 ```markdown
