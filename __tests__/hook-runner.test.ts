@@ -298,7 +298,8 @@ cat
         const codex = told("/home/u/.codex/sessions/2026/10/14/rollout-2026-10-14T00-00-00-abc.jsonl");
         expect(codex).toContain("$augenta:connect");
         expect(codex).not.toContain("[Augenta]");
-        expect(codex).not.toContain("Tell the user");
+        expect(codex).toContain("When you first reply, tell the user");
+        expect(codex).toContain("unless the user asks");
         const claude = told("/home/u/.claude/projects/-home-u-p/abc.jsonl");
         expect(claude.startsWith("[Augenta]")).toBe(true);
         expect(claude).toContain("Tell the user");

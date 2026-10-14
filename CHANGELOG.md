@@ -12,7 +12,7 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
-## [0.17.0] — 2026-10-13
+## [0.17.0] — 2026-10-14
 
 No reconnect or renewed hook approval is required.
 
@@ -29,6 +29,16 @@ No reconnect or renewed hook approval is required.
   rolled out the new shape still answers with "notes", and the plugin reads
   those exactly as before. The recall command's `--json` output is unchanged,
   including its `notesTruncated` field.
+
+### Fixed
+
+- **Codex explains how to connect.** The first reply relays the project's
+  connection notice and offers help. Projects whose old notice was never shown
+  receive one corrected attempt. Connecting still requires the user's request.
+- **A missing Node.js runtime gets one explanation.** If Node.js 20 or newer
+  cannot run, the first session on that computer explains how to install it or
+  set `AUGENTA_NODE`. Later sessions stay quiet. Connected projects retain their
+  existing diagnostic when capture cannot run.
 
 ## [0.16.5] — 2026-10-14
 

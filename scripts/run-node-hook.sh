@@ -193,8 +193,8 @@ codex_harness() {
 # `command -p` finds mkdir on the default PATH, not the one under suspicion.
 #
 # Constant text, so the JSON needs no escaping: keep `"`, `\` and `'` out of it.
-# Codex may show it verbatim and Claude Code hands it to the model, so each gets
-# its own wording, as session-start.ts does.
+# Both harnesses hand it to the model. Ask it to relay the notice, with the
+# invocation for that harness, as session-start.ts does.
 notify_once() {
   json_string hook_event_name
   [ "$field" = SessionStart ] || return 0
@@ -203,7 +203,7 @@ notify_once() {
   command -p mkdir -p "$home/.augenta/state" 2>/dev/null || return 0
   (set -C; : > "$home/.augenta/state/node-missing-notified") 2>/dev/null || return 0
   if codex_harness; then
-    printf '%s' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Augenta is installed but cannot run on this computer: no Node.js 20 or newer was found on the PATH this app gives its hooks, so nothing is captured and this project has not been offered a connection. Install Node.js 20 or newer, or set AUGENTA_NODE to the absolute path of a working node, then start a new session and run $augenta:connect or ask to Connect Augenta. This notice appears once on this computer."}}'
+    printf '%s' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"When you first reply, tell the user that Augenta is installed but cannot run on this computer: no Node.js 20 or newer was found on the PATH this app gives its hooks. Explain how to install Node.js 20 or newer, or set AUGENTA_NODE to the absolute path of a working node, then start a new session and run $augenta:connect or ask to Connect Augenta. Do not start connecting before Node works or unless the user asks. This notice appears once on this computer."}}'
   else
     printf '%s' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"[Augenta] The Augenta plugin is installed but cannot run on this computer: no Node.js 20 or newer was found on the PATH this app gives its hooks, so none of them can run and this project was never offered a connection. This is the only notice it will give on this computer. Tell the user. The fix is to install Node.js 20 or newer, or to set AUGENTA_NODE to the absolute path of a working node executable, and then start a new session, which offers to connect the project. Do not run the augenta connect skill (/augenta:connect) before then: it needs the same Node.js."}}'
   fi

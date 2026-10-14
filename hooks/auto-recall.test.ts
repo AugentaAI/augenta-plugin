@@ -297,6 +297,20 @@ describe("runAutoRecall: gated like capture, asked like recall", () => {
     route({ [`POST ${GATEWAY}/v1/recall`]: () => typed(404, "empty_scope", false) });
     expect(await run()).toBeUndefined();
   });
+
+  for (const version of ["content-v2", "content-v3"]) test(`200 noMatch in ${version} is silence without a retry`, async () => {
+    apiKeyProject();
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => Response.json({
+      scope: "org:workspace", mode: "context", noMatch: true, reference_date: null,
+      content: [], ...(version === "content-v3"
+        ? { claim_count: 0, claims_truncated: false }
+        : { note_count: 0, notes_truncated: false }),
+    }) });
+    expect(await run()).toBeUndefined();
+    const calls = requests.filter(r => new URL(r.url).pathname === "/v1/recall");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.headers.get("X-Augenta-Content")).toBe("content-v3");
+  });
 });
 
 describe("retries: transient only, at most two, inside the budget", () => {

@@ -8,6 +8,7 @@
   "homepage": "https://augenta.ai",
   "repository": "https://github.com/AugentaAI/augenta-plugin",
   "scripts": {
+    "audit:public": "bun .github/scripts/public-surface.mjs",
     "build": "bun scripts/build.ts",
     "test": "bun test",
     "test:e2e": "bun test __tests__/memory-capture.e2e.test.ts",
