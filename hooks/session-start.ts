@@ -20,7 +20,9 @@
  *  marker lives in the USER's home (~/.augenta/state/connect-prompted.json, a
  *  {projectPath: isoDate} map, honoring AUGENTA_HOME) — deliberately NOT in the
  *  project: planting a `.augenta/` dir in every repo the user merely opens would
- *  be invasive before they've consented. It is the plugin's only home-dir state.
+ *  be invasive before they've consented. Beside it, scripts/run-node-hook.sh keeps
+ *  node-missing-notified, the marker for its one notice per computer that no
+ *  Node.js 20+ was found.
  *  The pre-0.3.0 map (init-prompted.json) is still READ, so renaming the skill
  *  doesn't re-prompt every project a user already dismissed.
  *

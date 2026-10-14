@@ -12,6 +12,24 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.16.5] — 2026-10-14
+
+Nothing changes for a connected project. No reconnect or renewed hook approval
+is required.
+
+### Fixed
+
+- **A computer with no Node.js 20 or newer now says so, once.** The plugin's
+  hooks need Node, and so does the prompt that offers to connect a project. On a
+  computer without it the plugin installed, its hooks were trusted and fired,
+  and nothing ever told you why it did nothing. Now the first session on such a
+  computer gets one notice that Node.js 20+ is missing, with the fix: install it,
+  or set `AUGENTA_NODE` to a working `node`, then start a new session to connect.
+  It appears once per computer, never on every hook, and later sessions stay
+  quiet. A connected project still reports the missing runtime on every hook,
+  as before. To see the notice again, delete
+  `~/.augenta/state/node-missing-notified`.
+
 ## [0.16.4] — 2026-10-13
 
 Nothing changes for a connected project. No reconnect or renewed hook approval
@@ -701,6 +719,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.16.5]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.4...v0.16.5
 [0.16.4]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.3...v0.16.4
 [0.16.3]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.2...v0.16.3
 [0.16.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.1...v0.16.2

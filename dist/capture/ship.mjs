@@ -17980,7 +17980,7 @@ function captureHealth(projectRoot) {
 }
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.16.4";
+var PLUGIN_VERSION = "0.16.5";
 
 // capture/ship.ts
 import { join as join13, dirname as dirname7 } from "node:path";

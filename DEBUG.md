@@ -160,8 +160,12 @@ not affect `scripts/connect.ts`, which the agent invokes from its own shell.
 Without the override, a host where no Node 20+ can be found is quiet on purpose:
 the runner reads `cwd` out of the hook payload and reports the missing runtime
 only when that project has `.augenta/config.json`, so an unconnected project
-never sees an error about a runtime it does not use. To see the message, run a
-hook by hand from a connected project with a PATH that has no working Node:
+never sees an error about a runtime it does not use. The one exception is a
+single SessionStart notice per computer, because without Node the connect
+prompt cannot run either. It says Node.js 20+ is missing and is recorded in
+`~/.augenta/state/node-missing-notified`; delete that file to see it again. To
+see the connected-project message, run a hook by hand from a connected project
+with a PATH that has no working Node:
 
 ```bash
 printf '{"cwd":"%s","hook_event_name":"Stop"}' "$PWD" \
@@ -206,6 +210,7 @@ dev with no variable set at runtime. Both are recorded in the config.
 | `~/.augenta/auth.json` | completed sign-in | removes every stored profile; browser-connected projects stop capturing until you sign in again, and session start says so |
 | `~/.augenta/pending-login.json` | `--login` | abandons an in-flight grant |
 | `~/.augenta/state/connect-prompted.json` | SessionStart | the one-time connect offer, and the join notice for a connected checkout that is not capturing, fire again |
+| `~/.augenta/state/node-missing-notified` | the hook runner, when no Node 20+ is found | the one-time notice that no Node.js 20+ was found fires again at the next SessionStart |
 | `<project>/.augenta/config.json` | connect | disconnects the project from all destinations; capture returns to a silent no-op. If it is committed, the next pull brings it back |
 | `<project>/.augenta/state/links.json` | connect (`--workspace`, `--adopt`) | this checkout stops capturing until it joins again; the shared config is untouched, and joining again reuses your Connectors for the project |
 
@@ -220,6 +225,7 @@ needs **both**:
   (`authRoot` in `capture/auth.ts`). The capture gate reads the sign-in here too,
   so a test that writes a browser config must point this at a temporary directory.
 - `AUGENTA_HOME` → `state/connect-prompted.json` (`home` in `hooks/session-start.ts`)
+  and `state/node-missing-notified` (`notify_once` in `scripts/run-node-hook.sh`)
 
 Setting only one leaves half your state in the real `~/.augenta`, which reads as
 a bug in whichever half you were not watching.
