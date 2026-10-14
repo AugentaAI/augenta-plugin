@@ -4,10 +4,11 @@
  *
  * Contract under test: an unconnected project fires the connect prompt exactly
  * once per project, through additionalContext alone on both harnesses (agent-
- * directed on Claude Code, naming /augenta:connect; a user-facing reminder with
- * no agent-only scaffolding on Codex); a connected project is
+ * directed on Claude Code, naming /augenta:connect; plain model-directed notice
+ * on Codex, asking for a first-reply explanation and offering connect); a connected project is
  * silent; a previously-prompted project is silent — including one prompted
- * under the pre-0.3.0 `init-prompted.json` map. A config file the current
+ * under the pre-0.3.0 `init-prompted.json` map on Claude. Codex's corrected notice
+ * gets one attempt despite old invisible deliveries. A config file the current
  * parser REJECTS counts as unconnected and gets its own one-shot reconnect
  * prompt; it must never be silently treated as connected.
  *
@@ -21,6 +22,7 @@ import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, 
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { isDocumentRecord, Outbox } from "../capture/outbox";
 import { joinCheckout, writeSharedConfig, TEST_USER_ID } from "../__tests__/fixtures";
 import { DEFAULT_GATEWAY, type Destination } from "../capture/config";
@@ -135,7 +137,7 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
     expect(out).toContain("never be pasted");
   });
 
-  test("Codex: schema-valid reminder, no Claude-only field or agent scaffolding", () => {
+  test("Codex: schema-valid model notice that asks for a first-reply explanation", () => {
     const out = fire({ transcript_path: CODEX_TP, cwd: project });
     const parsed = JSON.parse(out);
     expect(parsed.hookSpecificOutput?.initialUserMessage).toBeUndefined();
@@ -146,6 +148,9 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
     // Nothing auto-fires on Codex, so the one prompt this project ever gets must
     // name how to act on it — a bare narration would strand the user.
     expect(parsed.hookSpecificOutput?.additionalContext).toContain("$augenta:connect");
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("first reply");
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("tell the user");
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("do not start connecting unless they ask");
     expect(out).not.toContain("/augenta:connect");
     expect(out).not.toContain("[Augenta]");
   });
@@ -154,6 +159,22 @@ describe("unconnected project — the connect prompt, harness-aware", () => {
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).not.toBe("");
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
   });
+
+  test("Codex's corrected notice fires once, without writing project state", () => {
+    expect(fire({ transcript_path: CODEX_TP, cwd: project })).toContain("tell the user");
+    expect(fire({ transcript_path: CODEX_TP, cwd: project })).toBe("");
+    expect(existsSync(join(project, ".augenta"))).toBe(false);
+  });
+
+  test.each(["connect-prompted.json", "init-prompted.json"])(
+    "Codex recovers from a notice spent under %s while Claude stays quiet", (file) => {
+      writeMarkers(file, { [project]: "2026-01-01T00:00:00.000Z" });
+      expect(fire({ transcript_path: CODEX_TP, cwd: project })).toContain("tell the user");
+      expect(fire({ transcript_path: CODEX_TP, cwd: project })).toBe("");
+      expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
+      expect(existsSync(join(project, ".augenta"))).toBe(false);
+    },
+  );
 
   test("distinct projects each get their one prompt", () => {
     const other = mkdtempSync(join(tmpdir(), "aug-ss-proj2-"));
@@ -400,7 +421,7 @@ describe("a config file the parser rejects is UNCONNECTED, not connected", () =>
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).not.toBe("");
   });
 
-  test("Codex gets user-facing wording with no agent scaffolding", () => {
+  test("Codex asks the assistant to explain reconnect without starting it", () => {
     writeConfig(LEGACY);
     const out = fire({ transcript_path: CODEX_TP, cwd: project });
     const parsed = JSON.parse(out);
@@ -413,8 +434,21 @@ describe("a config file the parser rejects is UNCONNECTED, not connected", () =>
     ]);
     expect(parsed.hookSpecificOutput?.additionalContext).toContain("can no longer be read");
     expect(parsed.hookSpecificOutput?.additionalContext).toContain("$augenta:connect");
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("tell the user");
+    expect(parsed.hookSpecificOutput?.additionalContext).toContain("do not start connecting unless they ask");
     expect(out).not.toContain("[Augenta]");
     expect(out).not.toContain("/augenta:connect");
+  });
+
+  test("Codex recovers a spent reconnect notice once for the same unreadable file", () => {
+    writeConfig(LEGACY);
+    const digest = createHash("sha256").update(LEGACY).digest("hex").slice(0, 16);
+    writeMarkers("connect-prompted.json", {
+      [`reconnect:${project}:${digest}`]: "2026-01-01T00:00:00.000Z",
+    });
+    expect(fire({ transcript_path: CODEX_TP, cwd: project })).toContain("tell the user");
+    expect(fire({ transcript_path: CODEX_TP, cwd: project })).toBe("");
+    expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
   });
 });
 

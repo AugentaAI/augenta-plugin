@@ -7,9 +7,10 @@
  * Code treats `hookSpecificOutput.additionalContext` as HIDDEN model context,
  * whereas Codex materializes it as a developer message in the conversation. The
  * Codex CLI (0.156) does not display those entries, but its other surfaces are
- * not established to hide them, so on Codex the hooks must never inject internal
- * scaffolding (the curation nudge, agent-only instructions) — treat anything
- * written there as something the user may read.
+ * not established to hide them. A notice that should reach the user must ask
+ * the assistant to relay it; plain model-addressed wording should also remain
+ * readable if a surface displays it directly. Keep internal scaffolding such
+ * as the curation nudge out of this channel.
  */
 export function isCodexHarness(transcriptPath: string | undefined | null): boolean {
   if (!transcriptPath) return false;

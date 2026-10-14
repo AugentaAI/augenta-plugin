@@ -3324,11 +3324,12 @@ if (connectedRoot) {
   process.exit(0);
 }
 var markerKey = staleConfig ? `reconnect:${projectPath}:${staleConfigDigest()}` : projectPath;
-if (!staleConfig && readMarkers(legacyMarkerPath)[projectPath])
+var noticeKey = codex ? `codex-connect-v1:${markerKey}` : markerKey;
+if (!codex && !staleConfig && readMarkers(legacyMarkerPath)[projectPath])
   process.exit(0);
-if (!firstTime(markerKey))
+if (!firstTime(noticeKey))
   process.exit(0);
-var codexContext = staleConfig ? `Augenta's saved connection for this project can no longer be read, so capture is off. Run ${connectAction} to reconnect it.` : `Augenta isn't connected for this project yet. Run ${connectAction} to connect it.`;
+var codexContext = staleConfig ? `When you first reply, tell the user that Augenta's saved connection for this project can no longer be read, so capture is off. They can run ${connectAction} to reconnect it. Offer to help, but do not start connecting unless they ask.` : `When you first reply, tell the user that Augenta isn't connected for this project yet. They can run ${connectAction} to connect it. Offer to help, but do not start connecting unless they ask.`;
 var claudeContext = staleConfig ? "[Augenta] This project has an .augenta/config.json that this plugin version " + "cannot read — it predates the current connection format, or the write was " + "truncated — so capture is silently off. This is the one automatic prompt it " + "will ever get. Run the augenta connect skill now (/augenta:connect) to " + "reconnect it; anything already queued in the outbox ships once it succeeds. " + "Tokens and API keys must never be pasted into the chat." : "[Augenta] This project has not been connected for Augenta capture and this " + "is the one automatic prompt it will ever get. Run the augenta connect skill now " + "(/augenta:connect): it explains what capture does, then drives connect's --json " + "verbs itself so the user only answers one question and, at most, clicks one " + "sign-in link. Tokens and API keys must never be pasted into the chat.";
 var additionalContext = (codex ? codexContext : claudeContext) + (ephemeralProject(projectPath) ? " This is a temporary cloud project: its sign-in, connection and unshipped records disappear when the task's container is discarded. Connect names this project and asks which Workspaces it should feed." : "");
 process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }));
