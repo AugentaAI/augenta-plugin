@@ -511,6 +511,35 @@ describe("classifyRecallResponse", () => {
     ).toEqual({ kind: "nothing_remembered" });
   });
 
+  test("explicit empty success is nothing remembered in both content versions and modes", () => {
+    for (const mode of ["answer", "context"]) {
+      for (const counts of [{ note_count: 0, notes_truncated: false }, { claim_count: 0, claims_truncated: false }]) {
+        expect(classifyRecallResponse(parts(200, {
+          mode, noMatch: true, content: [], reference_date: null, ...counts,
+        }), true)).toEqual({ kind: "nothing_remembered" });
+      }
+    }
+  });
+
+  test("malformed or inconsistent noMatch cannot hide evidence or masquerade as success", () => {
+    const empty = { mode: "answer", noMatch: true, content: [] };
+    for (const body of [
+      ...[null, 1, "true", {}, []].map(noMatch => ({ ...empty, noMatch })),
+      { ...empty, mode: "unknown" }, { ...empty, mode: undefined },
+      { ...empty, content: null }, { ...empty, content: [{ type: "citation" }] },
+      { ...empty, content: [{ type: "answer", text: "remembered" }] },
+      { ...empty, answer: "remembered" }, { ...empty, answer: "" },
+      { ...empty, score: { value: 1 } }, { ...empty, error: { code: "failed" } },
+      { ...empty, note_count: 1 }, { ...empty, claim_count: 1 },
+      { ...empty, notes_truncated: true }, { ...empty, claims_truncated: true },
+      { ...empty, reference_date: "2026-10-14" }, { ...empty, noMatch: false },
+    ]) expect(classifyRecallResponse(parts(200, body))).toMatchObject({ kind: "failed", code: "invalid_response" });
+    expect(classifyRecallResponse(parts(200, envelope("answer", [{ type: "answer", text: "remembered" }], { noMatch: false }))))
+      .toMatchObject({ kind: "answered", answer: "remembered" });
+    expect(classifyRecallResponse(parts(200, envelope("context", [{ type: "note", text: "evidence" }], { noMatch: false }))))
+      .toMatchObject({ kind: "answered", answer: "evidence" });
+  });
+
   test("a 404 with no error body means recall is not deployed here", () => {
     // Hono answers an unregistered route with plain text, and the platform does
     // not register /v1/recall when the retrieval service is unconfigured.
@@ -1080,6 +1109,21 @@ describe("the fan-out", () => {
     const payload = await runRecall({ projectRoot: project }, args());
     expect(payload.status).toBe("nothing_remembered");
     expect(payload.failed).toEqual([]);
+  });
+
+  for (const context of [false, true]) test(`200 noMatch in ${context ? "context" : "answer"} mode does not trigger fallback or another request`, async () => {
+    await connectedProject(["connector_a"]);
+    route({ [`POST ${GATEWAY}/v1/recall`]: () => Response.json({
+      mode: context ? "context" : "answer", noMatch: true, note_count: 0,
+      notes_truncated: false, reference_date: null, content: [],
+    }) });
+    const payload = await runRecall({ projectRoot: project }, args({ context }));
+    expect(recallModes()).toEqual([context ? "context" : "answer"]);
+    expect(payload.status).toBe("nothing_remembered");
+    expect(payload.failed).toEqual([]);
+    expect(payload.answers).toEqual([]);
+    expect(payload.nothingRemembered).toEqual([{ connectorId: "connector_a", workspaceId: "ws-default", workspaceName: "Default Workspace" }]);
+    expect(payload.nothingRemembered[0]).not.toHaveProperty("fallback");
   });
 
   test("one wedged destination never costs the others their answer", async () => {

@@ -30,6 +30,17 @@ No reconnect or renewed hook approval is required.
   those exactly as before. The recall command's `--json` output is unchanged,
   including its `notesTruncated` field.
 
+## [0.16.5] — 2026-10-14
+
+No reconnect or renewed hook approval is required.
+
+### Fixed
+
+- Recall now reports a successful empty search (`noMatch: true`) as "nothing
+  remembered" in answer and context modes, without retrying or using a model
+  fallback. Older empty-Workspace responses remain supported. Malformed or
+  inconsistent empty responses still report a failure.
+
 ## [0.16.4] — 2026-10-13
 
 Nothing changes for a connected project. No reconnect or renewed hook approval
@@ -719,8 +730,10 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
-[0.17.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.4...v0.17.0
+[0.17.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.5...v0.17.0
 
+
+[0.16.5]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.4...v0.16.5
 [0.16.4]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.3...v0.16.4
 [0.16.3]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.2...v0.16.3
 [0.16.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.1...v0.16.2
