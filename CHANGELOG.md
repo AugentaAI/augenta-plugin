@@ -12,6 +12,19 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.16.5] — 2026-10-14
+
+Nothing changes for a connected project. No reconnect or renewed hook approval
+is required.
+
+### Fixed
+
+- Recall reports a Workspace with nothing to recall as nothing remembered again,
+  not as a failure. The API now answers that case with `200` and `noMatch: true`
+  instead of `404 empty_scope`, and the plugin had been reporting it as an answer
+  with nothing in it. Both forms are read the same way, and automatic recall
+  stays silent for either.
+
 ## [0.16.4] — 2026-10-13
 
 Nothing changes for a connected project. No reconnect or renewed hook approval
@@ -701,6 +714,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.16.5]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.4...v0.16.5
 [0.16.4]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.3...v0.16.4
 [0.16.3]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.2...v0.16.3
 [0.16.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.1...v0.16.2

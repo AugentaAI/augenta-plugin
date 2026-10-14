@@ -366,9 +366,10 @@ deliberate:
   explicit mode. Only 503 `answerer_unavailable` / `consent_required` in answer
   mode retries as context: same question, same destination, same idempotency
   key, once, with a `fallback` marker. No new disclosure or destination.
-- **A young Workspace is not an error.** `empty_scope` means "nothing remembered
-  yet"; reporting it as a failure sends a user to look for a fault that is not
-  there, and invites a reconnect that would change nothing.
+- **A young Workspace is not an error.** A `200` with `noMatch: true` (or, from
+  an older API, a `404 empty_scope`) means "nothing remembered yet"; reporting it
+  as a failure sends a user to look for a fault that is not there, and invites a
+  reconnect that would change nothing.
 
 **Automatic recall asks with the prompt, and has invariants of its own.** The
 UserPromptSubmit hook (`hooks/auto-recall.ts`) asks every recorded destination

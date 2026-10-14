@@ -277,6 +277,14 @@ describe("runAutoRecall: gated like capture, asked like recall", () => {
     route({ [`POST ${GATEWAY}/v1/recall`]: () => typed(404, "empty_scope", false) });
     expect(await run()).toBeUndefined();
   });
+
+  test("a noMatch recall is silence, asked once", async () => {
+    apiKeyProject();
+    route({ [`POST ${GATEWAY}/v1/recall`]: () =>
+      Response.json({ mode: "context", scope: "org_1:ws-default", noMatch: true, content: [] }) });
+    expect(await run()).toBeUndefined();
+    expect(recallCalls()).toHaveLength(1);
+  });
 });
 
 describe("retries: transient only, at most two, inside the budget", () => {

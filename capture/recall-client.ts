@@ -232,7 +232,8 @@ export interface RecallRequest {
  * plugin installs and API rollouts are not in lockstep, so that shape is still
  * read. The typed `code` IS the contract — `empty_scope` is a 404 that means
  * "this Workspace is young", not a fault — so it is read first and only then
- * fallen back on. Kept as a pure function over the parts of a response so the
+ * fallen back on. A current API reports that young Workspace as a `200` with
+ * `noMatch: true` instead, and both read as `nothing_remembered`. Kept as a pure function over the parts of a response so the
  * whole table can be exercised without a server.
  * ---------------------------------------------------------------------- */
 
@@ -352,6 +353,14 @@ function retryAfterSeconds(raw: string | null | undefined): number | undefined {
 export function classifyRecallResponse(parts: RecallResponseParts, withNotes = false): Outcome {
   const { status, body, text } = parts;
   if (status === 200) {
+    /* A valid recall that found nothing. The API answers it `200` with
+       `noMatch: true` and empty content, in either mode and before any model
+       runs, where an older API answered `404 empty_scope`. Same outcome, so the
+       same report: read first, because the content check below would otherwise
+       call it a response with nothing to read. */
+    if ((body as { noMatch?: unknown } | undefined)?.noMatch === true) {
+      return { kind: "nothing_remembered" };
+    }
     /* The MODE is read off the response, never assumed from the flag that was
        passed: the door decides, and a client that assumed would mislabel a
        payload the moment the two disagreed. `mode` absent is a pre-envelope
@@ -381,8 +390,9 @@ export function classifyRecallResponse(parts: RecallResponseParts, withNotes = f
       /* A 200 with nothing to read is not a recall. Reporting it as one would
          put an empty string in front of the user as though the Workspace had
          spoken — and in context mode it would also look like a young Workspace,
-         which has its own honest answer (`404 empty_scope`, reported as
-         `nothing_remembered`) that this must not be confused with. */
+         which has its own honest answer (`noMatch`, or `404 empty_scope` from an
+         older API, reported as `nothing_remembered`) that this must not be
+         confused with. */
       return {
         kind: "failed",
         code: "invalid_response",

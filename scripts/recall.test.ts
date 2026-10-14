@@ -452,6 +452,24 @@ describe("classifyRecallResponse", () => {
     ).toEqual({ kind: "nothing_remembered" });
   });
 
+  test("200 noMatch is a young Workspace in either mode, NOT an error", () => {
+    // The current API answers a valid recall that found nothing this way, before
+    // any model runs, so an answer-mode response carries no answer block. Read as
+    // a response with nothing in it, it would be reported as a failure.
+    for (const mode of ["answer", "context"]) {
+      expect(
+        classifyRecallResponse(parts(200, envelope(mode, [], { noMatch: true, note_count: 0 }))),
+      ).toEqual({ kind: "nothing_remembered" });
+    }
+  });
+
+  test("noMatch false still has to carry something to read", () => {
+    expect(classifyRecallResponse(parts(200, envelope("context", [], { noMatch: false })))).toMatchObject({
+      kind: "failed",
+      code: "invalid_response",
+    });
+  });
+
   test("a 404 with no error body means recall is not deployed here", () => {
     // Hono answers an unregistered route with plain text, and the platform does
     // not register /v1/recall when the retrieval service is unconfigured.
@@ -995,6 +1013,21 @@ describe("the fan-out", () => {
     const payload = await runRecall({ projectRoot: project }, args());
     expect(payload.status).toBe("nothing_remembered");
     expect(payload.failed).toEqual([]);
+  });
+
+  test("an answer-mode noMatch is nothing_remembered, with no context fallback", async () => {
+    await connectedProject();
+    route({
+      [`POST ${GATEWAY}/v1/recall`]: (_init, url) => Response.json({
+        scope: "org_1:ws-default", mode: url.searchParams.get("mode"), noMatch: true,
+        claim_count: 0, claims_truncated: false, content: [],
+      }),
+    });
+    const payload = await runRecall({ projectRoot: project }, args());
+    expect(payload.status).toBe("nothing_remembered");
+    expect(payload.failed).toEqual([]);
+    expect(payload.nothingRemembered).toHaveLength(2);
+    expect(recallModes()).toEqual(["answer", "answer"]);
   });
 
   test("one wedged destination never costs the others their answer", async () => {

@@ -2367,6 +2367,9 @@ function retryAfterSeconds(raw) {
 function classifyRecallResponse(parts, withNotes = false) {
   const { status, body, text } = parts;
   if (status === 200) {
+    if (body?.noMatch === true) {
+      return { kind: "nothing_remembered" };
+    }
     const declared = body?.mode;
     const answerBlock = textOf(blocksOf(body, "answer")[0]);
     const legacyAnswer = typeof body?.answer === "string" ? body.answer : "";
