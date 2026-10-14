@@ -203,9 +203,16 @@ that is not Node would consume it and leave the bundle an empty stream — the
 silent-then-exit-0 failure recorded above. And when no runtime is found it reads
 the payload's `cwd`, staying **silent for a project with no `.augenta/config.json`**
 and complaining only for a connected one: a missing Node is not evidence anyone
-opted in, and hooks are a silent no-op without project config. That tail uses
-shell builtins only, because the PATH it would otherwise depend on is the thing
-under suspicion.
+opted in, and hooks are a silent no-op without project config. **One exception,
+once per computer:** without Node, SessionStart's connect prompt cannot run
+either, so an unconnected project would never hear from the plugin at all. The
+first SessionStart on such a computer therefore emits one `additionalContext`
+notice saying Node.js 20+ is missing. It is recorded by an exclusively created
+`state/node-missing-notified` beside `connect-prompted.json`, and it is silence
+again from then on, and silence whenever that marker cannot be written. No other
+event spends it. That tail uses shell builtins only (plus `command -p mkdir`,
+from the default PATH), because the PATH it would otherwise depend on is the
+thing under suspicion.
 
 A third: behind a proxy the environment names, the runner turns on Node's
 env-proxy support (`NODE_USE_ENV_PROXY`, plus the sandbox's proxy CA through

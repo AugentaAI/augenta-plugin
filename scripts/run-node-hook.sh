@@ -118,17 +118,16 @@ done
 IFS=$saved_ifs
 
 # Nothing can be exec'd now, so consuming the payload is free — and it carries
-# the one fact worth having: whether this project ever opted in. Hooks are a
-# silent no-op without `.augenta/config.json` (AGENTS.md → Privacy invariants),
-# and a missing Node is not evidence of consent, so a project that never
-# connected gets silence on every fire instead of a repeated complaint about a
-# runtime it does not need. A CONNECTED project is owed the diagnostic: its
-# capture has stopped.
+# the facts worth having: whether this project ever opted in, and which hook
+# event this is. Hooks are a silent no-op without `.augenta/config.json`
+# (AGENTS.md → Privacy invariants), and a missing Node is not evidence of
+# consent, so a project that never connected gets silence on every fire instead
+# of a repeated complaint about a runtime it does not need. A CONNECTED project
+# is owed the diagnostic: its capture has stopped.
 #
 # Shell builtins only, deliberately: the PATH that got us here is the thing
 # under suspicion, and a diagnostic that itself needs `sed` on PATH would go
-# missing exactly when it is needed. `"cwd"` cannot be matched by a suffixed key
-# like `"old_cwd"`, whose leading quote sits elsewhere.
+# missing exactly when it is needed.
 payload=""
 if [ ! -t 0 ]; then
   # `|| [ -n "$line" ]` because a payload with no trailing newline leaves the
@@ -138,21 +137,91 @@ if [ ! -t 0 ]; then
     line=""
   done
 fi
-project=""
-case $payload in
-  *'"cwd"'*)
-    rest=${payload#*'"cwd"'}
-    rest=${rest#*:}
-    rest=${rest#*'"'}
-    project=${rest%%'"'*}
-    ;;
-esac
+
+# The string value of the payload key $1, left in $field ("" when absent). A
+# quoted key cannot be matched by a suffixed one: `"cwd"` never matches
+# `"old_cwd"`, whose leading quote sits elsewhere.
+json_string() {
+  field=""
+  case $payload in
+    *"\"$1\""*)
+      field=${payload#*"\"$1\""}
+      field=${field#*:}
+      field=${field#*'"'}
+      field=${field%%'"'*}
+      ;;
+  esac
+}
+
+# The harness, decided as hooks/harness.ts `isCodexHarness` decides it from the
+# transcript path; __tests__/hook-runner.test.ts holds the two to the same answers.
+codex_harness() {
+  json_string transcript_path
+  [ -n "$field" ] || return 1
+  # Claude Code's own layout wins first: a cloud image can set CODEX_HOME to the
+  # home directory itself, and every Claude transcript would then read as Codex.
+  case $field in */.claude/projects/*) return 1 ;; */.codex/*) return 0 ;; esac
+  case $field in
+    */*)
+      case ${field##*/} in
+        [Rr][Oo][Ll][Ll][Oo][Uu][Tt]-*.[Jj][Ss][Oo][Nn][Ll]) return 0 ;;
+      esac
+      ;;
+  esac
+  codex_home=${CODEX_HOME-}
+  while [ "${codex_home%/}" != "$codex_home" ]; do codex_home=${codex_home%/}; done
+  [ -n "$codex_home" ] || return 1
+  [ "$field" = "$codex_home" ] && return 0
+  case $field in "$codex_home"/*) return 0 ;; esac
+  return 1
+}
+
+# The one exception to that silence. Without Node, SessionStart's connect prompt
+# cannot run either, so a computer with no Node would never hear from the plugin
+# at all: installed, its hooks trusted and firing, every one doing nothing.
+# Installing the plugin is a signal that the hidden prompt is not, so the first
+# SessionStart on a computer says why, ONCE, through the same `additionalContext`
+# channel that prompt uses, and every fire after it is silent again. Only
+# SessionStart: a notice spent on any other event would be thrown away.
+#
+# "Once" is a marker beside connect-prompted.json, under the same home
+# session-start.ts uses, created exclusively: noclobber makes `>` an O_EXCL open,
+# so two sessions starting together still print one notice. A marker that cannot
+# be created means silence, as session-start.ts's firstTime() decides — better
+# quiet than a notice on every session. A home that is not absolute is refused
+# rather than resolved against the hook's cwd, which may be the project.
+# `command -p` finds mkdir on the default PATH, not the one under suspicion.
+#
+# Constant text, so the JSON needs no escaping: keep `"`, `\` and `'` out of it.
+# Codex may show it verbatim and Claude Code hands it to the model, so each gets
+# its own wording, as session-start.ts does.
+notify_once() {
+  json_string hook_event_name
+  [ "$field" = SessionStart ] || return 0
+  home=${AUGENTA_HOME-${HOME-}}
+  case $home in /*) ;; *) return 0 ;; esac
+  command -p mkdir -p "$home/.augenta/state" 2>/dev/null || return 0
+  (set -C; : > "$home/.augenta/state/node-missing-notified") 2>/dev/null || return 0
+  if codex_harness; then
+    printf '%s' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Augenta is installed but cannot run on this computer: no Node.js 20 or newer was found on the PATH this app gives its hooks, so nothing is captured and this project has not been offered a connection. Install Node.js 20 or newer, or set AUGENTA_NODE to the absolute path of a working node, then start a new session and run $augenta:connect or ask to Connect Augenta. This notice appears once on this computer."}}'
+  else
+    printf '%s' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"[Augenta] The Augenta plugin is installed but cannot run on this computer: no Node.js 20 or newer was found on the PATH this app gives its hooks, so none of them can run and this project was never offered a connection. This is the only notice it will give on this computer. Tell the user. The fix is to install Node.js 20 or newer, or to set AUGENTA_NODE to the absolute path of a working node executable, and then start a new session, which offers to connect the project. Do not run the augenta connect skill (/augenta:connect) before then: it needs the same Node.js."}}'
+  fi
+}
+
+unconnected() {
+  notify_once
+  exit 0
+}
+
+json_string cwd
+project=$field
 # Mirror the bounded project lookup without requiring Git or Node. Only absolute
 # paths are usable here; malformed payload paths must not inspect this shell's cwd.
-case $project in /*) ;; *) exit 0 ;; esac
+case $project in /*) ;; *) unconnected ;; esac
 # Resolve symlinks before walking parents, matching the Node lookup. Both cd and
 # pwd are shell builtins, so this still works with the unusable PATH above.
-project=$(CDPATH= cd -P "$project" 2>/dev/null && pwd -P) || exit 0
+project=$(CDPATH= cd -P "$project" 2>/dev/null && pwd -P) || unconnected
 while [ -n "$project" ]; do
   if [ -f "$project/.augenta/config.json" ]; then
     echo "Augenta hook: Node.js 20 or newer was not found; install or repair Node.js, or set AUGENTA_NODE to a working executable" >&2
@@ -163,4 +232,4 @@ while [ -n "$project" ]; do
   project=${project%/*}
   [ -n "$project" ] || project=/
 done
-exit 0
+unconnected
