@@ -12,6 +12,18 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.16.3] — 2026-10-13
+
+Nothing changes for a connected project. No reconnect or renewed hook approval
+is required.
+
+### Changed
+
+- Documentation uses public plugin terms and self-contained contributor guidance.
+  An unused organization-settings screenshot has been removed from the package.
+- Contributor checks now reject private references in public text files, new
+  commit messages, and pull request metadata.
+
 ## [0.16.2] — 2026-10-13
 
 Nothing changes for a connected project. No reconnect or renewed hook approval
@@ -678,6 +690,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.16.3]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.2...v0.16.3
 [0.16.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.1...v0.16.2
 [0.16.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.15.0...v0.16.0

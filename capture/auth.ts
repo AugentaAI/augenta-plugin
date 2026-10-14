@@ -1,16 +1,11 @@
 /**
  * Public-client device authorization and owner-only global profiles.
  *
- * The identity provider behind Augenta sign-in is WorkOS AuthKit, reached through
- * Augenta's own `auth.augenta.ai` domain. That is an implementation detail of the
- * platform and appears nowhere in the plugin's names, values, or output: a user
- * meets a vendor's name exactly when they are deciding whether to trust this
- * plugin with their transcripts, where it reads as data going somewhere they
- * never signed up for.
+ * Sign-in uses Augenta's own domain and identifiers. Keep provider-specific
+ * names and identifiers out of the plugin's names, values, and output.
  *
  * A profile's `userId`/`orgId` are Augenta's own identifiers from `/v1/me`
- * (`user.id`, `org.id`). The IdP's separate `org.workosOrgId` is deliberately
- * unused — a contract test enforces that nothing here goes back to it.
+ * (`user.id`, `org.id`), never identifiers from an upstream identity provider.
  */
 import {
   chmodSync,

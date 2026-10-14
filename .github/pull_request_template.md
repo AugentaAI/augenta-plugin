@@ -30,6 +30,8 @@ git diff --check
       plus the `CHANGELOG.md` entry and `RELEASE_VERSION` in the contract test.
 - [ ] `hooks/hooks.json` untouched — or the change is deliberately batched,
       knowing it re-prompts every Codex user for hook trust.
-- [ ] No references to private repositories in the commits or this description.
+- [ ] `bun run audit:public` passes; files, images, branch names, commits, and this
+      description contain no private references, ticket identifiers, internal
+      terminology, or deployment details. Review comments follow the same rule.
 - [ ] No change to telemetry APIs, payloads, consent semantics, or capture
       behavior without an explicit product decision.
