@@ -352,6 +352,24 @@ function retryAfterSeconds(raw: string | null | undefined): number | undefined {
 export function classifyRecallResponse(parts: RecallResponseParts, withNotes = false): Outcome {
   const { status, body, text } = parts;
   if (status === 200) {
+    // Newer servers report a valid empty search as success. Only the explicit,
+    // consistent envelope means nothing remembered; malformed silence stays a
+    // failure, and older servers without noMatch retain their existing parsing.
+    if (body && typeof body === "object" && "noMatch" in body) {
+      const result = body as Record<string, unknown>;
+      const invalid = () => ({ kind: "failed" as const, code: "invalid_response",
+        message: "Augenta returned an inconsistent recall result" });
+      if (typeof result.noMatch !== "boolean") return invalid();
+      if (result.noMatch) {
+        if ((result.mode !== "answer" && result.mode !== "context") ||
+          !Array.isArray(result.content) || result.content.length !== 0 ||
+          "answer" in result || "error" in result || "score" in result ||
+          ["note_count", "claim_count"].some(key => key in result && result[key] !== 0) ||
+          ["notes_truncated", "claims_truncated"].some(key => key in result && result[key] !== false) ||
+          ("reference_date" in result && result.reference_date !== null)) return invalid();
+        return { kind: "nothing_remembered" };
+      }
+    }
     /* The MODE is read off the response, never assumed from the flag that was
        passed: the door decides, and a client that assumed would mislabel a
        payload the moment the two disagreed. `mode` absent is a pre-envelope
@@ -381,7 +399,7 @@ export function classifyRecallResponse(parts: RecallResponseParts, withNotes = f
       /* A 200 with nothing to read is not a recall. Reporting it as one would
          put an empty string in front of the user as though the Workspace had
          spoken — and in context mode it would also look like a young Workspace,
-         which has its own honest answer (`404 empty_scope`, reported as
+         which has its own explicit answer (`noMatch` or `404 empty_scope`, reported as
          `nothing_remembered`) that this must not be confused with. */
       return {
         kind: "failed",

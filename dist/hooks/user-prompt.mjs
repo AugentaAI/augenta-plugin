@@ -2884,6 +2884,21 @@ function retryAfterSeconds(raw) {
 function classifyRecallResponse(parts, withNotes = false) {
   const { status, body, text } = parts;
   if (status === 200) {
+    if (body && typeof body === "object" && "noMatch" in body) {
+      const result = body;
+      const invalid = () => ({
+        kind: "failed",
+        code: "invalid_response",
+        message: "Augenta returned an inconsistent recall result"
+      });
+      if (typeof result.noMatch !== "boolean")
+        return invalid();
+      if (result.noMatch) {
+        if (result.mode !== "answer" && result.mode !== "context" || !Array.isArray(result.content) || result.content.length !== 0 || "answer" in result || "error" in result || "score" in result || ["note_count", "claim_count"].some((key) => (key in result) && result[key] !== 0) || ["notes_truncated", "claims_truncated"].some((key) => (key in result) && result[key] !== false) || "reference_date" in result && result.reference_date !== null)
+          return invalid();
+        return { kind: "nothing_remembered" };
+      }
+    }
     const declared = body?.mode;
     const answerBlock = textOf(blocksOf(body, "answer")[0]);
     const legacyAnswer = typeof body?.answer === "string" ? body.answer : "";
