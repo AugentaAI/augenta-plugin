@@ -171,9 +171,15 @@ async function diagnoseHosts(controlUrl, options = {}) {
     gateway = options.gateway;
   const rest = await Promise.all([
     issuer ? check(fetcher, `${issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`, timeoutMs, (response, body) => response.ok && typeof body?.issuer === "string") : undefined,
-    gateway ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) => response.status === 401 && typeof body?.error === "string") : undefined
+    gateway ? check(fetcher, `${gateway.replace(/\/+$/, "")}/v1/me`, timeoutMs, (response, body) => response.status === 401 && isAugentaError(body)) : undefined
   ]);
   return [discovery, ...rest.filter((item) => Boolean(item))];
+}
+function isAugentaError(body) {
+  const error = body?.error;
+  if (typeof error === "string")
+    return true;
+  return !!error && typeof error === "object" && typeof error.code === "string";
 }
 
 // capture/url.ts

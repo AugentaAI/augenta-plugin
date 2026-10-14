@@ -30,6 +30,47 @@ No reconnect or renewed hook approval is required.
   those exactly as before. The recall command's `--json` output is unchanged,
   including its `notesTruncated` field.
 
+## [0.16.4] — 2026-10-13
+
+Nothing changes for a connected project. No reconnect or renewed hook approval
+is required.
+
+### Fixed
+
+- The public-content audit now accepts public security advisory identifiers and
+  common issue and Node version references in documentation, commits, PR text,
+  and branch names. Private tracker links and repository references still fail.
+
+## [0.16.3] — 2026-10-13
+
+Nothing changes for a connected project. No reconnect or renewed hook approval
+is required.
+
+### Changed
+
+- Documentation uses public plugin terms and self-contained contributor guidance.
+  An unused organization-settings screenshot has been removed from the package.
+- Contributor checks now reject private references in public text files, new
+  commit messages, and pull request metadata.
+
+## [0.16.2] — 2026-10-13
+
+Nothing changes for a connected project. No reconnect or renewed hook approval
+is required.
+
+### Changed
+
+- **Ready for the platform's one error shape.** The Augenta API is moving every
+  failure to one envelope, `{"error": {"code", "message", "retryable"},
+  "requestId"}`, where its own refusals used to answer a bare
+  `{"error": "…"}`. Connect's host check now recognizes either as Augenta's own
+  401 — with only the old shape recognized, a reachable gateway would have been
+  diagnosed as blocked. Recall reads either shape, and treats the API's own
+  `not_found` for a route it does not serve as "recall is not available in this
+  Augenta environment", as it already did for a 404 with no body, rather than
+  as a destination that needs reconnecting. This release ships before the API
+  change, so installs are ready when it arrives.
+
 ## [0.16.1] — 2026-10-10
 
 Nothing changes for a connected project. No reconnect or renewed hook approval
@@ -678,7 +719,11 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
-[0.17.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.1...v0.17.0
+[0.17.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.4...v0.17.0
+
+[0.16.4]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.3...v0.16.4
+[0.16.3]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.2...v0.16.3
+[0.16.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.1...v0.16.2
 [0.16.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.14.0...v0.15.0

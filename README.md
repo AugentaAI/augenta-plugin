@@ -1,6 +1,6 @@
 # Augenta
 
-**Neuroplasticity for Agents, a living memory that focuses on relevant context. Help your agents remember and share their work.**
+**Help your agents remember and share their work across projects.**
 
 Augenta saves your agent's activity and project notes so you can ask about them
 later. It works with Claude Code and Codex.

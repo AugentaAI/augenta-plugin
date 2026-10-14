@@ -1,9 +1,9 @@
 /**
  * Tests for harness.ts — detecting the Codex vs Claude Code harness from the
- * hook payload's transcript path. Drives the #182 fix (suppress internal-only
- * injections on Codex, where additionalContext is user-visible).
+ * hook payload's transcript path. Suppress agent instructions on Codex,
+ * where additionalContext is user-visible.
  *
- * Run: bun test plugin/hooks/harness.test.ts
+ * Run: bun test hooks/harness.test.ts
  */
 import { test, expect, describe } from "bun:test";
 import { isCodexHarness, sniffHarness } from "./harness";

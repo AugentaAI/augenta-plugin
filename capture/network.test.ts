@@ -75,6 +75,25 @@ describe("diagnoseHosts", () => {
     ]);
   });
 
+  test("the API's error envelope is Augenta's 401 as surely as the older bare string", async () => {
+    const hosts = await diagnoseHosts("https://control.example.com", {
+      fetcher: fetcherFor(answers({
+        "https://api.example.com/v1/me": Response.json({
+          error: { code: "unauthenticated", message: "authentication required", retryable: false },
+          requestId: "req_1",
+        }, { status: 401 }),
+      })),
+    });
+    expect(hosts.at(-1)).toEqual({ host: "api.example.com", ok: true });
+    // A JSON 401 that is neither shape is somebody else's.
+    const foreign = await diagnoseHosts("https://control.example.com", {
+      fetcher: fetcherFor(answers({
+        "https://api.example.com/v1/me": Response.json({ error: { status: 401 } }, { status: 401 }),
+      })),
+    });
+    expect(foreign.at(-1)).toMatchObject({ host: "api.example.com", ok: false });
+  });
+
   test("a proxy's 403 page is not Augenta's 401, and a refused tunnel is named", async () => {
     const hosts = await diagnoseHosts("https://control.example.com", {
       fetcher: fetcherFor(answers({
