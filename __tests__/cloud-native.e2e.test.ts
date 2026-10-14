@@ -43,7 +43,7 @@ test("cloud bundles connect a non-Git project, route hooks by task binding and r
     }
     if (path === "/v1/recall") {
       const body = await request.json() as any; recalls.push(body);
-      return Response.json({ mode: "context", scope: `org_1:${body.workspace}`, note_count: 0, notes_truncated: false,
+      return Response.json({ mode: "context", scope: `org_1:${body.workspace}`, claim_count: 0, claims_truncated: false,
         content: [{ type: "engram", text: "remembered cloud decision", engram_id: "synthetic", memory_class: "procedural", born_t: new Date().toISOString(), contradiction: false, quality_verdict: "good" }] });
     }
     return new Response(`unexpected route ${path}`, { status: 500 });

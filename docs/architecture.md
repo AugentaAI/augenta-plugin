@@ -173,7 +173,13 @@ already fixes the Workspace, so that request needs only the question and its
 origin. Each destination gets one idempotency key per call.
 
 By default the script explicitly requests `?mode=answer` for model-written prose.
-`--context` requests `?mode=context` for the matched summary and supporting notes.
+`--context` requests `?mode=context` for the matched summary and supporting
+claims, the statements a model wrote from captured sessions.
+Every request also sends `X-Augenta-Content: content-v3`, the response shape the
+plugin reads, in which those statements are `claim` blocks. A platform that
+predates the header answers `content-v2`, with the same statements as `note`
+blocks, and the plugin reads both. The `--json` field `notesTruncated` keeps its
+name in either case.
 A 503 `answerer_unavailable` or `consent_required` triggers one context retry
 with the same question, destination and idempotency key, and a `fallback` marker.
 It reports results, empty Workspaces, and failures separately. An
@@ -207,9 +213,9 @@ with these differences:
   estimate.
 - Retries reuse the request's idempotency key, so a retry after a response was
   lost records one recall, not two.
-- A section over its share drops whole notes, oldest first, keeps the summary,
-  and says how many notes it left out. The heading then reads "(a selection of
-  its notes)", as it does when the platform itself sent only some of them.
+- A section over its share drops whole claims, oldest first, keeps the summary,
+  and says how many claims it left out. The heading then reads "(a selection of
+  its claims)", as it does when the platform itself sent only some of them.
 - The question is the prompt, with pasted blocks removed and common secret
   patterns masked. Commands, `$augenta:` mentions, replies under three words and
   prompts over the size limit are not asked.

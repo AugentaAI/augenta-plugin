@@ -203,9 +203,16 @@ that is not Node would consume it and leave the bundle an empty stream — the
 silent-then-exit-0 failure recorded above. And when no runtime is found it reads
 the payload's `cwd`, staying **silent for a project with no `.augenta/config.json`**
 and complaining only for a connected one: a missing Node is not evidence anyone
-opted in, and hooks are a silent no-op without project config. That tail uses
-shell builtins only, because the PATH it would otherwise depend on is the thing
-under suspicion.
+opted in, and hooks are a silent no-op without project config. **One exception,
+once per computer:** without Node, SessionStart's connect prompt cannot run
+either, so an unconnected project would never hear from the plugin at all. The
+first SessionStart on such a computer therefore emits one `additionalContext`
+notice saying Node.js 20+ is missing. It is recorded by an exclusively created
+`state/node-missing-notified` beside `connect-prompted.json`, and it is silence
+again from then on, and silence whenever that marker cannot be written. No other
+event spends it. That tail uses shell builtins only (plus `command -p mkdir`,
+from the default PATH), because the PATH it would otherwise depend on is the
+thing under suspicion.
 
 A third: behind a proxy the environment names, the runner turns on Node's
 env-proxy support (`NODE_USE_ENV_PROXY`, plus the sandbox's proxy CA through
@@ -369,6 +376,14 @@ deliberate:
 - **A young Workspace is not an error.** `empty_scope` means "nothing remembered
   yet"; reporting it as a failure sends a user to look for a fault that is not
   there, and invites a reconnect that would change nothing.
+- **Ask for one content shape, read the older one too.** Every request sends
+  `X-Augenta-Content: content-v3` (`RECALL_CONTENT`), under which remembered
+  statements arrive as `claim` blocks beside `claims_truncated`. A platform that
+  predates the header ignores it and answers `content-v2`, with `note` blocks and
+  `notes_truncated`, and installs and platform rollouts are not in lockstep, so
+  the readers take both block types in content order and either flag. Send no
+  other version: the door refuses an unknown one with 406. The CLI's `--json`
+  keeps `notesTruncated`, because callers script against it.
 
 **Automatic recall asks with the prompt, and has invariants of its own.** The
 UserPromptSubmit hook (`hooks/auto-recall.ts`) asks every recorded destination

@@ -12,6 +12,39 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.17.0] — 2026-10-14
+
+No reconnect or renewed hook approval is required.
+
+### Changed
+
+- **Recalled memory is called claims.** What a Workspace returns in context mode
+  is the engram's summary and the claims under it: statements a model wrote from
+  captured sessions, not anyone's own words. The plugin now asks the platform for
+  that response shape, and the automatic recall block heads a Workspace's
+  section "remembered claims", with "(a selection of its claims)" and "older
+  claims left out" where it shows only some. Recall still sends only the
+  question, to the same Workspaces.
+- **Older platforms keep working.** An Augenta environment that has not yet
+  rolled out the new shape still answers with "notes", and the plugin reads
+  those exactly as before. The recall command's `--json` output is unchanged,
+  including its `notesTruncated` field.
+
+### Fixed
+
+- **Codex explains how to connect.** The first reply relays the project's
+  connection notice and offers help. Projects whose old notice was never shown
+  receive one corrected attempt. Connecting still requires the user's request.
+- **A missing Node.js runtime gets one explanation.** If Node.js 20 or newer
+  cannot run, the first session on that computer explains how to install it or
+  set `AUGENTA_NODE`. Later sessions stay quiet. Connected projects retain their
+  existing diagnostic when capture cannot run.
+
+- Recall now reports a successful empty search (`noMatch: true`) as "nothing
+  remembered" in answer and context modes, without retrying or using a model
+  fallback. Older empty-Workspace responses remain supported. Malformed or
+  inconsistent empty responses still report a failure.
+
 ## [0.16.4] — 2026-10-13
 
 Nothing changes for a connected project. No reconnect or renewed hook approval
@@ -700,6 +733,9 @@ authentication failure.
 
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
+
+[0.17.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.4...v0.17.0
+
 
 [0.16.4]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.3...v0.16.4
 [0.16.3]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.2...v0.16.3

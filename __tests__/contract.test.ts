@@ -63,7 +63,7 @@ const CODEX_UI: Record<string, string[]> = {
 };
 
 const SEMVER = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
-const RELEASE_VERSION = "0.16.4";
+const RELEASE_VERSION = "0.17.0";
 /** How many values the release must set. AGENTS.md → Releases lists them, and a
  *  test below asserts its count is this one. */
 const RELEASE_SURFACES = 8;
@@ -457,7 +457,7 @@ describe("the recall skill drives recall itself", () => {
   test("says which mode wrote the text, because the two need different wording", () => {
     /* Context mode returns the MEMORY and this agent answers from it; the
        default answer mode returns prose a model on Augenta's side wrote. Relaying
-       remembered notes as though Augenta had answered attributes a claim to a
+       remembered claims as though Augenta had answered credits an answer to a
        summariser that never ran, so the skill has to branch on `mode` — a rule
        that lives only in the script would constrain nothing the model generates. */
     expect(flat).toMatch(/Check `mode` on each entry before you present it/i);

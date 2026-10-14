@@ -34,9 +34,9 @@
  *     fetch at a lower weight than a recall a person asked for, and
  *     `budget_tokens`, this destination's share of the block. Sent to the same
  *     recorded destinations — never one the project does not feed.
- *   • WHOLE NOTES. The door fills that share with a selection of the engram's
- *     notes; if one still overflows, whole notes are dropped oldest first and the
- *     count is said, never a note cut mid-sentence.
+ *   • WHOLE CLAIMS. The door fills that share with a selection of the engram's
+ *     claims; if one still overflows, whole claims are dropped oldest first and
+ *     the count is said, never a claim cut mid-sentence.
  *   • MARKED, SO CAPTURE DROPS IT. The block starts with the frozen sentinel, and
  *     the transcript copies the harness writes of it never ship back
  *     (capture/auto-recall-marker.ts).
@@ -70,8 +70,8 @@ const TOKEN_WAIT_RESERVE_MS = 600;
 /** The pause after a 429 that carried no Retry-After. */
 const DEFAULT_RATE_LIMIT_SECONDS = 60;
 const CUT_MARKER = "\n[… cut by the Augenta plugin to fit the prompt context]";
-/** The heading suffix for remembered notes that are not all of the engram's. */
-const SELECTION = " (a selection of its notes)";
+/** The heading suffix for remembered claims that are not all of the engram's. */
+const SELECTION = " (a selection of its claims)";
 /** The door's context budget floor (`budget_tokens` is clamped to at least this). */
 const DOOR_MIN_BUDGET_TOKENS = 100;
 /** Room for one section's heading, held back from each destination's share. */
@@ -182,9 +182,9 @@ function recallHeader(environment: string): string {
 /**
  * The `budget_tokens` to ask each of `destinations` Workspaces for: an even share
  * of the block, after the header and a heading, in the door's estimated tokens.
- * The door estimates `ceil(chars / 3 × 1.1)` per note and fills until the sum
+ * The door estimates `ceil(chars / 3 × 1.1)` per claim and fills until the sum
  * reaches the budget, so `share × 1.1 / 3` tokens is at most `share` characters
- * of notes. The renderer still drops whole notes if the separators tip it over.
+ * of claims. The renderer still drops whole claims if the separators tip it over.
  */
 export function autoRecallBudgetTokens(destinations: number): number {
   const share = Math.floor((MAX_CONTEXT_CHARS - recallHeader("prod").length) / Math.max(1, destinations)) -
@@ -194,21 +194,21 @@ export function autoRecallBudgetTokens(destinations: number): number {
 
 const escaped = (text: string) => text.replace(HARNESS_WRAPPER_TAG, "&lt;$1");
 
-/** The note-count line that replaces `dropped` notes the renderer left out. */
+/** The claim-count line that replaces `dropped` claims the renderer left out. */
 const droppedLine = (dropped: number) =>
-  `\n\n[${dropped} older note${dropped === 1 ? "" : "s"} left out by the Augenta plugin to fit the prompt context]`;
+  `\n\n[${dropped} older claim${dropped === 1 ? "" : "s"} left out by the Augenta plugin to fit the prompt context]`;
 
 /**
  * `memory` within `share` characters: the summaries whole, then as many of the
- * NEWEST notes as fit, and a line saying how many older ones were left out. No
- * note is ever cut. Undefined when the summaries alone do not fit, or when
+ * NEWEST claims as fit, and a line saying how many older ones were left out. No
+ * claim is ever cut. Undefined when the summaries alone do not fit, or when
  * nothing but the left-out line would, which leaves the caller its cut-text
  * fallback.
  */
-function fitNotes(summaries: string[], notes: string[], share: number): string | undefined {
+function fitClaims(summaries: string[], claims: string[], share: number): string | undefined {
   const summary = summaries.join("\n\n");
-  for (let dropped = 0; dropped <= notes.length; dropped++) {
-    const kept = notes.slice(dropped);
+  for (let dropped = 0; dropped <= claims.length; dropped++) {
+    const kept = claims.slice(dropped);
     if (!summary && !kept.length) return undefined;
     const body = [summary, ...kept].filter(Boolean).join("\n\n") + (dropped ? droppedLine(dropped) : "");
     if (body.length <= share) return body;
@@ -221,13 +221,13 @@ export function renderRecallContext(payload: RecallPayload): string {
   const sections = payload.answers
     .filter((answer) => answer.answer.trim())
     .map((answer) => {
-      const kind = answer.mode === "answer" ? "Augenta's answer" : "remembered notes";
+      const kind = answer.mode === "answer" ? "Augenta's answer" : "remembered claims";
       const heading = (partial: boolean) => `\n\n## ${label(answer)}: ${kind}${partial ? SELECTION : ""}\n`;
       const memory = answer.mode === "context" && answer.memory
-        ? { summaries: answer.memory.summaries.map((t) => escaped(t.trim())), notes: answer.memory.notes.map((t) => escaped(t.trim())) }
+        ? { summaries: answer.memory.summaries.map((t) => escaped(t.trim())), claims: answer.memory.claims.map((t) => escaped(t.trim())) }
         : undefined;
       return {
-        notesTruncated: answer.notesTruncated === true,
+        claimsTruncated: answer.notesTruncated === true,
         heading,
         memory,
         text: escaped(answer.answer.trim()),
@@ -238,19 +238,19 @@ export function renderRecallContext(payload: RecallPayload): string {
   // Shares are handed out shortest first, so an answer needing less than an
   // even share leaves the rest to the longer ones; the order shown is unchanged.
   const bySize = [...sections].sort((a, b) =>
-    a.heading(a.notesTruncated).length + a.text.length - (b.heading(b.notesTruncated).length + b.text.length));
+    a.heading(a.claimsTruncated).length + a.text.length - (b.heading(b.claimsTruncated).length + b.text.length));
   let remaining = MAX_CONTEXT_CHARS - header.length;
   bySize.forEach((section, index) => {
     const even = Math.floor(remaining / (bySize.length - index));
-    const whole = section.heading(section.notesTruncated);
+    const whole = section.heading(section.claimsTruncated);
     if (section.text.length <= even - whole.length) {
       section.shownHeading = whole;
       section.body = section.text;
     } else {
       // Something is left out, so a context section says it shows a selection.
-      const heading = section.heading(section.notesTruncated || section.memory !== undefined);
+      const heading = section.heading(section.claimsTruncated || section.memory !== undefined);
       const share = even - heading.length;
-      const fitted = section.memory ? fitNotes(section.memory.summaries, section.memory.notes, share) : undefined;
+      const fitted = section.memory ? fitClaims(section.memory.summaries, section.memory.claims, share) : undefined;
       if (fitted !== undefined) {
         section.body = fitted;
       } else if (share > CUT_MARKER.length) {
@@ -350,7 +350,7 @@ export async function runAutoRecall(
       mode: "context",
       origin: "auto",
       budgetTokens: autoRecallBudgetTokens,
-      withNotes: true,
+      withClaims: true,
       timeoutMs: remaining,
       contextTimeoutMs: remaining,
       deadlineAt,

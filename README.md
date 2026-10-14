@@ -25,7 +25,9 @@ contain secrets. Every Workspace you choose gets the same records.
 
 You need [Node.js 20 or newer](https://nodejs.org) and an
 [Augenta account](https://augenta.ai). Check that your agent's terminal can run
-`node --version`. Your first sign-in gives you a private Default Workspace.
+`node --version`. Without Node, the plugin says so once, at the start of your
+first session, and then stays quiet. Your first sign-in gives you a private
+Default Workspace.
 
 Choose your app below. The [setup guide](https://augenta.ai/dashboard/getting-started)
 also has screenshots for desktop apps.

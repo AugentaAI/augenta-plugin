@@ -9,20 +9,25 @@
  *  `initialUserMessage` is deliberately NOT used. It applies only to `-p` runs,
  *  where it would put a connect turn ahead of a headless caller's own prompt,
  *  and does nothing in an interactive session. Codex's SessionStart schema
- *  accepts only `hookEventName` and `additionalContext`, so it receives the
- *  user-facing reminder and the user invokes `$augenta:connect` (or asks to
- *  connect) explicitly. Because that reminder is the one automatic prompt the
- *  project will ever get, it must NAME that invocation — narrating a connection
- *  the hook is not starting would leave the user with no next step.
+ *  accepts `hookEventName` and `additionalContext`, which becomes developer
+ *  context rather than a visible notice. Its plain model-addressed wording
+ *  asks the assistant to tell the user how to connect at its first reply and
+ *  offer help, leaving the decision to connect with the user.
  *
  *  Run-once-per-project guarantee: fire only when the project has NO USABLE
  *  `.augenta/config.json` AND has not been auto-prompted before. The prompted
  *  marker lives in the USER's home (~/.augenta/state/connect-prompted.json, a
  *  {projectPath: isoDate} map, honoring AUGENTA_HOME) — deliberately NOT in the
  *  project: planting a `.augenta/` dir in every repo the user merely opens would
- *  be invasive before they've consented. It is the plugin's only home-dir state.
+ *  be invasive before they've consented. Beside it, scripts/run-node-hook.sh keeps
+ *  node-missing-notified, the marker for its one notice per computer that no
+ *  Node.js 20+ was found.
  *  The pre-0.3.0 map (init-prompted.json) is still READ, so renaming the skill
- *  doesn't re-prompt every project a user already dismissed.
+ *  doesn't re-prompt every project a Claude user already dismissed. Codex's
+ *  corrected notice has its own versioned key: the former invisible notice
+ *  must not silence it. The key is a notice version, not the plugin version,
+ *  so ordinary upgrades do not repeat the notice. Delivery is an attempt, not
+ *  an acknowledgment that the assistant displayed it.
  *
  *  "Usable" means the current parser accepts it. A config file it rejects — a
  *  pre-0.3.0 `{apiKey}` file from the removed setup.ts, or a truncated write —
@@ -74,9 +79,9 @@ try {
   /* no / non-JSON stdin — fine */
 }
 
-// On Codex, additionalContext becomes a developer message the user may see (see
-// harness.ts), so we inject clean user-facing facts instead of internal agent
-// instructions.
+// Additional context reaches Codex as a developer message. Ask the assistant
+// to relay the onboarding notice, keeping the wording readable on any surface
+// that also displays it directly (see harness.ts).
 const codex = isCodexHarness(transcriptPath);
 // How the user invokes connect in THIS harness. Codex has no slash commands, so
 // its prompts name the `$` form alongside the plain-English ask. Every prompt
@@ -323,17 +328,17 @@ if (connectedRoot) {
 // earlier format change holds the bare key, and a later change that makes its
 // config unreadable again must still say so rather than turn capture off in silence.
 const markerKey = staleConfig ? `reconnect:${projectPath}:${staleConfigDigest()}` : projectPath;
-if (!staleConfig && readMarkers(legacyMarkerPath)[projectPath]) process.exit(0);
-if (!firstTime(markerKey)) process.exit(0);
+// Old Codex deliveries spent the shared key without reaching the user. Give
+// the corrected notice one attempt, while preserving Claude's existing keys.
+const noticeKey = codex ? `codex-connect-v1:${markerKey}` : markerKey;
+if (!codex && !staleConfig && readMarkers(legacyMarkerPath)[projectPath]) process.exit(0);
+if (!firstTime(noticeKey)) process.exit(0);
 
-// Codex may show additionalContext verbatim, so its wording stays clean and
-// user-facing; Claude Code's is agent-directed and may carry scaffolding.
-// Nothing auto-starts on either harness, so these state the fact AND the
-// invocation — this is the project's only automatic prompt, and one that
-// narrated a connection nobody is making would strand the user with no next step.
+// Plain instructions on Codex's model-context channel: relay the fact and name
+// the invocation, then let the user choose. Nothing grants connection consent.
 const codexContext = staleConfig
-  ? `Augenta's saved connection for this project can no longer be read, so capture is off. Run ${connectAction} to reconnect it.`
-  : `Augenta isn't connected for this project yet. Run ${connectAction} to connect it.`;
+  ? `When you first reply, tell the user that Augenta's saved connection for this project can no longer be read, so capture is off. They can run ${connectAction} to reconnect it. Offer to help, but do not start connecting unless they ask.`
+  : `When you first reply, tell the user that Augenta isn't connected for this project yet. They can run ${connectAction} to connect it. Offer to help, but do not start connecting unless they ask.`;
 
 const claudeContext = staleConfig
   ? "[Augenta] This project has an .augenta/config.json that this plugin version " +
