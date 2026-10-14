@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { publicTextFindings, auditPublicSurface } from "../.github/scripts/public-surface.mjs";
 
+const PUBLIC_IDENTIFIERS = ["CVE-2024-12345", "GHSA-2345-6789-abcd", "ISSUE-42", "GH-123", "NODE-22"];
+const PUBLIC_BRANCHES = ["fix/issue-42", "gh-123", "bump-node-22"];
+
 describe("public surface audit", () => {
   test("rejects private references without returning the matched text", () => {
     const ticket = ["OPS", "123"].join("-");
@@ -21,6 +24,50 @@ describe("public surface audit", () => {
     expect(publicTextFindings("AugentaAI/augenta-plugin#42 https://github.com/AugentaAI/augenta-plugin.git " +
       "SHA-256 UTF-16 RFC-6749 HTTP-401 https://auth.augenta.ai https://api.augenta.ai " +
       "https://dev.example.com /Users/x/.codex")).toEqual([]);
+  });
+
+  test.each(PUBLIC_IDENTIFIERS)("accepts public identifier %s", (identifier) => {
+    expect(publicTextFindings(identifier)).toEqual([]);
+  });
+
+  test("public identifiers do not exempt private links or repository references", () => {
+    const tracker = `https://${["linear", "app"].join(".")}/team/issue/${PUBLIC_IDENTIFIERS[0]}`;
+    const repository = ["AugentaAI", "private-service"].join("/");
+    expect(publicTextFindings(tracker)).toContain("private tracker link");
+    expect(publicTextFindings(`${PUBLIC_IDENTIFIERS.join(" ")} ${repository}`)).toContain("non-public repository reference");
+  });
+
+  test("accepts public identifiers in files, commits, PR text, and normalized branches", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-identifiers-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+    try {
+      git("init", "-q", "-b", "main");
+      git("config", "user.name", "Fixture");
+      git("config", "user.email", "fixture@example.com");
+      git("commit", "--allow-empty", "-qm", "Initial fixture");
+      const base = git("rev-parse", "HEAD");
+      const text = PUBLIC_IDENTIFIERS.join(" ");
+      writeFileSync(join(root, "SECURITY.md"), text);
+      writeFileSync(join(root, "CHANGELOG.md"), text);
+      git("add", ".");
+      git("commit", "-qm", `Public advisory and runtime references: ${text}`);
+      const head = git("rev-parse", "HEAD");
+      for (const branch of PUBLIC_BRANCHES) {
+        git("checkout", "-qb", branch);
+        expect(auditPublicSurface({ root, event: { pull_request: {
+          title: text, body: text, head: { sha: head, ref: branch }, base: { sha: base },
+        } } })).toEqual([]);
+      }
+      // Normalization must still reject private ticket branches in lower case.
+      const privateBranch = `fix/${["ops", "123"].join("-")}`;
+      git("checkout", "-qb", privateBranch);
+      expect(auditPublicSurface({ root, event: { pull_request: {
+        title: text, body: text, head: { sha: head, ref: privateBranch }, base: { sha: base },
+      } } })).toEqual([
+        { location: "branch name", rule: "ticket identifier" },
+        { location: "PR branch", rule: "ticket identifier" },
+      ]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   test("checks added files, commits, PR text, and branch names without scanning old history", () => {

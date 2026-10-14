@@ -5,7 +5,13 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PUBLIC_REPOSITORIES = new Set(["augenta-plugin"]);
-const STANDARD_LABELS = new Set(["SHA", "UTF", "HTTP", "ISO", "RFC", "FIPS"]);
+// These prefixes identify public standards, advisories, issues, or runtimes.
+// Branch names are normalized to catch private ticket IDs in any casing, so
+// their public issue/runtime prefixes must be accepted here as well.
+const STANDARD_LABELS = new Set([
+  "SHA", "UTF", "HTTP", "ISO", "RFC", "FIPS",
+  "CVE", "GHSA", "ISSUE", "GH", "NODE",
+]);
 
 export function publicTextFindings(text) {
   const findings = new Set();
