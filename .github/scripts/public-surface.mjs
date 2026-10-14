@@ -60,7 +60,18 @@ export function auditPublicSurface({ root = process.cwd(), event, commits } = {}
   // Old history requires its own coordinated cleanup. Never grandfather NEW
   // commits because an unrelated historical commit contains a finding.
   for (const sha of git("rev-list", commits ?? "HEAD^..HEAD").trim().split("\n").filter(Boolean)) {
-    check(`commit ${sha.slice(0, 12)}`, git("show", "-s", "--format=%B", sha));
+    const [parents, ...lines] = git("show", "-s", "--format=%P%n%B", sha).split("\n");
+    let message = lines.join("\n");
+    if (parents.trim().split(/\s+/).length > 1) {
+      // GitHub's first line names an owner/BRANCH, not an owner/repository.
+      // Only a real merge gets this interpretation. Keep auditing the branch
+      // (including lowercase ticket ids) and the entire remaining message.
+      message = message.replace(
+        /^Merge pull request #([1-9]\d*) from AugentaAI\/(\S+)(?=\r?\n|$)/,
+        (_, number, branch) => `Merge pull request #${number} from ${branch.toUpperCase()}`,
+      );
+    }
+    check(`commit ${sha.slice(0, 12)}`, message);
   }
   return failures;
 }

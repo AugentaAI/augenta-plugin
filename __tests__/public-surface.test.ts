@@ -96,4 +96,39 @@ describe("public surface audit", () => {
       expect(failures.map((f: { location: string }) => f.location)).toEqual(["PR title", "PR description", "PR branch"]);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
+
+  test("a real merge's owner/branch header passes the push audit while its body stays checked", () => {
+    const root = mkdtempSync(join(tmpdir(), "public-merge-audit-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+    const header = `Merge pull request #42 from ${["AugentaAI", "claude/recall-claims"].join("/")}`;
+    try {
+      git("init", "-q", "-b", "main");
+      git("config", "user.name", "Fixture");
+      git("config", "user.email", "fixture@example.com");
+      git("commit", "--allow-empty", "-qm", "Initial fixture");
+      const before = git("rev-parse", "HEAD");
+      git("checkout", "-qb", "claude/recall-claims");
+      git("commit", "--allow-empty", "-qm", "Read recalled claims");
+      git("checkout", "-q", "main");
+      git("merge", "--no-ff", "-qm", header, "claude/recall-claims");
+      expect(auditPublicSurface({ root, event: { before } })).toEqual([]);
+
+      const privateRepository = ["AugentaAI", "private-service"].join("/");
+      git("commit", "--amend", "-qm", header, "-m", privateRepository);
+      expect(auditPublicSurface({ root, event: { before } }).map((finding: { rule: string }) => finding.rule))
+        .toEqual(["non-public repository reference"]);
+
+      const privateBranch = `claude/${["ops", "123"].join("-")}`;
+      git("commit", "--amend", "-qm", `Merge pull request #42 from AugentaAI/${privateBranch}`);
+      expect(auditPublicSurface({ root, event: { before } }).map((finding: { rule: string }) => finding.rule))
+        .toEqual(["ticket identifier"]);
+
+      // A header copied into a normal commit, a PR, or a file is still text.
+      git("reset", "--hard", before);
+      git("commit", "--allow-empty", "-qm", header);
+      expect(auditPublicSurface({ root, event: { before } }).map((finding: { rule: string }) => finding.rule))
+        .toEqual(["non-public repository reference"]);
+      expect(publicTextFindings(header)).toEqual(["non-public repository reference"]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 });
