@@ -12,6 +12,23 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.17.1] — 2026-10-15
+
+No reconnect or renewed hook approval is required.
+
+### Fixed
+
+- **Codex's own instructions are no longer captured as your work.** Codex
+  writes its harness instructions into the session (sandbox permissions, the
+  skills and plugins it offers, agent roles, every hook's added context) along
+  with context it injects for you, such as the repository's AGENTS.md and the
+  environment description. Capture turned these into memory events, so a
+  Workspace could remember and recall Codex's instructions instead of what you
+  asked for. They no longer become memory events; their raw records remain
+  available. Your prompts, including the mentioned files and page context
+  Codex adds to them, the agent's replies and its tool activity are captured
+  as before.
+
 ## [0.17.0] — 2026-10-14
 
 No reconnect or renewed hook approval is required.
@@ -734,6 +751,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.17.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.4...v0.17.0
 
 

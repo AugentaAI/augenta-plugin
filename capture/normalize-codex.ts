@@ -4,13 +4,14 @@
  * Codex records sessions as a DIFFERENT JSONL shape than Claude: each line is a
  * `{ timestamp, type, payload }` envelope. The signal lives in `response_item`
  * lines (the OpenAI Responses API item that was persisted); `event_msg` lines
- * (user_message / agent_message / token_count / task_*) are UI-stream duplicates
- * of those items, so we read only `response_item` to avoid double-counting. This
- * mirrors the Codex mapping the bulk importer already uses
- * (skills/import/references/source_formats.md) so live capture and import agree.
- * The expanded payload coverage (custom_tool_call(+_output), web_search_call,
- * agent_message, local_shell_call(+_output)) and the keep-signal `default`
- * fallback EXTEND that mapping — the importer should mirror them to stay aligned.
+ * (item_completed / agent_message / token_count / task_*) are UI-stream
+ * duplicates of those items, so we read only `response_item` to avoid
+ * double-counting.
+ *
+ * Codex also persists its own harness scaffolding as `response_item` messages:
+ * developer-role instructions and hook context, and context it injects in the
+ * user role. Those never become steps (see {@link classifyCodex}); their raw
+ * records still ship.
  *
  * This module is the single place that knows the Codex rollout shape; cursor
  * bookkeeping is shared via {@link tailToEvents}. Pure: no I/O, no network, no LLM.
@@ -111,6 +112,38 @@ export function codexSessionFromPath(path: string): string | undefined {
   return m?.[1];
 }
 
+/**
+ * Context Codex injects as a user-role message of its own, recorded from real
+ * rollouts (Codex 0.63–0.160): the repository's AGENTS.md, the environment
+ * (cwd, shell, date), plugin suggestions, a `$skill` body, an interruption
+ * notice and an app page reference. Each is matched by its opening AND closing
+ * tag, so a block that carries anything after the scaffold stays the user's.
+ */
+const CODEX_INJECTED_CONTEXT: ReadonlyArray<readonly [open: string, close: string]> = [
+  ["# AGENTS.md instructions for ", "</INSTRUCTIONS>"],
+  ["<environment_context>", "</environment_context>"],
+  ["<recommended_plugins>", "</recommended_plugins>"],
+  ["<skill>", "</skill>"],
+  ["<turn_aborted>", "</turn_aborted>"],
+  ["<external_codex_apps_open_page>", "</external_codex_apps_open_page>"],
+];
+
+/**
+ * True when every block of a user-role message is injected context. A message
+ * with any other block — the typed prompt, an image — is the user's and is kept
+ * whole. Scaffolding Codex writes around a typed prompt in the SAME block
+ * (mentioned files, in-app browser state) carries the prompt, so it stays too.
+ */
+function isCodexInjectedContext(content: unknown): boolean {
+  const blocks = typeof content === "string" ? [{ text: content }] : content;
+  if (!Array.isArray(blocks) || blocks.length === 0) return false;
+  return blocks.every((block: CodexContentBlock) => {
+    if (!block || typeof block !== "object" || typeof block.text !== "string") return false;
+    const text = block.text.trim();
+    return CODEX_INJECTED_CONTEXT.some(([open, close]) => text.startsWith(open) && text.endsWith(close));
+  });
+}
+
 /** Classify one Codex `response_item` payload into a canonical event shape. */
 function classifyCodex(p: CodexPayload): {
   kind: EventKind;
@@ -123,9 +156,12 @@ function classifyCodex(p: CodexPayload): {
     case "message": {
       const text = extractCodexText(p.content);
       if (p.role === "assistant") return { kind: "msg", role: "assistant", text };
-      if (p.role === "user") return { kind: "msg", role: "user", text };
-      // developer / system / anything else → a system note (don't drop signal).
-      return { kind: "session", role: "system", text };
+      if (p.role === "user") return isCodexInjectedContext(p.content) ? null : { kind: "msg", role: "user", text };
+      // Developer and system roles carry Codex's own instructions (permissions,
+      // skills, agent roles, plugin lists) and every hook's context, this
+      // plugin's included — never anything the user typed. As steps they read as
+      // the session's work and reach recall; the raw record still ships.
+      return null;
     }
     case "function_call": {
       const args = typeof p.arguments === "string" ? p.arguments : JSON.stringify(p.arguments ?? {});

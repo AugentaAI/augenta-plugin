@@ -7,13 +7,16 @@
  * kind/role per payload type; tool name + serialized args on function_call; the
  * conversation id recovered from the rollout PATH (the canonical UUID) ahead of
  * the hook fallback; monotonic seq + exact byte offsets; injectable scrubber;
- * resilience to corrupt lines.
+ * resilience to corrupt lines; Codex's harness scaffolding ships raw only.
  *
- * Run: bun test plugin/ingest/normalize-codex.test.ts
+ * Run: bun test capture/normalize-codex.test.ts
  */
 import { test, expect, describe } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { normalizeCodexRollout } from "./normalize-codex";
 import { type NormalizeCtx } from "./normalize-core";
+import { type EventRole } from "./event";
 import { AUTO_RECALL_SENTINEL } from "./auto-recall-marker";
 
 // A realistic rollout path so the canonical session UUID is recovered from it.
@@ -204,11 +207,16 @@ describe("normalizeCodexRollout", () => {
     expect(events[0]!.text).toBe("ok");
   });
 
-  test("developer/system message → session(system)", () => {
-    const lines = [item({ type: "message", role: "developer", content: [{ type: "input_text", text: "<permissions>" }] })];
-    const { events } = normalizeCodexRollout({ lines, ctx: codexCtx, startSeq: 0, startOffset: 0 });
-    expect(events[0]!.kind).toBe("session");
-    expect(events[0]!.role).toBe("system");
+  test("developer and system messages ship raw but never become steps", () => {
+    const lines = [
+      item({ type: "message", role: "developer", content: [{ type: "input_text", text: "<permissions>" }] }),
+      item({ type: "message", role: "system", content: [{ type: "input_text", text: "You are Codex." }] }),
+    ];
+    const { events, raws, nextSeq } = normalizeCodexRollout({ lines, ctx: codexCtx, startSeq: 4, startOffset: 0 });
+    expect(events).toEqual([]);
+    expect(nextSeq).toBe(4);
+    expect(raws.map((r) => r.raw)).toEqual(lines);
+    expect(raws.every((r) => r.sid === SID)).toBe(true);
   });
 
   test("function_call → tool(assistant) with tool_name + serialized args", () => {
@@ -471,12 +479,12 @@ describe("the automatic-recall block never re-enters capture", () => {
     expect(result.nextSeq).toBe(3);
   });
 
-  test("other developer messages and the user's own quote are kept", () => {
+  test("other developer messages still ship raw, and the user's own quote stays a step", () => {
     const permissions = item({ type: "message", role: "developer", content: [{ type: "input_text", text: "<permissions>" }] });
     const quoted = item({ type: "message", role: "user", content: [{ type: "input_text", text: `what is ${AUTO_RECALL_SENTINEL}` }] });
     const result = normalizeCodexRollout({ lines: [permissions, quoted], ctx: codexCtx, startSeq: 0, startOffset: 0 });
-    expect(result.events.map((e) => e.role)).toEqual(["system", "user"]);
-    expect(result.raws).toHaveLength(2);
+    expect(result.events.map((e) => [e.role, e.text])).toEqual([["user", `what is ${AUTO_RECALL_SENTINEL}`]]);
+    expect(result.raws.map((r) => r.raw)).toEqual([permissions, quoted]);
   });
 
   test("compaction keeps its history minus the recall block", () => {
@@ -495,5 +503,83 @@ describe("the automatic-recall block never re-enters capture", () => {
     const line = item({ message: "", replacement_history: [{ type: "message", role: "user", content: "hi" }] }, "compacted");
     const result = normalizeCodexRollout({ lines: [line], ctx: codexCtx, startSeq: 0, startOffset: 0 });
     expect(result.raws[0]!.raw).toBe(line);
+  });
+});
+
+describe("Codex harness scaffolding never becomes a step", () => {
+  /* Codex persists its own instructions, hook context and injected session
+     context as messages. As steps they read as the session's work, so the
+     extractor turned Codex's system prompt into memory and recall served it
+     back. The fixture follows recorded 0.152 and 0.160 layouts with every value
+     replaced; the raw channel keeps every line. */
+  const lines = readFileSync(join(import.meta.dir, "__fixtures__", "codex-scaffolding.jsonl"), "utf8").trim().split("\n");
+  const result = normalizeCodexRollout({ lines, ctx: codexCtx, startSeq: 0, startOffset: 0 });
+  const user = (...text: string[]) =>
+    item({ type: "message", role: "user", content: text.map((t) => ({ type: "input_text", text: t })) });
+  const steps = (...input: string[]) =>
+    normalizeCodexRollout({ lines: input, ctx: codexCtx, startSeq: 0, startOffset: 0 }).events.map((e) => e.text);
+
+  test("only typed prompts and the agent's own activity become steps", () => {
+    const expected: Array<[EventRole, string]> = [
+      ["user", "Rename the retry helper and update its callers."],
+      ["assistant", "I'll find the retry helper first."],
+      ["assistant", "[thinking] Looking for the helper's callers."],
+      ["assistant", '[tool_use:shell] {"cmd":"grep -rn retryHelper src"}'],
+      ["tool", "[tool_result] src/net.ts:12: retryHelper()"],
+      ["user", "Why does this screenshot show two spinners?"],
+      ["user", "$tidy-imports clean up src/net.ts"],
+      ["user", "Why is the save button disabled?"],
+      ["assistant", "The save button waits for validation to finish."],
+    ];
+    expect(result.events).toHaveLength(expected.length);
+    result.events.forEach((e, i) => {
+      expect(e.role).toBe(expected[i]![0]);
+      expect(e.text).toContain(expected[i]![1]);
+      expect(e.seq).toBe(i);
+    });
+  });
+
+  test("no harness text reaches a step", () => {
+    const text = result.events.map((e) => e.text).join("\n");
+    for (const marker of ["(fixture)", "Augenta's saved connection", "Approved command prefix", "You are `/root`",
+      "<environment_context>", "AGENTS.md instructions", "<skill>", "<turn_aborted>", "page_id"]) {
+      expect(text).not.toContain(marker);
+    }
+  });
+
+  test("scaffolding Codex wraps around a typed prompt stays with the prompt", () => {
+    const [files, browser] = [result.events[5]!.text, result.events[7]!.text];
+    expect(files).toContain("# Files mentioned by the user:");
+    expect(files).toContain("Why does this screenshot show two spinners?");
+    expect(browser).toContain("<in-app-browser-context");
+  });
+
+  test("every line still ships raw, scaffolding included", () => {
+    expect(result.raws).toHaveLength(lines.length);
+    expect(result.raws.every((r) => r.sid === SID)).toBe(true);
+    expect(result.raws.some((r) => r.raw.includes("<multi_agent_role>"))).toBe(true);
+    expect(result.raws.some((r) => r.raw.includes("<environment_context>"))).toBe(true);
+  });
+
+  test("an injected block given as a plain string is dropped too", () => {
+    const line = item({ type: "message", role: "user", content: "<environment_context>\n  <cwd>/w</cwd>\n</environment_context>" });
+    expect(steps(line)).toEqual([]);
+  });
+
+  test("a message mixing injected context with anything else is the user's, whole", () => {
+    expect(steps(user("<environment_context><cwd>/w</cwd></environment_context>", "and fix the build"))).toEqual([
+      "<environment_context><cwd>/w</cwd></environment_context>\nand fix the build",
+    ]);
+    const withImage = item({ type: "message", role: "user", content: [
+      { type: "input_text", text: "<environment_context><cwd>/w</cwd></environment_context>" },
+      { type: "input_image", image_url: "https://example.com/x.png" },
+    ] });
+    expect(steps(withImage)).toHaveLength(1);
+  });
+
+  test("a prompt that quotes a tag, or opens one without closing it, is kept", () => {
+    expect(steps(user("what does <environment_context> contain?"))).toHaveLength(1);
+    expect(steps(user("<environment_context>\n<cwd>/w</cwd>\nplease also fix the build"))).toHaveLength(1);
+    expect(steps(user("<turn_aborted>why did you stop?"))).toHaveLength(1);
   });
 });

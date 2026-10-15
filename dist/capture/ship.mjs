@@ -17170,6 +17170,25 @@ function codexSessionFromPath(path) {
   const m = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(path.replace(/\\/g, "/"));
   return m?.[1];
 }
+var CODEX_INJECTED_CONTEXT = [
+  ["# AGENTS.md instructions for ", "</INSTRUCTIONS>"],
+  ["<environment_context>", "</environment_context>"],
+  ["<recommended_plugins>", "</recommended_plugins>"],
+  ["<skill>", "</skill>"],
+  ["<turn_aborted>", "</turn_aborted>"],
+  ["<external_codex_apps_open_page>", "</external_codex_apps_open_page>"]
+];
+function isCodexInjectedContext(content) {
+  const blocks = typeof content === "string" ? [{ text: content }] : content;
+  if (!Array.isArray(blocks) || blocks.length === 0)
+    return false;
+  return blocks.every((block) => {
+    if (!block || typeof block !== "object" || typeof block.text !== "string")
+      return false;
+    const text = block.text.trim();
+    return CODEX_INJECTED_CONTEXT.some(([open, close]) => text.startsWith(open) && text.endsWith(close));
+  });
+}
 function classifyCodex(p) {
   switch (p.type) {
     case "message": {
@@ -17177,8 +17196,8 @@ function classifyCodex(p) {
       if (p.role === "assistant")
         return { kind: "msg", role: "assistant", text };
       if (p.role === "user")
-        return { kind: "msg", role: "user", text };
-      return { kind: "session", role: "system", text };
+        return isCodexInjectedContext(p.content) ? null : { kind: "msg", role: "user", text };
+      return null;
     }
     case "function_call": {
       const args = typeof p.arguments === "string" ? p.arguments : JSON.stringify(p.arguments ?? {});
@@ -17980,7 +17999,7 @@ function captureHealth(projectRoot) {
 }
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.17.0";
+var PLUGIN_VERSION = "0.17.1";
 
 // capture/ship.ts
 import { join as join13, dirname as dirname7 } from "node:path";

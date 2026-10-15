@@ -5,3 +5,7 @@ These are native Claude Code transcript shapes. File mentions and compaction res
 Content, paths, identifiers and timestamps are replaced with disposable values. The PDF is a generated, valid one-page fixture. Page images are replaced with placeholder bytes. No credentials or private document content are retained.
 
 A genuine mention is a file attachment in the initiating user's parent chain whose filePath matches an explicit @ reference. Compaction restoration includes compact_boundary / isCompactSummary followed by reference and file attachments; those are not fresh user supplies. Display paths are never identity inputs. Context must survive incremental tails.
+
+## Codex harness scaffolding
+
+`codex-scaffolding.jsonl` is a Codex rollout following the layouts recorded from Codex 0.152 and 0.160 sessions: the developer-role instruction bundle and the single-block developer messages (tagged and untagged, including a plugin's SessionStart context), the user-role context Codex injects (AGENTS.md instructions, environment context, plugin recommendations, a `$skill` body, an interruption notice, an app page reference), typed prompts — one with an image and mentioned files, one wrapped in in-app browser state — agent, reasoning and tool items, and a compaction. Every text value, path, identifier and timestamp is disposable, and the image is placeholder bytes.
