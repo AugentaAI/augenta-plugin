@@ -71,3 +71,16 @@ test("the automatic-recall developer message never reaches either channel of a n
   expect(onlyRecall.records).toEqual([]);
   expect(onlyRecall.nextOffset).toBe(Buffer.byteLength(recall) + 1);
 });
+
+test("Codex's own instructions and injected context ship raw but never become steps of a native turn", () => {
+  const developer = row("response_item", { type: "message", role: "developer",
+    content: [{ type: "input_text", text: "<permissions instructions>\nSandbox rules.\n</permissions instructions>" }] });
+  const injected = row("response_item", { type: "message", role: "user",
+    content: [{ type: "input_text", text: "<environment_context>\n  <cwd>/test</cwd>\n</environment_context>" }] });
+  const prompt = row("response_item", { type: "message", role: "user", content: [{ type: "input_text", text: "do the thing" }] });
+  const r = normalizeNativeTurns(opts([start("a"), developer, injected, prompt, message("done"), end("a")]));
+  expect(r.events.map(e => [e.role, e.text, e.turn])).toEqual([["user", "do the thing", 1], ["assistant", "done", 1]]);
+  const raw = JSON.stringify(r.records);
+  expect(raw).toContain("permissions instructions");
+  expect(raw).toContain("environment_context");
+});
