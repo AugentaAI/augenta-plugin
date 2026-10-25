@@ -6,7 +6,7 @@
  * signed-in project, the Workspace id) is ever sent; one destination failing
  * never costs the others their answer; a young Workspace's 404 is a normal
  * outcome and not an error; every destination and every call gets its own
- * idempotency key, which the context fallback reuses; and no credential reaches
+ * idempotency key, with a separate key for context fallback; and no credential reaches
  * the payload. The
  * gateway is a stubbed `globalThis.fetch` routed on `METHOD origin+path`, the
  * same shape scripts/connect.test.ts uses.
@@ -29,6 +29,7 @@ import {
   type RecallArgs,
 } from "./recall";
 import { saveDeviceProfile } from "../capture/auth";
+import { askWorkspaces } from "../capture/recall-client";
 import { gatewayBase, type ProjectConfig } from "../capture/config";
 
 const RECALL = join(import.meta.dir, "recall.ts");
@@ -912,11 +913,17 @@ describe("the fan-out", () => {
     for (const explicitAnswer of [false, true]) {
       test(`${reason} falls back once for ${explicitAnswer ? "explicit" : "default"} answer`, async () => {
         await connectedProject(["connector_a"]);
-        route({
-          [`POST ${GATEWAY}/v1/recall`]: (_init, url) => url.searchParams.get("mode") === "answer"
+        const fingerprints = new Map<string,string>();
+        route({ [`POST ${GATEWAY}/v1/recall`]: (init, url) => {
+          const key = new Headers(init.headers).get("idempotency-key")!;
+          const fingerprint = `${url.search}:${init.body}`;
+          if (fingerprints.has(key) && fingerprints.get(key) !== fingerprint)
+            return Response.json({ error: { code: "conflict", message: "Operation key reused for a changed request", retryable: false } }, { status: 409 });
+          fingerprints.set(key, fingerprint);
+          return url.searchParams.get("mode") === "answer"
             ? Response.json({ error: { code: reason, message: "Unavailable", retryable: false } }, { status: 503 })
-            : memoryResponse("remembered context"),
-        });
+            : memoryResponse("remembered context");
+        } });
         const payload = await runRecall({ projectRoot: project }, args({ answer: explicitAnswer }));
         expect(recallModes()).toEqual(["answer", "context"]);
         expect(payload.failed).toEqual([]);
@@ -926,14 +933,29 @@ describe("the fan-out", () => {
         const calls = recallCalls();
         expect(calls[0]!.body).toBe(calls[1]!.body);
         expect(calls[0]!.headers.get("authorization")).toBe(calls[1]!.headers.get("authorization"));
-        // The SAME key: the refused answer leg recorded nothing at the door, and
-        // the context leg is the same question, so it is one recall.
-        expect(calls[0]!.headers.get("idempotency-key")).toBe(calls[1]!.headers.get("idempotency-key"));
+        // Mode participates in the request fingerprint even for a refused answer.
+        expect(calls[0]!.headers.get("idempotency-key")).not.toBe(calls[1]!.headers.get("idempotency-key"));
         // The context leg reads the same content shape the answer leg asked for.
         for (const call of calls) expect(call.headers.get("x-augenta-content")).toBe("content-v3");
       });
     }
   }
+
+  test("context fallback has one stable operation key across transient retries", async () => {
+    await connectedProject(["connector_a"]);
+    let contexts = 0;
+    route({ [`POST ${GATEWAY}/v1/recall`]: (_init, url) => {
+      if (url.searchParams.get("mode") === "answer") return typedError(503,"answerer_unavailable","Unavailable");
+      contexts++;
+      return contexts === 1 ? typedError(503,"upstream_busy","Retry later",true) : memoryResponse("remembered context");
+    } });
+    const payload = await askWorkspaces(project, { query: "What worked?", mode: "answer", origin: "manual", timeoutMs: 1000, contextTimeoutMs: 1000, retries: 1, sleep: async () => {} });
+    expect(payload.failed).toEqual([]);
+    expect(recallModes()).toEqual(["answer","context","context"]);
+    const keys = recallCalls().map(call => call.headers.get("idempotency-key"));
+    expect(keys[0]).not.toBe(keys[1]);
+    expect(keys[1]).toBe(keys[2]);
+  });
 
   test("explicit context does not retry an unavailable answerer", async () => {
     await connectedProject(["connector_a"]);

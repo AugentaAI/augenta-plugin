@@ -25,8 +25,9 @@
  * no credential in any payload this returns: a sign-in token travels in the
  * authorization header only, and a platform key from the project config.
  *
- * ONE IDEMPOTENCY KEY PER DESTINATION PER CALL. Every retry of that question, and
- * the answer-to-context fallback, reuses it. The door records one reuse activation
+ * ONE IDEMPOTENCY KEY PER DESTINATION, CALL AND MODE. Retries within one mode
+ * reuse it; answer-to-context fallback starts a distinct request. The door binds
+ * each key to its request, including the mode, and records one reuse activation
  * per key, so a retry after a request it did process — a lost response, a 502 from
  * a proxy — is the same recall, not a second one.
  *
@@ -648,9 +649,10 @@ async function askOnce(
         outcome.kind === "failed" &&
         (outcome.code === "answerer_unavailable" || outcome.code === "consent_required")) {
       url.searchParams.set("mode", "context");
-      // The same key: the answer leg recorded nothing, and this is the same question.
+      // Changing mode changes the request fingerprint. Allocate a new key once;
+      // askDestination retains that context key across its own transient retries.
       const fallback = await askDestination(
-        { ...ctx, url: url.toString(), timeoutMs: ctx.contextTimeoutMs }, destination, idempotencyKey,
+        { ...ctx, url: url.toString(), timeoutMs: ctx.contextTimeoutMs }, destination,
       );
       return { outcome: { ...fallback, fallback: { requested: "answer", reason: outcome.code } }, transient: false };
     }

@@ -12,6 +12,16 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.17.2] — 2026-10-25
+
+No reconnect or renewed hook approval is required.
+
+### Fixed
+
+- Recall can fall back from an unavailable answer to remembered context when the
+  API binds operation keys to request modes. The fallback now gets its own key;
+  transient retries within one mode retain the same key.
+
 ## [0.17.1] — 2026-10-15
 
 No reconnect or renewed hook approval is required.
@@ -751,6 +761,7 @@ authentication failure.
 - First release: opt-in, per-project capture of coding-agent activity and project
   memory for Claude Code and Codex.
 
+[0.17.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.17.1...v0.17.2
 [0.17.1]: https://github.com/AugentaAI/augenta-plugin/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.16.4...v0.17.0
 
