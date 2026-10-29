@@ -199,18 +199,19 @@ describe("inspectConnector", () => {
 });
 
 describe("fetchAllWorkspaces", () => {
-  /** A keyset-paged door, like the real one: `nextCursor` only while rows remain. */
+ const workspacePage = (data: {id:string;name:string}[], next?:string) => ({object:"list",data:data.map(item=>({...item,object:"workspace"})),nextPageUrl:next?`/v1/workspaces?limit=${WORKSPACE_LIST_PAGE_SIZE}&page=${next}`:null});
+  /** A keyset-paged door, like the real one: `nextPageUrl` only while rows remain. */
   function servePages(total: number) {
     const all = Array.from({ length: total }, (_, i) => ({ id: `ws-${i}`, name: `WS ${i}` }));
     const seen: string[] = [];
     globalThis.fetch = (async (url: string | URL | Request) => {
       const parsed = new URL(String(url));
-      seen.push(parsed.searchParams.get("cursor") ?? "");
+      seen.push(parsed.searchParams.get("page") ?? "");
       const limit = Number(parsed.searchParams.get("limit"));
-      const from = Number(parsed.searchParams.get("cursor") ?? 0);
+      const from = Number(parsed.searchParams.get("page") ?? 0);
       const page = all.slice(from, from + limit);
       const next = from + limit < all.length ? String(from + limit) : undefined;
-      return Response.json({ workspaces: page, ...(next ? { nextCursor: next } : {}) });
+      return Response.json(workspacePage(page, next));
     }) as unknown as typeof fetch;
     return seen;
   }
@@ -222,7 +223,7 @@ describe("fetchAllWorkspaces", () => {
     expect(seen).toEqual([""]);
   });
 
-  test("it follows nextCursor to exhaustion", async () => {
+  test("it follows nextPageUrl to exhaustion", async () => {
     const seen = servePages(WORKSPACE_LIST_PAGE_SIZE * 2 + 1);
     const workspaces = await fetchAllWorkspaces(profileId, GATEWAY);
     expect(workspaces).toHaveLength(WORKSPACE_LIST_PAGE_SIZE * 2 + 1);
@@ -239,7 +240,7 @@ describe("fetchAllWorkspaces", () => {
     let calls = 0;
     globalThis.fetch = (async () => {
       calls += 1;
-      return Response.json({ workspaces: [{ id: "ws-1", name: "One" }], nextCursor: "stuck" });
+      return Response.json(workspacePage([{ id: "ws-1", name: "One" }], "stuck"));
     }) as unknown as typeof fetch;
     await expect(fetchAllWorkspaces(profileId, GATEWAY)).rejects.toThrow(
       "the Workspace list did not advance",
@@ -254,7 +255,7 @@ describe("fetchAllWorkspaces", () => {
     let page = 0;
     globalThis.fetch = (async () => {
       page += 1;
-      return Response.json({ workspaces: [{ id: `ws-${page}`, name: "x" }], nextCursor: String(page) });
+      return Response.json(workspacePage([{ id: `ws-${page}`, name: "x" }], String(page)));
     }) as unknown as typeof fetch;
     await expect(fetchAllWorkspaces(profileId, GATEWAY)).rejects.toThrow(
       `did not finish within ${WORKSPACE_LIST_MAX_PAGES} pages of ${WORKSPACE_LIST_PAGE_SIZE}`,
@@ -262,8 +263,18 @@ describe("fetchAllWorkspaces", () => {
     expect(page).toBe(WORKSPACE_LIST_MAX_PAGES);
   });
 
-  test("a page with no workspaces array is empty, not a crash", async () => {
+  test("follows the returned selection unchanged and rejects foreign URLs before forwarding credentials", async () => {
+    const seen:string[]=[];
+    globalThis.fetch=(async (value:string|URL|Request)=>{
+      const url=String(value);seen.push(url);
+      if(seen.length===1)return Response.json({object:"list",data:[{object:"workspace",id:"a",name:"A"}],nextPageUrl:"/v1/workspaces?personal=all&limit=1&page=next"});
+      return Response.json({object:"list",data:[{object:"workspace",id:"b",name:"B"}],nextPageUrl:"https://foreign.example/v1/workspaces?limit=1&page=stolen"});
+    }) as typeof fetch;
+    await expect(fetchAllWorkspaces(profileId,GATEWAY)).rejects.toThrow("invalid Workspace page URL");
+    expect(seen).toEqual([`${GATEWAY}/v1/workspaces?limit=${WORKSPACE_LIST_PAGE_SIZE}`,`${GATEWAY}/v1/workspaces?personal=all&limit=1&page=next`]);
+  });
+  test("rejects an invalid resource page", async () => {
     globalThis.fetch = (async () => Response.json({})) as unknown as typeof fetch;
-    expect(await fetchAllWorkspaces(profileId, GATEWAY)).toEqual([]);
+    await expect(fetchAllWorkspaces(profileId, GATEWAY)).rejects.toThrow("invalid Workspace resource page");
   });
 });

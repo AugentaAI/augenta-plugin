@@ -786,6 +786,7 @@ describe("JSON verbs", () => {
     rmSync(authHome, { recursive: true, force: true });
   });
 
+  const workspacePage = (data: {id:string;name:string}[], next?:string) => ({object:"list",data:data.map(item=>({...item,object:"workspace"})),nextPageUrl:next?`/v1/workspaces?limit=${WORKSPACE_LIST_PAGE_SIZE}&page=${next}`:null});
   const WORKSPACES = [
     { id: "ws-default", name: "Default Workspace" },
     { id: "ws-scratch", name: "Scratch" },
@@ -831,20 +832,14 @@ describe("JSON verbs", () => {
         );
         const workspace = { id: `ws-${body.name.toLowerCase()}`, name: body.name };
         liveWorkspaces.push(workspace);
-        return Response.json({
-          workspace: {
-            ...workspace,
-            orgId: "org_1",
-            createdByUserId: "user_1",
-          },
-        });
+        return Response.json({object:"workspace", ...workspace,orgId:"org_1",createdByUserId:"user_1"});
       }
       if (path === `${GATEWAY}/v1/workspaces` && method === "GET") {
-        /* Paged like the real door: keyset over the list index, `nextCursor`
+        /* Paged like the real door: keyset over the list index, `nextPageUrl`
            only while rows remain. A stub that always answered the whole list
            would let an unbounded or non-advancing loop pass. */
         const limit = Math.min(Number(query.get("limit")) || 50, 200);
-        const rawCursor = query.get("cursor");
+        const rawCursor = query.get("page");
         const from = rawCursor === null ? 0 : Number(rawCursor);
         /* 400, not an empty 200. `Number("garbage")` is NaN and
            `slice(NaN, NaN)` is `[]` with no cursor, so the tolerant version
@@ -857,7 +852,7 @@ describe("JSON verbs", () => {
         }
         const page = liveWorkspaces.slice(from, from + limit);
         const next = from + limit < liveWorkspaces.length ? String(from + limit) : undefined;
-        return Response.json({ workspaces: page, ...(next ? { nextCursor: next } : {}) });
+        return Response.json(workspacePage(page, next));
       }
       // Creates a link in whichever Workspace the body asks for, so a fan-out
       // cannot pass by accident against a mock that always answers "ws-default".
@@ -1430,7 +1425,7 @@ describe("JSON verbs", () => {
     ];
     await signIn();
     route({
-      [`GET ${GATEWAY}/v1/workspaces`]: () => Response.json({ workspaces: remote }),
+      [`GET ${GATEWAY}/v1/workspaces`]: () => Response.json(workspacePage(remote)),
     });
 
     const payload = await probeConnection({ projectRoot: project }, baseArgs);
@@ -1438,7 +1433,7 @@ describe("JSON verbs", () => {
     expect(payload.workspaces).toEqual([remote[1], remote[0]]);
   });
 
-  test("follows nextCursor and offers the UNION, still Default-first", async () => {
+  test("follows nextPageUrl and offers the UNION, still Default-first", async () => {
     /* The consent surface has to be the whole list. Splitting the Default
        Workspace onto the SECOND page is the arrangement that matters: a
        first-page-only client would offer "Scratch" alone and the user would ship
@@ -1446,9 +1441,9 @@ describe("JSON verbs", () => {
     await signIn();
     route({
       [`GET ${GATEWAY}/v1/workspaces`]: (query) =>
-        query.get("cursor") === "p2"
-          ? Response.json({ workspaces: [{ id: "ws_01ABC", name: "Default Workspace" }] })
-          : Response.json({ workspaces: [{ id: "ws_01HZY", name: "Scratch" }], nextCursor: "p2" }),
+        query.get("page") === "p2"
+          ? Response.json(workspacePage([{ id: "ws_01ABC", name: "Default Workspace" }]))
+          : Response.json(workspacePage([{ id: "ws_01HZY", name: "Scratch" }], "p2")),
     });
 
     const payload = await probeConnection({ projectRoot: project }, baseArgs);
@@ -1465,7 +1460,7 @@ describe("JSON verbs", () => {
     const asked = requests
       .filter((r) => r.startsWith(`GET ${GATEWAY}/v1/workspaces?`))
       .map((r) => new URL(r.slice("GET ".length)).searchParams)
-      .map((q) => ({ limit: q.get("limit"), cursor: q.get("cursor") }));
+      .map((q) => ({ limit: q.get("limit"), cursor: q.get("page") }));
     expect(asked).toEqual([
       { limit: String(WORKSPACE_LIST_PAGE_SIZE), cursor: null },
       { limit: String(WORKSPACE_LIST_PAGE_SIZE), cursor: "p2" },
@@ -1486,10 +1481,7 @@ describe("JSON verbs", () => {
     let issued = 0;
     route({
       [`GET ${GATEWAY}/v1/workspaces`]: () =>
-        Response.json({
-          workspaces: [{ id: `ws_${issued}`, name: `W${issued}` }],
-          nextCursor: `page-${++issued}`,
-        }),
+        Response.json(workspacePage([{ id: `ws_${issued}`, name: `W${issued}` }], `page-${++issued}`)),
     });
 
     await expect(probeConnection({ projectRoot: project }, baseArgs)).rejects.toThrow(
@@ -1507,11 +1499,11 @@ describe("JSON verbs", () => {
     await signIn();
     route({
       [`GET ${GATEWAY}/v1/workspaces`]: () =>
-        Response.json({ workspaces: [{ id: "ws_1", name: "One" }], nextCursor: "stuck" }),
+        Response.json(workspacePage([{ id: "ws_1", name: "One" }], "stuck")),
     });
 
     await expect(probeConnection({ projectRoot: project }, baseArgs)).rejects.toThrow(
-      /same page cursor twice/,
+      /same page URL twice/,
     );
     // TWO requests, not ten: the first learns the cursor, the second proves it stuck.
     expect(requests.filter((r) => r.includes("/v1/workspaces?")).length).toBe(2);
@@ -1524,7 +1516,7 @@ describe("JSON verbs", () => {
       { id: "ws_01ABC", name: "Research" },
     ];
     route({
-      [`GET ${GATEWAY}/v1/workspaces`]: () => Response.json({ workspaces: remote }),
+      [`GET ${GATEWAY}/v1/workspaces`]: () => Response.json(workspacePage(remote)),
     });
 
     const payload = await probeConnection({ projectRoot: project }, baseArgs);

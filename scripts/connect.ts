@@ -605,14 +605,14 @@ async function createWorkspace(
   const name = requestedName.trim();
   if (!name) throw new Error("a Workspace name is required");
   const result = await bearerJson<
-    { workspace?: Workspace; id?: string; name?: string }
+    Workspace & { object: string }
   >(profileId, `${gateway}/v1/workspaces`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name }),
   });
-  const workspace = result.workspace ?? result;
-  if (typeof workspace.id !== "string" || typeof workspace.name !== "string") {
+  const workspace = result;
+  if (workspace.object !== "workspace" || typeof workspace.id !== "string" || typeof workspace.name !== "string") {
     throw new Error("Augenta created the Workspace but returned an invalid response");
   }
   // The platform response also carries tenancy/audit fields. The agent needs

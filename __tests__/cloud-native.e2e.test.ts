@@ -26,7 +26,7 @@ test("cloud bundles connect a non-Git project, route hooks by task binding and r
     if (path === "/.well-known/augenta.json") return Response.json({ issuer: url.origin, clientId: "client_public", gateway: url.origin });
     if (request.headers.get("authorization") !== "Bearer synthetic-access") return new Response("unauthorized", { status: 401 });
     if (path === "/v1/me") return Response.json({ user: { id: "user_1", name: "Test", email: "test@example.com" }, org: { id: "org_1", name: "Test Org" } });
-    if (path === "/v1/workspaces") return Response.json({ workspaces: [{ id: "workspace_a", name: "A" }, { id: "workspace_b", name: "B" }] });
+    if (path === "/v1/workspaces") return Response.json({object:"list",data:[{object:"workspace",id:"workspace_a",name:"A"},{object:"workspace",id:"workspace_b",name:"B"}],nextPageUrl:null});
     if (path === "/v1/connectors" && request.method === "GET") return Response.json({ connectors: [...links.values()] });
     if (path === "/v1/connectors" && request.method === "POST") {
       const body = await request.json() as any;

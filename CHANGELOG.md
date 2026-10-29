@@ -12,6 +12,14 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.18.0] — 2026-10-28
+
+Workspace selection reads resource pages and follows each returned page URL with its original
+filters intact. It rejects invalid pages and foreign-host continuations before offering a
+partial or untrusted destination list. Creating a Workspace reads the same resource shape.
+This release requires the matching administration API update. Existing connections keep their
+recorded destinations and consent settings; reconnecting is not required.
+
 ## [0.17.1] — 2026-10-15
 
 No reconnect or renewed hook approval is required.
@@ -783,3 +791,5 @@ authentication failure.
 [0.4.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.2.3
+
+[0.18.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.17.1...v0.18.0
