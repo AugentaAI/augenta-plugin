@@ -263,6 +263,19 @@ describe("fetchAllWorkspaces", () => {
     expect(page).toBe(WORKSPACE_LIST_MAX_PAGES);
   });
 
+  test("keeps a configured gateway path prefix on initial and continuation requests", async () => {
+    const gateway=GATEWAY+"/company/augenta";
+    const saved=await saveDeviceProfile({issuer:"https://auth.example.com",clientId:"client_public",gateway},
+      {accessToken:"access-prefix",refreshToken:"refresh-prefix",expiresAt:Date.now()+3_600_000},{userId:"user_1",orgId:"org_1"});
+    const seen:string[]=[];
+    globalThis.fetch=(async(value:string|URL|Request)=>{
+      seen.push(String(value));
+      return Response.json({object:"list",data:[{object:"workspace",id:String(seen.length),name:"Team"}],
+        nextPageUrl:seen.length===1?"/v1/workspaces?limit=1&personal=all&page=second":null});
+    }) as typeof fetch;
+    expect(await fetchAllWorkspaces(saved.profileId,gateway)).toHaveLength(2);
+    expect(seen).toEqual([gateway+`/v1/workspaces?limit=${WORKSPACE_LIST_PAGE_SIZE}`,gateway+"/v1/workspaces?limit=1&personal=all&page=second"]);
+  });
   test("follows the returned selection unchanged and rejects foreign URLs before forwarding credentials", async () => {
     const seen:string[]=[];
     globalThis.fetch=(async (value:string|URL|Request)=>{

@@ -16,7 +16,8 @@ where to read what changed.
 
 Workspace selection reads resource pages and follows each returned page URL with its original
 filters intact. It rejects invalid pages and foreign-host continuations before offering a
-partial or untrusted destination list. Creating a Workspace reads the same resource shape.
+partial or untrusted destination list. Configured gateway path prefixes are retained on every
+page. Creating a Workspace reads the same resource shape.
 This release requires the matching administration API update. Existing connections keep their
 recorded destinations and consent settings; reconnecting is not required.
 

@@ -99,11 +99,14 @@ export async function fetchAllWorkspaces(
   gateway: string,
 ): Promise<Workspace[]> {
   const workspaces: Workspace[] = [];
+  const base = gateway.replace(/\/+$/, "");
+  const gatewayUrl = new URL(base);
+  const resourcePath = gatewayUrl.pathname.replace(/\/+$/, "") + "/v1/workspaces";
   let pageUrl = `/v1/workspaces?limit=${WORKSPACE_LIST_PAGE_SIZE}`;
   const visited = new Set<string>();
   for (let page = 0; page < WORKSPACE_LIST_MAX_PAGES; page++) {
-    const target = new URL(pageUrl, gateway);
-    if (!pageUrl.startsWith("/v1/workspaces?") || target.origin !== new URL(gateway).origin || target.pathname !== "/v1/workspaces" || target.hash) {
+    const target = new URL(base + pageUrl);
+    if (!pageUrl.startsWith("/v1/workspaces?") || target.origin !== gatewayUrl.origin || target.pathname !== resourcePath || target.hash) {
       throw new Error("the API returned an invalid Workspace page URL");
     }
     if (visited.has(pageUrl)) throw new Error("the Workspace list did not advance — the API returned the same page URL twice");
