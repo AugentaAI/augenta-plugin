@@ -170,7 +170,7 @@ sign-in, the Workspace id. No transcript or file content is attached. The API
 decides the allowed organization and memory scope from the signed-in identity,
 and maps `origin` to how strongly the recall reinforces what it used. An API key
 already fixes the Workspace, so that request needs only the question and its
-origin. Each destination gets one idempotency key per call.
+origin. Each destination gets one idempotency key per call and mode.
 
 By default the script explicitly requests `?mode=answer` for model-written prose.
 `--context` requests `?mode=context` for the matched summary and supporting
@@ -181,7 +181,8 @@ predates the header answers `content-v2`, with the same statements as `note`
 blocks, and the plugin reads both. The `--json` field `notesTruncated` keeps its
 name in either case.
 A 503 `answerer_unavailable` or `consent_required` triggers one context retry
-with the same question, destination and idempotency key, and a `fallback` marker.
+with the same question and destination, its own idempotency key, and a `fallback`
+marker.
 It reports results, empty Workspaces, and failures separately. An
 empty Workspace is a normal result. A failure in one is not presented as a
 successful answer from all of them.
