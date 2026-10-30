@@ -112,7 +112,7 @@ describe("shipped Node network behavior", () => {
       if (path === "/.well-known/augenta.json") answer = { issuer: gateway, clientId: "client_public", gateway };
       else if (path === "/v1/connectors") answer = { connectors: [{ id: "connector_test", orgId: "org_test", workspaceId: "ws_test", status: "active", direction: "inbound" }] };
       else if (path === "/v1/connectors/connector_test") answer = { connector: { id: "connector_test", workspaceId: "ws_test", status: "active", direction: "inbound" } };
-      else if (path === "/v1/workspaces") answer = { workspaces: [{ id: "ws_test", name: "Test" }] };
+      else if (path === "/v1/workspaces") answer = {object:"list",data:[{object:"workspace",id:"ws_test",name:"Test"}],nextPageUrl:null};
       else if (path === "/v1/recall") answer = { mode: "context", content: [{ type: "engram", text: "proxy test memory" }] };
       else if (path === "/v1/experiences" || path.startsWith("/v1/telemetry/")) { status = 202; answer = {}; }
       else { status = 404; answer = { error: "not found" }; }

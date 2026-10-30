@@ -2730,7 +2730,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.17.2";
+var PLUGIN_VERSION = "0.18.0";
 
 // capture/claude-cloud.ts
 import { accessSync as accessSync2, constants as constants3, lstatSync as lstatSync3, realpathSync as realpathSync7 } from "node:fs";
@@ -2797,19 +2797,27 @@ var WORKSPACE_LIST_PAGE_SIZE = 200;
 var WORKSPACE_LIST_MAX_PAGES = 10;
 async function fetchAllWorkspaces(profileId, gateway) {
   const workspaces = [];
-  let cursor;
+  const base = gateway.replace(/\/+$/, "");
+  const gatewayUrl = new URL(base);
+  const resourcePath = gatewayUrl.pathname.replace(/\/+$/, "") + "/v1/workspaces";
+  let pageUrl = `/v1/workspaces?limit=${WORKSPACE_LIST_PAGE_SIZE}`;
+  const visited = new Set;
   for (let page = 0;page < WORKSPACE_LIST_MAX_PAGES; page++) {
-    const query = new URLSearchParams({ limit: String(WORKSPACE_LIST_PAGE_SIZE) });
-    if (cursor)
-      query.set("cursor", cursor);
-    const body = await bearerJson(profileId, `${gateway}/v1/workspaces?${query.toString()}`);
-    workspaces.push(...body.workspaces ?? []);
-    if (!body.nextCursor)
-      return workspaces;
-    if (body.nextCursor === cursor) {
-      throw new Error("the Workspace list did not advance — the API returned the same page cursor twice");
+    const target = new URL(base + pageUrl);
+    if (!pageUrl.startsWith("/v1/workspaces?") || target.origin !== gatewayUrl.origin || target.pathname !== resourcePath || target.hash) {
+      throw new Error("the API returned an invalid Workspace page URL");
     }
-    cursor = body.nextCursor;
+    if (visited.has(pageUrl))
+      throw new Error("the Workspace list did not advance — the API returned the same page URL twice");
+    visited.add(pageUrl);
+    const body = await bearerJson(profileId, target.toString());
+    if (body.object !== "list" || !Array.isArray(body.data) || !body.data.every((item) => item?.object === "workspace" && typeof item.id === "string" && typeof item.name === "string") || !(body.nextPageUrl === null || typeof body.nextPageUrl === "string")) {
+      throw new Error("the API returned an invalid Workspace resource page");
+    }
+    workspaces.push(...body.data.map(({ id, name }) => ({ id, name })));
+    if (body.nextPageUrl === null)
+      return workspaces;
+    pageUrl = body.nextPageUrl;
   }
   throw new Error(`the Workspace list did not finish within ${WORKSPACE_LIST_MAX_PAGES} pages of ` + `${WORKSPACE_LIST_PAGE_SIZE} — refusing to offer a partial list of destinations`);
 }
@@ -3137,8 +3145,8 @@ async function createWorkspace(profileId, gateway, requestedName) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name })
   });
-  const workspace = result.workspace ?? result;
-  if (typeof workspace.id !== "string" || typeof workspace.name !== "string") {
+  const workspace = result;
+  if (workspace.object !== "workspace" || typeof workspace.id !== "string" || typeof workspace.name !== "string") {
     throw new Error("Augenta created the Workspace but returned an invalid response");
   }
   return { id: workspace.id, name: workspace.name };

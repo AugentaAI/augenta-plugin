@@ -71,7 +71,7 @@ export async function bearerJson<T>(
 }
 
 /** The page {@link fetchAllWorkspaces} asks for. 200 is the largest `?limit` the
- *  API will honour (it clamps), so a normal organization costs one round trip. */
+ *  API accepts, so a normal organization costs one round trip. */
 export const WORKSPACE_LIST_PAGE_SIZE = 200;
 /**
  * How many pages the walk will follow before refusing.
@@ -88,7 +88,7 @@ export const WORKSPACE_LIST_PAGE_SIZE = 200;
 export const WORKSPACE_LIST_MAX_PAGES = 10;
 
 /**
- * Every Workspace the caller reaches, following `nextCursor` to exhaustion.
+ * Every Workspace the caller reaches, following `nextPageUrl` to exhaustion.
  *
  * Its own function so the terminating branch can simply RETURN and the throw
  * after the loop is unconditional — no "did we finish?" flag to leave false by
@@ -99,26 +99,27 @@ export async function fetchAllWorkspaces(
   gateway: string,
 ): Promise<Workspace[]> {
   const workspaces: Workspace[] = [];
-  let cursor: string | undefined;
+  const base = gateway.replace(/\/+$/, "");
+  const gatewayUrl = new URL(base);
+  const resourcePath = gatewayUrl.pathname.replace(/\/+$/, "") + "/v1/workspaces";
+  let pageUrl = `/v1/workspaces?limit=${WORKSPACE_LIST_PAGE_SIZE}`;
+  const visited = new Set<string>();
   for (let page = 0; page < WORKSPACE_LIST_MAX_PAGES; page++) {
-    const query = new URLSearchParams({ limit: String(WORKSPACE_LIST_PAGE_SIZE) });
-    if (cursor) query.set("cursor", cursor);
-    const body = await bearerJson<{ workspaces: Workspace[]; nextCursor?: string }>(
-      profileId,
-      `${gateway}/v1/workspaces?${query.toString()}`,
-    );
-    workspaces.push(...(body.workspaces ?? []));
-    if (!body.nextCursor) return workspaces;
-    /* A cursor identical to the one just sent is a stuck server, not a long list.
-       Caught here rather than at the ceiling because otherwise it costs ten
-       identical round trips, accumulates the same page ten times, and then blames
-       the organization's size for what is an API bug. */
-    if (body.nextCursor === cursor) {
-      throw new Error(
-        "the Workspace list did not advance — the API returned the same page cursor twice",
-      );
+    const target = new URL(base + pageUrl);
+    if (!pageUrl.startsWith("/v1/workspaces?") || target.origin !== gatewayUrl.origin || target.pathname !== resourcePath || target.hash) {
+      throw new Error("the API returned an invalid Workspace page URL");
     }
-    cursor = body.nextCursor;
+    if (visited.has(pageUrl)) throw new Error("the Workspace list did not advance — the API returned the same page URL twice");
+    visited.add(pageUrl);
+    const body = await bearerJson<{ object: string; data: (Workspace & { object: string })[]; nextPageUrl: string | null }>(
+      profileId, target.toString(),
+    );
+    if (body.object !== "list" || !Array.isArray(body.data) || !body.data.every(item => item?.object === "workspace" && typeof item.id === "string" && typeof item.name === "string") || !(body.nextPageUrl === null || typeof body.nextPageUrl === "string")) {
+      throw new Error("the API returned an invalid Workspace resource page");
+    }
+    workspaces.push(...body.data.map(({ id, name }) => ({ id, name })));
+    if (body.nextPageUrl === null) return workspaces;
+    pageUrl = body.nextPageUrl;
   }
   /* Deliberately says what was OBSERVED and not why. "More than N Workspaces" is
      one explanation; a broken cursor is another, and this code cannot tell them

@@ -141,7 +141,7 @@ function route(
     const custom = extra[`${method} ${path}`] ?? extra[path];
     if (custom) return custom(init, parsed);
     if (path === `${GATEWAY}/v1/workspaces` && method === "GET") {
-      return Response.json({ workspaces: WORKSPACES });
+      return Response.json({object:"list",data:WORKSPACES.map(w=>({...w,object:"workspace"})),nextPageUrl:null});
     }
     if (parsed.origin === GATEWAY && parsed.pathname.startsWith("/v1/connectors/") && method === "GET") {
       const connectorId = decodeURIComponent(parsed.pathname.slice("/v1/connectors/".length));
@@ -1459,7 +1459,7 @@ describe("recorded destinations and live recall", () => {
       return response;
     };
     route({
-      [`GET ${GATEWAY}/v1/workspaces`]: () => hold(Response.json({ workspaces: [{ id: "ws-default", name: "Renamed" }] })),
+      [`GET ${GATEWAY}/v1/workspaces`]: () => hold(Response.json({object:"list",data:[{object:"workspace",id:"ws-default",name:"Renamed"}],nextPageUrl:null})),
       [`POST ${GATEWAY}/v1/recall`]: () => hold(memoryResponse("a")),
     });
     const payload = await runRecall({ projectRoot: project }, args());
