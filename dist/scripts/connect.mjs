@@ -2730,7 +2730,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 // runtime/version.ts
-var PLUGIN_VERSION = "0.17.1";
+var PLUGIN_VERSION = "0.17.2";
 
 // capture/claude-cloud.ts
 import { accessSync as accessSync2, constants as constants3, lstatSync as lstatSync3, realpathSync as realpathSync7 } from "node:fs";

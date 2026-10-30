@@ -325,10 +325,12 @@ deliberate:
   asked. No transcript line, no file content, no memory document. Adding a field
   to that body is a change to what a user's machine discloses, not a feature:
   these two were a recorded product decision, and the next one needs its own.
-- **One idempotency key per destination per call.** Every retry of that
-  question, and the answer-to-context fallback, reuses it, because the platform
-  records one reuse activation per key: a retry after a request it processed is
-  the same recall. Two destinations, or two calls, never share a key.
+- **One idempotency key per destination, call and mode.** Every retry of that
+  question within a mode reuses it, because the platform records one reuse
+  activation per key: a retry after a request it processed is the same recall.
+  The answer-to-context fallback changes the mode, and with it the request
+  fingerprint, so it gets its own key once, which its own retries then reuse.
+  Two destinations, or two calls, never share a key.
 - **Explicit recall is NOT gated on `AUGENTA_CAPTURE_ENABLED`,** on purpose. That
   switch stops a project SENDING; someone who turned it off may still legitimately
   ask what was already remembered, and gating a read on it would make one off
@@ -371,7 +373,7 @@ deliberate:
   and appears in no output.
 - **Answer is the default, with one bounded fallback.** Every request sends an
   explicit mode. Only 503 `answerer_unavailable` / `consent_required` in answer
-  mode retries as context: same question, same destination, same idempotency
+  mode retries as context: same question, same destination, its own idempotency
   key, once, with a `fallback` marker. No new disclosure or destination.
 - **A young Workspace is not an error.** `empty_scope` means "nothing remembered
   yet"; reporting it as a failure sends a user to look for a fault that is not
