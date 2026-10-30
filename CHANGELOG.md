@@ -21,6 +21,16 @@ page. Creating a Workspace reads the same resource shape.
 This release requires the matching administration API update. Existing connections keep their
 recorded destinations and consent settings; reconnecting is not required.
 
+## [0.17.2] — 2026-10-25
+
+No reconnect or renewed hook approval is required.
+
+### Fixed
+
+- Recall can fall back from an unavailable answer to remembered context when the
+  API binds operation keys to request modes. The fallback now gets its own key;
+  transient retries within one mode retain the same key.
+
 ## [0.17.1] — 2026-10-15
 
 No reconnect or renewed hook approval is required.
@@ -793,4 +803,5 @@ authentication failure.
 [0.3.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.2.3
 
-[0.18.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.17.1...v0.18.0
+[0.18.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.17.2...v0.18.0
+[0.17.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.17.1...v0.17.2

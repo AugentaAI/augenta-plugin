@@ -3079,7 +3079,7 @@ async function askOnce(ctx, destination, idempotencyKey) {
     const url = new URL(ctx.url);
     if (response.status === 503 && url.searchParams.get("mode") === "answer" && outcome.kind === "failed" && (outcome.code === "answerer_unavailable" || outcome.code === "consent_required")) {
       url.searchParams.set("mode", "context");
-      const fallback = await askDestination({ ...ctx, url: url.toString(), timeoutMs: ctx.contextTimeoutMs }, destination, idempotencyKey);
+      const fallback = await askDestination({ ...ctx, url: url.toString(), timeoutMs: ctx.contextTimeoutMs }, destination);
       return { outcome: { ...fallback, fallback: { requested: "answer", reason: outcome.code } }, transient: false };
     }
     const { code } = errorFields(parsed, text);
