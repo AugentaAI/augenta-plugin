@@ -675,7 +675,7 @@ function takeAuthNotice(projectRoot) {
 }
 
 // capture/config.ts
-import { readFileSync as readFileSync5 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync6 } from "node:fs";
 import { join as join7 } from "node:path";
 
 // capture/links.ts
@@ -878,8 +878,8 @@ function writeLinks(projectRoot, links) {
 
 // capture/project.ts
 import { execFileSync } from "node:child_process";
-import { existsSync as existsSync4, realpathSync as realpathSync3 } from "node:fs";
-import { dirname as dirname3, join as join6, resolve as resolve4 } from "node:path";
+import { existsSync as existsSync4, readFileSync as readFileSync5, realpathSync as realpathSync3, statSync as statSync3 } from "node:fs";
+import { basename as basename2, dirname as dirname3, join as join6, resolve as resolve4 } from "node:path";
 
 // capture/environment.ts
 import { existsSync as existsSync3 } from "node:fs";
@@ -949,6 +949,38 @@ function gitTracks(projectRoot, relativePath) {
     return true;
   } catch (error) {
     return error.status === 1 ? false : undefined;
+  }
+}
+var MAX_GIT_POINTER_BYTES = 4096;
+function readGitPointer(path) {
+  const stat = statSync3(path);
+  if (!stat.isFile() || stat.size > MAX_GIT_POINTER_BYTES)
+    return;
+  return readFileSync5(path, "utf8").trim() || undefined;
+}
+function mainCheckoutOf(projectRoot) {
+  try {
+    const root = realpathSync3(projectRoot);
+    const dotGit = join6(root, ".git");
+    const pointer = /^gitdir:\s*(.+)$/m.exec(readGitPointer(dotGit) ?? "")?.[1]?.trim();
+    if (!pointer)
+      return;
+    const admin = realpathSync3(resolve4(root, pointer));
+    const commonPointer = readGitPointer(join6(admin, "commondir"));
+    const backPointer = readGitPointer(join6(admin, "gitdir"));
+    if (!commonPointer || !backPointer)
+      return;
+    const common = realpathSync3(resolve4(admin, commonPointer));
+    if (dirname3(admin) !== join6(common, "worktrees"))
+      return;
+    if (realpathSync3(resolve4(admin, backPointer)) !== realpathSync3(dotGit))
+      return;
+    if (basename2(common) !== ".git" || !statSync3(common).isDirectory())
+      return;
+    const main = dirname3(common);
+    return main === root ? undefined : main;
+  } catch {
+    return;
   }
 }
 function resolveProjectRoot(cwd) {
@@ -1028,7 +1060,30 @@ function parseWorkspaces(raw) {
   }
   return workspaces;
 }
+function inheritedRoutes(projectRoot, profileId, projectKey, workspaces) {
+  const main = mainCheckoutOf(projectRoot);
+  if (!main)
+    return;
+  const cfg = loadProjectConfig(main);
+  if (cfg?.authMode !== "oauth" || cfg.join !== "joined" || !cfg.destinations)
+    return;
+  if (cfg.projectKey !== projectKey || cfg.profileId !== profileId)
+    return;
+  if (cfg.destinations.length !== workspaces.length)
+    return;
+  const destinations = [];
+  for (const workspace of workspaces) {
+    const route = cfg.destinations.find((entry) => entry.workspaceId === workspace.workspaceId);
+    if (!route)
+      return;
+    destinations.push({ connectorId: route.connectorId, ...workspace });
+  }
+  return { join: "joined", destinations, joinedAt: cfg.captureSince, inheritedFrom: main };
+}
 function joinedRoutes(projectRoot, profileId, projectKey, workspaces) {
+  if (!existsSync5(linksPath(projectRoot))) {
+    return inheritedRoutes(projectRoot, profileId, projectKey, workspaces) ?? { join: "none" };
+  }
   const links = readLinks(projectRoot);
   if (!links || links.projectKey !== projectKey)
     return { join: "none" };
@@ -1050,7 +1105,7 @@ function configPath(projectRoot) {
 }
 function loadProjectConfig(projectRoot) {
   try {
-    const value = JSON.parse(readFileSync5(configPath(projectRoot), "utf8"));
+    const value = JSON.parse(readFileSync6(configPath(projectRoot), "utf8"));
     if (value.captureSince !== undefined && (typeof value.captureSince !== "string" || !Number.isFinite(Date.parse(value.captureSince))))
       return;
     const captureSince = typeof value.captureSince === "string" && Number.isFinite(Date.parse(value.captureSince)) ? new Date(value.captureSince).toISOString() : undefined;
@@ -1102,7 +1157,8 @@ function loadProjectConfig(projectRoot) {
           destinations: routes.destinations,
           connectorIds: routes.destinations.map((destination) => destination.connectorId),
           captureSince: routes.joinedAt,
-          ...routes.attachmentsConsentedAt ? { attachmentsConsentedAt: routes.attachmentsConsentedAt } : {}
+          ...routes.attachmentsConsentedAt ? { attachmentsConsentedAt: routes.attachmentsConsentedAt } : {},
+          ...routes.inheritedFrom ? { joinInheritedFrom: routes.inheritedFrom } : {}
         } : {},
         projectRoot
       };
@@ -1280,11 +1336,11 @@ function describeError(error) {
 // capture/cowork-task.ts
 import { createHash as createHash4, randomUUID as randomUUID4 } from "node:crypto";
 import { dirname as dirname5, join as join10 } from "node:path";
-import { existsSync as existsSync6, linkSync, mkdirSync as mkdirSync7, readFileSync as readFileSync8, realpathSync as realpathSync5, renameSync as renameSync5, rmSync as rmSync3, statSync as statSync4, writeFileSync as writeFileSync7 } from "node:fs";
+import { existsSync as existsSync7, linkSync, mkdirSync as mkdirSync7, readFileSync as readFileSync9, realpathSync as realpathSync5, renameSync as renameSync5, rmSync as rmSync3, statSync as statSync5, writeFileSync as writeFileSync7 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 
 // capture/capture-lock.ts
-import { mkdirSync as mkdirSync5, openSync, readFileSync as readFileSync6, closeSync, writeFileSync as writeFileSync5, unlinkSync as unlinkSync2, statSync as statSync3 } from "node:fs";
+import { mkdirSync as mkdirSync5, openSync, readFileSync as readFileSync7, closeSync, writeFileSync as writeFileSync5, unlinkSync as unlinkSync2, statSync as statSync4 } from "node:fs";
 import { join as join8 } from "node:path";
 function captureLock(projectRoot) {
   const dir = join8(ensureAugentaDir(projectRoot), "state");
@@ -1308,7 +1364,7 @@ function captureLock(projectRoot) {
       if (error.code !== "EEXIST")
         return;
       try {
-        const pid = Number(readFileSync6(path, "utf8"));
+        const pid = Number(readFileSync7(path, "utf8"));
         if (Number.isSafeInteger(pid) && pid > 0) {
           try {
             process.kill(pid, 0);
@@ -1318,7 +1374,7 @@ function captureLock(projectRoot) {
               continue;
             }
           }
-        } else if (Date.now() - statSync3(path).mtimeMs > 30000) {
+        } else if (Date.now() - statSync4(path).mtimeMs > 30000) {
           unlinkSync2(path);
           continue;
         }
@@ -1331,7 +1387,7 @@ function captureLock(projectRoot) {
 
 // capture/capture-cursor.ts
 import { join as join9, dirname as dirname4 } from "node:path";
-import { mkdirSync as mkdirSync6, existsSync as existsSync5, readFileSync as readFileSync7, writeFileSync as writeFileSync6, renameSync as renameSync4 } from "node:fs";
+import { mkdirSync as mkdirSync6, existsSync as existsSync6, readFileSync as readFileSync8, writeFileSync as writeFileSync6, renameSync as renameSync4 } from "node:fs";
 
 // capture/auto-recall-marker.ts
 var AUTO_RECALL_SENTINEL = "[augenta-recall:v1]";
@@ -1819,7 +1875,7 @@ function timestampOf(raw) {
 
 // capture/attachments.ts
 import { closeSync as closeSync2, constants as constants2, fstatSync, lstatSync as lstatSync2, openSync as openSync2, readSync, realpathSync as realpathSync4 } from "node:fs";
-import { basename as basename2, extname, relative as relative2, resolve as resolve5 } from "node:path";
+import { basename as basename3, extname, relative as relative2, resolve as resolve5 } from "node:path";
 function validAttachmentContext(value) {
   const x = value;
   return !!x && typeof x.compact === "boolean" && Array.isArray(x.paths) && x.paths.length <= 64 && x.paths.every((p) => typeof p === "string" && p.length <= 4096) && (x.parent === undefined || typeof x.parent === "string" && x.parent.length <= 256) && (x.suppliedAt === undefined || documentTimestamp(x.suppliedAt) !== undefined);
@@ -2007,7 +2063,7 @@ function prepareAttachments(projectRoot, harness, candidates, opts) {
       const revision = sha256(bytes ?? text);
       const path = c.filePath && physicalPath(c.filePath);
       const scoped = root && path && isScopedToProject(path, root);
-      const sourcePath = scoped ? normalizeLogicalPath(relative2(root, path)) : c.filePath ? basename2(c.filePath) : "supplied-document";
+      const sourcePath = scoped ? normalizeLogicalPath(relative2(root, path)) : c.filePath ? basename3(c.filePath) : "supplied-document";
       const key = scoped ? sourcePath : `sha256:${revision}`;
       const documentId = sha256(`attachment\x00${harness}\x00${resolve5(projectRoot)}\x00${key}`);
       const prior = result.observations[documentId];
@@ -2024,7 +2080,7 @@ function prepareAttachments(projectRoot, harness, candidates, opts) {
         kind: "agent-attachment",
         documentId,
         sourcePath: opts.scrub(sourcePath),
-        title: boundedTitle(opts.scrub(typeof c.title === "string" ? c.title : basename2(sourcePath))),
+        title: boundedTitle(opts.scrub(typeof c.title === "string" ? c.title : basename3(sourcePath))),
         format: c.format,
         origin: c.origin,
         revision,
@@ -2086,10 +2142,10 @@ class CaptureState {
     this.path = join9(projectRoot, ".augenta", "state", "capture.json");
   }
   readAll() {
-    if (!existsSync5(this.path))
+    if (!existsSync6(this.path))
       return {};
     try {
-      const parsed = JSON.parse(readFileSync7(this.path, "utf8"));
+      const parsed = JSON.parse(readFileSync8(this.path, "utf8"));
       return parsed && typeof parsed === "object" ? parsed : {};
     } catch {
       return {};
@@ -2146,7 +2202,7 @@ function writeCoworkState(path, value) {
 }
 function readBindings(root) {
   try {
-    const value = JSON.parse(readFileSync8(coworkBindingsPath(root), "utf8"));
+    const value = JSON.parse(readFileSync9(coworkBindingsPath(root), "utf8"));
     if (value.version !== 1 || !Array.isArray(value.tasks))
       return [];
     return value.tasks.filter((x) => x && validCoworkId(x.sessionId) && (x.transport === "native" || x.transport === "otlp") && typeof x.connection === "string" && /^[a-f0-9]{64}$/.test(x.connection) && Number.isFinite(Date.parse(x.boundAt)) && (x.transport !== "native" || typeof x.transcriptPath === "string"));
@@ -2156,7 +2212,7 @@ function readBindings(root) {
 }
 function coworkTaskBinding(root, sessionId) {
   try {
-    const claimed = JSON.parse(readFileSync8(taskClaimPath(sessionId), "utf8"));
+    const claimed = JSON.parse(readFileSync9(taskClaimPath(sessionId), "utf8"));
     if (claimed.version !== 1 || claimed.projectRoot !== realpathSync5(root))
       return;
     const matches = readBindings(root).filter((x) => x.sessionId === sessionId && JSON.stringify(x) === JSON.stringify(claimed.binding));
@@ -2173,7 +2229,7 @@ function nativeCoworkProject(sessionId) {
   if (!validCoworkId(sessionId))
     return;
   try {
-    const claim = JSON.parse(readFileSync8(taskClaimPath(sessionId), "utf8"));
+    const claim = JSON.parse(readFileSync9(taskClaimPath(sessionId), "utf8"));
     if (typeof claim.projectRoot !== "string")
       return;
     const binding = coworkTaskBinding(claim.projectRoot, sessionId);
@@ -2198,7 +2254,7 @@ function claimTask(root, binding) {
     } catch (error) {
       if (error.code !== "EEXIST")
         throw error;
-      const prior = JSON.parse(readFileSync8(path, "utf8"));
+      const prior = JSON.parse(readFileSync9(path, "utf8"));
       if (prior.projectRoot !== value.projectRoot || prior.binding?.transport !== binding.transport || prior.binding?.connection !== binding.connection || prior.binding?.transcriptPath !== binding.transcriptPath) {
         throw new CoworkError("task_already_bound", "This task is already bound to a project and transport. Start a new task to change either.");
       }
@@ -2275,7 +2331,7 @@ async function bindCoworkTask(root, sessionId, transport, options = {}) {
   if (transport === "native") {
     try {
       transcriptPath = realpathSync5(options.transcriptPath);
-      if (!statSync4(transcriptPath).isFile())
+      if (!statSync5(transcriptPath).isFile())
         throw new Error;
     } catch {
       throw new CoworkError("missing_transcript", "Native capture needs the confirmed transcript on this runtime. If Cowork separates the project and transcript, use a local task or the OTLP relay.");
@@ -2306,7 +2362,7 @@ async function bindCoworkTask(root, sessionId, transport, options = {}) {
     if (transcriptPath) {
       const cursor = new CaptureState(root);
       const priorCursor = cursor.get(transcriptPath);
-      cursor.set(transcriptPath, { ...priorCursor, offset: statSync4(transcriptPath).size });
+      cursor.set(transcriptPath, { ...priorCursor, offset: statSync5(transcriptPath).size });
     }
     ensureAugentaDir(root);
     writeCoworkState(coworkBindingsPath(root), { version: 1, tasks: [...readBindings(root).filter((x) => x.sessionId !== sessionId), binding] });
@@ -2320,7 +2376,7 @@ function nativeCoworkAllowed(root, sessionId, transcriptPath, requireBinding = n
     return !requireBinding;
   const binding = coworkTaskBinding(root, sessionId);
   if (!binding)
-    return !requireBinding && !existsSync6(taskClaimPath(sessionId));
+    return !requireBinding && !existsSync7(taskClaimPath(sessionId));
   if (binding.transport !== "native" || !boundCoworkConfig(root, binding))
     return false;
   try {

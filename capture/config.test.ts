@@ -9,7 +9,7 @@
  * Run: bun test capture/config.test.ts
  */
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -31,6 +31,7 @@ import {
 } from "./config";
 import { joinCheckout, writeOAuthProject, writeSharedConfig, TEST_PROJECT_KEY, TEST_USER_ID } from "../__tests__/fixtures";
 import { writeLinks } from "./links";
+import { mainCheckoutOf } from "./project";
 
 const ENV_KEYS = ["AUGENTA_CONTROL_URL", "AUGENTA_API_URL", "AUGENTA_INGEST_URL", "AUGENTA_CAPTURE_ENABLED", "AUGENTA_AUTH_HOME"] as const;
 let saved: Record<string, string | undefined>;
@@ -531,5 +532,208 @@ describe("captureEnabled — a readable config, a sign-in here, and a joined che
     process.env.AUGENTA_CAPTURE_ENABLED = "1";
     expect(captureKilled()).toBe(false);
     expect(captureEnabled({ authMode: "api-key", apiKey: "k", projectRoot: project })).toBe(true);
+  });
+});
+
+describe("a linked Git worktree uses its main checkout's join", () => {
+  // Worktrees are made far more often than projects are connected, and the same
+  // person on the same machine already answered for this repository. So a
+  // worktree with no links of its own reads its main checkout's — and nothing
+  // else does: every other relation between two directories still joins itself.
+  const PROFILE = "profile_1";
+  const destinations = (ids: string[]) => ids.map((id) => ({ connectorId: id, workspaceId: `ws-${id}` }));
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
+  let worktree: string;
+  let scratch: string;
+
+  /** `project` as a repository's main checkout, with one linked worktree. */
+  beforeEach(() => {
+    scratch = realpathSync(mkdtempSync(join(tmpdir(), "aug-cfg-wt-")));
+    worktree = join(scratch, "feature");
+    git(project, "init", "-q");
+    git(project, "commit", "-q", "--allow-empty", "-m", "init");
+    git(project, "worktree", "add", "-q", worktree);
+    signIn();
+  });
+  afterEach(() => rmSync(scratch, { recursive: true, force: true }));
+
+  const main = () => loadProjectConfig(project)!;
+  const linked = () => loadProjectConfig(worktree)!;
+  const shared = (root: string, ids: string[], more: Partial<Parameters<typeof writeSharedConfig>[1]> = {}) =>
+    writeSharedConfig(root, { profileId: PROFILE, destinations: destinations(ids), ...more });
+
+  test("mainCheckoutOf names it for the worktree and for nothing else", () => {
+    expect(mainCheckoutOf(worktree)).toBe(project);
+    expect(mainCheckoutOf(project)).toBeUndefined();
+    expect(mainCheckoutOf(scratch)).toBeUndefined();
+    expect(mainCheckoutOf(join(scratch, "missing"))).toBeUndefined();
+    // A clone has a Git directory of its own.
+    const clone = join(scratch, "clone");
+    git(scratch, "clone", "-q", project, clone);
+    expect(mainCheckoutOf(clone)).toBeUndefined();
+    // A worktree of a bare repository has no main checkout to have joined.
+    const bare = join(scratch, "bare.git");
+    git(scratch, "clone", "-q", "--bare", project, bare);
+    git(bare, "worktree", "add", "-q", join(scratch, "from-bare"));
+    expect(mainCheckoutOf(join(scratch, "from-bare"))).toBeUndefined();
+  });
+
+  test("a directory that only claims to be a worktree is not one", () => {
+    // The `.git` file is copied from a real worktree, so it names a real
+    // administrative directory. The repository does not list THIS directory
+    // back, so it borrows nothing.
+    const copy = join(scratch, "copied");
+    mkdirSync(copy);
+    writeFileSync(join(copy, ".git"), readFileSync(join(worktree, ".git")));
+    expect(mainCheckoutOf(copy)).toBeUndefined();
+    // Nor does a pointer at something that is not an administrative directory.
+    writeFileSync(join(copy, ".git"), `gitdir: ${join(project, ".git")}\n`);
+    expect(mainCheckoutOf(copy)).toBeUndefined();
+    // An oversized pointer file is not read at all.
+    writeFileSync(join(copy, ".git"), `gitdir: ${join(project, ".git", "worktrees", "feature")}\n${"#".repeat(8192)}`);
+    expect(mainCheckoutOf(copy)).toBeUndefined();
+
+    shared(copy, ["link_1"]);
+    writeOAuthProject(project, { profileId: PROFILE, destinations: destinations(["link_1"]) });
+    expect(loadProjectConfig(copy)!.join).toBe("none");
+    expect(captureEnabled(loadProjectConfig(copy))).toBe(false);
+  });
+
+  test("with no links of its own, it routes through the main checkout's", () => {
+    writeOAuthProject(project, { profileId: PROFILE, destinations: destinations(["link_1", "link_2"]), joinedAt: "2026-09-20T00:00:00.000Z" });
+    // Recorded in another order, with a name the main checkout's file lacks: the
+    // worktree's own file is what it shows.
+    writeSharedConfig(worktree, {
+      profileId: PROFILE,
+      destinations: [{ connectorId: "ignored", workspaceId: "ws-link_2", workspaceName: "Two" }, { connectorId: "ignored", workspaceId: "ws-link_1" }],
+    });
+    const cfg = linked();
+    expect(cfg.join).toBe("joined");
+    expect(cfg.joinInheritedFrom).toBe(project);
+    expect(cfg.destinations).toEqual([
+      { connectorId: "link_2", workspaceId: "ws-link_2", workspaceName: "Two" },
+      { connectorId: "link_1", workspaceId: "ws-link_1" },
+    ]);
+    expect(cfg.connectorIds).toEqual(["link_2", "link_1"]);
+    expect(cfg.projectRoot).toBe(worktree);
+    expect(captureGate(cfg)).toBe("live");
+    // Capture began when the main checkout joined.
+    expect(effectiveCaptureSince(cfg)).toBe("2026-09-20T00:00:00.000Z");
+    // The main checkout joined by itself and says so.
+    expect(main().joinInheritedFrom).toBeUndefined();
+  });
+
+  test("attachment consent does not come across", () => {
+    shared(project, ["link_1"]);
+    writeLinks(project, {
+      profileId: PROFILE, userId: TEST_USER_ID, projectKey: TEST_PROJECT_KEY,
+      joinedAt: "2026-09-20T00:00:00.000Z", attachmentsConsentedAt: "2026-09-20T00:00:00.000Z",
+      links: [{ workspaceId: "ws-link_1", connectorId: "link_1" }],
+    });
+    shared(worktree, ["link_1"]);
+    expect(main().attachmentsConsentedAt).toBe("2026-09-20T00:00:00.000Z");
+    expect(linked().join).toBe("joined");
+    expect(linked().attachmentsConsentedAt).toBeUndefined();
+  });
+
+  test("it lasts only while the main checkout is joined", () => {
+    shared(worktree, ["link_1"]);
+    // Not connected, then connected but not joined.
+    expect(linked().join).toBe("none");
+    shared(project, ["link_1"]);
+    expect(linked().join).toBe("none");
+    expect(captureGate(linked())).toBe("not_adopted");
+
+    joinCheckout(project, { profileId: PROFILE, destinations: destinations(["link_1"]) });
+    expect(captureGate(linked())).toBe("live");
+
+    // Someone else signs in on this machine: the main checkout's links are not
+    // theirs, so neither checkout routes.
+    signIn(PROFILE, "user_2");
+    expect(main().join).toBe("signin");
+    expect(linked().join).toBe("none");
+    signIn();
+    expect(captureGate(linked())).toBe("live");
+
+    // The main checkout's Workspaces change and nobody has confirmed them there.
+    shared(project, ["link_1", "link_2"]);
+    expect(main().join).toBe("workspaces");
+    expect(linked().join).toBe("none");
+    shared(project, ["link_1"]);
+    expect(captureGate(linked())).toBe("live");
+
+    // The main checkout points away from its sign-in's gateway.
+    shared(project, ["link_1"], { extra: { endpoint: "https://elsewhere.example" } });
+    expect(main().join).toBe("gateway");
+    expect(linked().join).toBe("none");
+    shared(project, ["link_1"]);
+
+    // Deleting the main checkout's config, its off switch, ends it too.
+    rmSync(join(project, ".augenta", "config.json"));
+    expect(linked().join).toBe("none");
+    expect(captureEnabled(linked())).toBe(false);
+  });
+
+  test("it is only the same connection: project, profile and exactly the same Workspaces", () => {
+    writeOAuthProject(project, { profileId: PROFILE, destinations: destinations(["link_1", "link_2"]) });
+    // A branch whose config feeds a different set: more, fewer, or another.
+    for (const recorded of [["link_1"], ["link_1", "link_2", "link_3"], ["link_1", "link_3"]]) {
+      shared(worktree, recorded);
+      expect(linked().join).toBe("none");
+      expect(linked().destinations).toBeUndefined();
+    }
+    shared(worktree, ["link_1", "link_2"], { projectKey: "another_project" });
+    expect(linked().join).toBe("none");
+    writeSharedConfig(worktree, { profileId: "profile_other", destinations: destinations(["link_1", "link_2"]) });
+    expect(linked().join).toBe("none");
+    expect(captureGate(linked())).toBe("signed_out");
+    shared(worktree, ["link_2", "link_1"]);
+    expect(captureGate(linked())).toBe("live");
+  });
+
+  test("a worktree that joined by itself answers for itself", () => {
+    writeOAuthProject(project, { profileId: PROFILE, destinations: destinations(["link_1"]) });
+    shared(worktree, ["link_1"]);
+    // Its own links win, and it is not marked as inheriting.
+    joinCheckout(worktree, { profileId: PROFILE, destinations: [{ connectorId: "own_link", workspaceId: "ws-link_1" }] });
+    expect(linked().connectorIds).toEqual(["own_link"]);
+    expect(linked().joinInheritedFrom).toBeUndefined();
+    // Stale or damaged, its links file is still its answer: connect here is the
+    // remedy, and its spool may hold records queued under those links.
+    joinCheckout(worktree, { profileId: PROFILE, destinations: destinations(["link_1", "link_2"]) });
+    expect(linked().join).toBe("workspaces");
+    joinCheckout(worktree, { profileId: PROFILE, destinations: destinations(["link_1"]), userId: "user_2" });
+    expect(linked().join).toBe("signin");
+    writeFileSync(join(worktree, ".augenta", "state", "links.json"), "{");
+    expect(linked().join).toBe("none");
+  });
+
+  test("the worktree's own settings are still held to the sign-in's gateway", () => {
+    writeOAuthProject(project, { profileId: PROFILE, destinations: destinations(["link_1"]) });
+    shared(worktree, ["link_1"], { extra: { endpoint: "https://elsewhere.example" } });
+    const cfg = linked();
+    expect(cfg.join).toBe("gateway");
+    expect(cfg.gatewayMismatch?.sendsTo).toBe("https://elsewhere.example");
+    expect(cfg.destinations).toBeUndefined();
+    expect(cfg.joinInheritedFrom).toBeUndefined();
+    expect(captureGate(cfg)).toBe("not_adopted");
+  });
+
+  test("a worktree whose branch has no config stays unconnected", () => {
+    // Inheriting needs the worktree's own record of the Workspaces. The main
+    // checkout's config is never read in its place.
+    writeOAuthProject(project, { profileId: PROFILE, destinations: destinations(["link_1"]) });
+    expect(resolveProjectRoot(worktree)).toBeUndefined();
+    expect(projectConfig(worktree)).toBeUndefined();
+    expect(captureEnabled(projectConfig(worktree))).toBe(false);
+  });
+
+  test("a clone of the repository still joins through connect", () => {
+    writeOAuthProject(project, { profileId: PROFILE, destinations: destinations(["link_1"]) });
+    const clone = join(scratch, "clone");
+    git(scratch, "clone", "-q", project, clone);
+    shared(clone, ["link_1"]);
+    expect(loadProjectConfig(clone)!.join).toBe("none");
   });
 });

@@ -129,9 +129,11 @@ headings start from names in the project config; a successful live listing
 overrides renamed labels for this output only. Otherwise retain the saved name,
 falling back to the Workspace id. Recall never rewrites the config.
 
-Recall uses the current worktree’s own project configuration. It never falls
-back to the main checkout or sibling worktrees. An unconnected worktree returns
-`not_connected`, even when the main checkout is connected.
+Recall uses the current worktree’s own project configuration. An unconnected
+worktree returns `not_connected`, even when the main checkout is connected. A
+worktree that has the project's config but has not joined by itself asks through
+its main checkout's join when that checkout has joined the same Workspaces;
+otherwise it returns `not_joined`.
 
 ## 3. Use `status`
 

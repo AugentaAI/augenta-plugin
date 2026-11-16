@@ -12,6 +12,36 @@ an entry that needs you to reconnect says so.
 Both marketplaces install from `main` and show no release notes, so this file is
 where to read what changed.
 
+## [0.19.0] — 2026-11-14
+
+No reconnect or renewed hook approval is required.
+
+### Changed
+
+- **A Git worktree now uses its main checkout's join.** Since 0.11.0 every
+  checkout had to join a shared connection by itself, and a new worktree starts
+  without one. If you work mostly in worktrees, including the ones a coding app
+  creates for each task, most of your sessions were neither captured nor asked
+  about anything, and the notice saying so appeared only once per worktree.
+  - Once you have joined in a repository's main checkout, worktrees made from
+    it capture and recall without asking again. This starts with the first
+    session in a worktree after you update, for existing worktrees too.
+  - It applies only to worktrees of that checkout on your machine whose config
+    records exactly the same Workspaces, under the same sign-in. A separate
+    clone, a teammate's checkout and a cloud session still join by themselves.
+  - It lasts while the main checkout stays joined. Deleting its
+    `.augenta/config.json`, signing in as someone else, or changing its
+    Workspaces without confirming them there stops its worktrees too.
+  - **Documents are not included.** A worktree sends text documents and PDFs
+    only after you run connect in the worktree itself.
+  - A worktree you already joined by itself keeps its own join. A worktree
+    whose branch has no `.augenta/config.json` stays unconnected.
+  - A session already under way in a worktree is captured from its start in
+    Claude Code, and from when the main checkout joined in Codex. To keep one
+    worktree out, start its sessions with `AUGENTA_CAPTURE_ENABLED=0`.
+  - `connect --probe` reports `joinInheritedFrom` and `--health` reports
+    `joinInherited` for such a worktree.
+
 ## [0.18.0] — 2026-10-28
 
 Workspace selection reads resource pages and follows each returned page URL with its original
@@ -803,5 +833,6 @@ authentication failure.
 [0.3.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/AugentaAI/augenta-plugin/releases/tag/v0.2.3
 
+[0.19.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/AugentaAI/augenta-plugin/compare/v0.17.2...v0.18.0
 [0.17.2]: https://github.com/AugentaAI/augenta-plugin/compare/v0.17.1...v0.17.2

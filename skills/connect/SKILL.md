@@ -140,10 +140,19 @@ chose. If the user did not set it, say it may come from a committed
 Do not work around it with `--endpoint`. On `override_config_tracked` or
 `gateway_override_conflict`, report `message` and stop.
 
-A Git worktree is a separate project consent boundary. Connect writes to the
-current worktree, not the main checkout or its siblings. Name `projectRoot`
-before the destination question; a worktree must be connected explicitly even
-when its main checkout is already connected.
+A Git worktree is a separate project consent boundary for connect: it writes to
+the current worktree, not the main checkout or its siblings. Name `projectRoot`
+before the destination question. A worktree with no `.augenta/config.json` of
+its own is unconnected even when its main checkout is connected.
+
+One thing does carry over. When `--probe` returns `joinInheritedFrom`, this
+worktree has the project's config, has not joined by itself, and is using the
+join of its main checkout at that path: capture and recall already work here,
+and documents are **not** sent from it. Say that before anything else. Nothing
+needs doing unless the user wants documents captured from this worktree or
+different Workspaces. For documents, follow "If this checkout has not joined the
+recorded connection" below, which gives this worktree its own join. Choosing
+different Workspaces rewrites the config in this worktree, as in step 3.
 
 ## 1. Probe
 

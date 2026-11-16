@@ -280,7 +280,8 @@ and PR titles, descriptions, and branch names. Images require manual review.
 or adopt discloses supplied text documents and PDFs supplied or referenced in
 supported file-tool records (including generated and temporary PDFs), then
 records `attachmentsConsentedAt` in OAuth checkout links or the untracked API-key
-config. A committed browser config never grants it. Old connections keep their
+config. A committed browser config never grants it, and neither does a join a
+Git worktree takes from its main checkout. Old connections keep their
 current activity/memory capture with attachments off. The originating transcript
 timestamp and, for a mention, initiating prompt must follow consent; never use
 now or rescan earlier history for attachments. Text is scrubbed, whole PDFs are
@@ -305,7 +306,8 @@ feeds. Only Connector ids route — for a browser connection, this checkout's ow
 links in `.augenta/state/links.json`; organization and Workspace coordinates
 record the user's choices for display and never become authorization inputs. Capture must stay a
 silent no-op without project config — and, for a browser connection, without this
-machine's sign-in for its profile and this checkout's own links into exactly the
+machine's sign-in for its profile and this checkout's own links (or, for a Git
+worktree that has none, its joined main checkout's) into exactly the
 recorded Workspaces, made by the person signed in here (`captureGate` in
 `capture/config.ts`) — and `AUGENTA_CAPTURE_ENABLED=0` remains
 the global kill switch.
@@ -480,6 +482,40 @@ and refuses a config git already tracks, the capture hook resets a shared form
 back, and a config git tracks anyway (`git add -f`) is `keyTracked` — it neither
 captures nor recalls, because a pulled key would route every teammate's capture
 to its owner's Workspace with nobody asked.
+
+**A linked Git worktree uses its main checkout's join.** This is the one case
+where a checkout routes without links of its own, and it is a recorded product
+decision: worktrees are made far more often than projects are connected, the
+same person on the same machine already answered for this project in this
+repository, and asking again in each one meant most sessions neither captured
+nor recalled. `inheritedRoutes` in `capture/config.ts` reads the main
+checkout's join through on every load and never copies it, so it holds only
+while all of this does:
+
+- Git itself records the directory as a worktree of that checkout
+  (`mainCheckoutOf` in `capture/project.ts`), read from Git's untracked pointer
+  files with the back-pointer checked. No commit can create that relation, and
+  a copied or extracted folder with a hand-made `.git` file does not have it. A
+  fresh clone, a teammate's checkout and a cloud session are not worktrees of
+  anything on the machine, so they still join through connect.
+- The main checkout is joined now: its own links, exactly its recorded
+  Workspaces, the sign-in stored here and the person it belongs to, routing only
+  to that sign-in's gateway. Deleting the main checkout's config, another person
+  signing in, or an unconfirmed change to its Workspaces ends it at once.
+- It is the same connection. The worktree has its own `.augenta/config.json`
+  (a worktree whose branch lacks the file stays unconnected), with the same
+  project key and profile, and the main checkout's links name **exactly** the
+  Workspaces that file records. A branch that records a different set inherits
+  nothing, so no Workspace is reached that nobody affirmed.
+- The worktree has never joined by itself. A checkout with a `links.json`
+  answers for itself whatever the file says, because a stale one is a question
+  for connect there and its spool may hold records queued under those links.
+
+What comes across is the routes and when capture began. **Attachment consent
+does not**: a worktree sends documents only after connect is run in it. The
+worktree's own settings are still held to the sign-in's gateway. Do not widen
+any of these conditions, extend the rule to another relation between two
+directories, or carry attachment consent across without a new product decision.
 
 **A browser sign-in's token goes only to the gateway it was made for.** The file
 can name a gateway, and so can the environment — Claude Code applies a committed

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -97,4 +97,34 @@ test("health JSON cannot echo arbitrary fields from tampered local state", () =>
   const state = JSON.parse(readFileSync(path, "utf8"));
   writeFileSync(path, JSON.stringify({ ...state, token: "secret-canary", at: "/private/transcript" }));
   expect(captureHealth(p).dispatch).toBeNull();
+});
+
+test("a worktree using its main checkout's join is enabled and says so, without naming a directory", () => {
+  const main = realpathSync(project());
+  const scratch = realpathSync(project());
+  const auth = project();
+  const previous = process.env.AUGENTA_AUTH_HOME;
+  process.env.AUGENTA_AUTH_HOME = auth;
+  try {
+    writeFileSync(join(auth, "auth.json"), JSON.stringify({ version: 1, profiles: { profile_1: {
+      gateway: "https://gw.example.com", userId: TEST_USER_ID, orgId: "org_1", accessToken: "a", refreshToken: "r",
+      expiresAt: Date.now() + 3_600_000, updatedAt: new Date().toISOString() } } }));
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], { cwd, stdio: "pipe" });
+    const worktree = join(scratch, "feature");
+    git(main, "init", "-q");
+    git(main, "commit", "-q", "--allow-empty", "-m", "init");
+    git(main, "worktree", "add", "-q", worktree);
+    const fixture = { profileId: "profile_1", destinations: [{ connectorId: "c1", workspaceId: "ws-1" }], extra: { endpoint: "https://gw.example.com" } };
+    writeOAuthProject(worktree, { ...fixture, joined: false });
+    expect(captureHealth(worktree)).toMatchObject({ enabled: false, gate: "not_adopted", destinations: 0, nextStep: "adopt" });
+    writeOAuthProject(main, fixture);
+    const value = captureHealth(worktree);
+    expect(value).toMatchObject({ enabled: true, gate: "live", destinations: 1, joinInherited: true });
+    expect(JSON.stringify(value)).not.toContain(main);
+    // The main checkout joined by itself.
+    expect(captureHealth(main)).not.toHaveProperty("joinInherited");
+  } finally {
+    if (previous === undefined) delete process.env.AUGENTA_AUTH_HOME; else process.env.AUGENTA_AUTH_HOME = previous;
+  }
 });

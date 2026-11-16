@@ -169,7 +169,8 @@ secret-scrubbed**, and every selected Workspace receives the whole PDF.
 Images remain placeholders; they are not sent as documents.
 
 Document capture starts after **this checkout** connects or joins with the new
-disclosure. Earlier transcript history is not rescanned for documents. Existing
+disclosure. A Git worktree that is using its main checkout's join sends no
+documents until you run connect in the worktree itself. Earlier transcript history is not rescanned for documents. Existing
 connections keep their current activity and memory capture with attachments off
 until you reconnect or join again. **Upgrade every installed harness before
 enabling attachments:** an older plugin sharing the queue can skip document
@@ -233,6 +234,16 @@ config private instead, add `.augenta/` to your repository's `.gitignore`.
   with a committed config neither captures nor sends recall questions. Connect
   signs them in if needed, shows the project's Workspaces, and asks whether to
   use them.
+- **A Git worktree uses its main checkout's join.** Once you have joined in a
+  repository's main checkout, worktrees you make from it (`git worktree add`,
+  or the ones a coding app creates for you) capture and recall without asking
+  again, as long as their config records the same Workspaces. This applies only
+  to worktrees of that checkout on your machine. A separate clone, a teammate's
+  checkout and a cloud session still join by themselves. It stops when the main
+  checkout stops: delete its config, sign in as someone else, or change its
+  Workspaces without confirming them there. Documents are the exception: a
+  worktree sends them only after you run connect in it. To keep a single
+  worktree out, start its sessions with `AUGENTA_CAPTURE_ENABLED=0`.
 - **Each person sends through their own Connector** in each Workspace. It is
   made the first time they join and reused by their other clones, worktrees and
   cloud sessions. They need access to every one of those Workspaces, so someone

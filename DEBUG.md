@@ -354,7 +354,9 @@ node <plugin-root>/dist/scripts/connect.mjs --project <project-root> --json --he
 This command makes no network request and prints no credentials, transcript
 contents or Connector IDs. The CLI prints `projectRoot`, the directory whose
 configuration and activity it inspected. It uses the same nearest-config lookup
-as capture and never substitutes the main checkout for a worktree. `configuration`
+as capture and never substitutes the main checkout's configuration or activity
+for a worktree's. `joinInherited` is present when a Git worktree with no links of
+its own is routing through its joined main checkout. `configuration`
 distinguishes missing, invalid and valid configuration. `configured` means the config parsed;
 `dispatch` means a Node hook entrypoint ran; `capture` records the latest local
 capture result; `attachments` separately records captured/skipped/too_large documents;
