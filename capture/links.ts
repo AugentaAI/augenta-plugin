@@ -18,6 +18,10 @@
  * Workspaces, under the sign-in now stored on this machine, so a pulled change to
  * the Workspaces stops capture until someone here confirms the new set.
  *
+ * One checkout routes without this file: a linked Git worktree that has never
+ * joined uses its main checkout's (config.ts → `inheritedRoutes`). Nothing is
+ * written here for it, and once a file exists here it alone answers.
+ *
  * Pure builtins; no config import, so capture/config.ts can use it.
  */
 import { randomUUID } from "node:crypto";

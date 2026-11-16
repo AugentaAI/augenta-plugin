@@ -48,6 +48,9 @@ export function captureHealth(projectRoot: string) {
     configuration: cfg ? "valid" : existsSync(join(projectRoot, ".augenta/config.json")) ? "invalid" : "missing",
     activityScope: "project", hostDispatch: "unverified",
     destinations: cfg?.authMode === "oauth" ? cfg.connectorIds?.length ?? 0 : cfg && !cfg.keyTracked ? 1 : 0,
+    // A Git worktree using its main checkout's join rather than links of its own.
+    // A flag, not the path: this report names no directory.
+    ...(cfg?.joinInheritedFrom ? { joinInherited: true } : {}),
     pendingBytes: cfg ? new Outbox(projectRoot).pendingByteCount() : 0,
     ...activity,
     // Local plugin state cannot establish host approval or lake persistence.

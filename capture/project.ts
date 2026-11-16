@@ -8,8 +8,8 @@
  * module like this one.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { insideGitCheckout } from "./environment";
 
 export interface ResolvedProject {
@@ -72,6 +72,63 @@ export function gitTracks(projectRoot: string, relativePath: string): boolean | 
     return true;
   } catch (error) {
     return (error as { status?: unknown }).status === 1 ? false : undefined;
+  }
+}
+
+/** Git's worktree pointer files are one short line; anything larger is not one. */
+const MAX_GIT_POINTER_BYTES = 4096;
+
+function readGitPointer(path: string): string | undefined {
+  const stat = statSync(path);
+  if (!stat.isFile() || stat.size > MAX_GIT_POINTER_BYTES) return undefined;
+  return readFileSync(path, "utf8").trim() || undefined;
+}
+
+/**
+ * The main checkout of the repository `projectRoot` is a linked Git worktree
+ * of, or undefined: for a main checkout itself, a fresh clone, a submodule, a
+ * worktree of a bare repository, a directory outside Git, or anything this
+ * cannot read. It is the one relation a browser join is inherited across
+ * (config.ts → `inheritedRoutes`), so every answer other than "Git itself
+ * records this directory as a worktree of that checkout" is undefined.
+ *
+ * Read from Git's own files, never by running `git`: hooks call this, and a
+ * desktop harness can hand them a PATH without it. A linked worktree's `.git`
+ * is a file naming its administrative directory, `<common>/worktrees/<id>`,
+ * whose `commondir` names the repository's shared Git directory and whose
+ * `gitdir` names the worktree's `.git` back. All three must agree:
+ *
+ *   - the BACK-POINTER, so the repository lists this worktree. Without it a
+ *     directory holding a hand-made `.git` file (an extracted archive, a
+ *     copied folder) could name another repository's administrative directory
+ *     and borrow its join.
+ *   - the administrative directory sits directly under the shared directory's
+ *     `worktrees/`, which a submodule's (`<common>/modules/…`, no `commondir`)
+ *     does not.
+ *   - the shared directory is a `.git` DIRECTORY, whose parent is then the main
+ *     checkout. A bare repository has no main checkout to have joined.
+ *
+ * None of these files is tracked, so no commit can make a checkout a worktree
+ * of anything. Paths are compared physically, as resolveProjectRoot does.
+ */
+export function mainCheckoutOf(projectRoot: string): string | undefined {
+  try {
+    const root = realpathSync(projectRoot);
+    const dotGit = join(root, ".git");
+    const pointer = /^gitdir:\s*(.+)$/m.exec(readGitPointer(dotGit) ?? "")?.[1]?.trim();
+    if (!pointer) return undefined;
+    const admin = realpathSync(resolve(root, pointer));
+    const commonPointer = readGitPointer(join(admin, "commondir"));
+    const backPointer = readGitPointer(join(admin, "gitdir"));
+    if (!commonPointer || !backPointer) return undefined;
+    const common = realpathSync(resolve(admin, commonPointer));
+    if (dirname(admin) !== join(common, "worktrees")) return undefined;
+    if (realpathSync(resolve(admin, backPointer)) !== realpathSync(dotGit)) return undefined;
+    if (basename(common) !== ".git" || !statSync(common).isDirectory()) return undefined;
+    const main = dirname(common);
+    return main === root ? undefined : main;
+  } catch {
+    return undefined;
   }
 }
 

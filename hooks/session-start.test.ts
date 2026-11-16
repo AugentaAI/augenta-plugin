@@ -242,6 +242,34 @@ describe("connected, but capture is off in this checkout — the join notice", (
     expect(fire({ transcript_path: CLAUDE_TP, cwd: project })).toBe("");
   });
 
+  test("a Git worktree of a joined main checkout is joined too: no notice, capture live there", () => {
+    const git = (cwd: string, ...args: string[]) =>
+      spawnSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], { cwd });
+    const scratch = realpathSync(mkdtempSync(join(tmpdir(), "aug-ss-wt-")));
+    try {
+      const worktree = join(scratch, "feature");
+      git(project, "init", "-q");
+      git(project, "commit", "-q", "--allow-empty", "-m", "init");
+      git(project, "worktree", "add", "-q", worktree);
+      const shared = (root: string) => writeSharedConfig(root, {
+        profileId: "profile_one", destinations: recorded(["connector_one"]), extra: { org: { id: "org_1", name: "Example Org" } } });
+      shared(project);
+      shared(worktree);
+      signIn("profile_one");
+      // The main checkout has not joined, so the worktree has nothing to stand on.
+      expect(JSON.parse(fire({ transcript_path: CLAUDE_TP, cwd: worktree })).hookSpecificOutput.additionalContext)
+        .toContain("this checkout has not joined it");
+      expect(existsSync(join(worktree, ".augenta", "state", "health-dispatch.json"))).toBe(false);
+      // It joins: the worktree is live with no links of its own, and says nothing.
+      joinCheckout(project, { profileId: "profile_one", destinations: recorded(["connector_one"]) });
+      expect(fire({ transcript_path: CLAUDE_TP, cwd: worktree })).toBe("");
+      expect(existsSync(join(worktree, ".augenta", "state", "health-dispatch.json"))).toBe(true);
+      expect(existsSync(join(worktree, ".augenta", "state", "links.json"))).toBe(false);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
   test("a pulled change to the Workspaces is raised again, an addition or a removal", () => {
     committed(["connector_one", "connector_two"]);
     signInAndJoin("profile_one", recorded(["connector_one", "connector_two"]));

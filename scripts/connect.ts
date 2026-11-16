@@ -1902,9 +1902,12 @@ function environmentChange(cfg: ProjectConfig | undefined, args: Args): { enviro
  * config is a file git tracks (so changing destinations changes them for everyone
  * who pulls). An API-key config is its own connection and never needs joining.
  */
-function joinedState(cfg: ProjectConfig): { adopted: boolean; configTracked: boolean } {
+function joinedState(cfg: ProjectConfig): { adopted: boolean; joinInheritedFrom?: string; configTracked: boolean } {
   return {
     adopted: cfg.authMode === "oauth" ? cfg.join === "joined" : true,
+    // A Git worktree standing on its main checkout's join: joined, with no links
+    // of its own, so documents are not sent from here until it joins itself.
+    ...(cfg.joinInheritedFrom ? { joinInheritedFrom: cfg.joinInheritedFrom } : {}),
     configTracked: isTrackedByGit(cfg.projectRoot, ".augenta/config.json"),
   };
 }

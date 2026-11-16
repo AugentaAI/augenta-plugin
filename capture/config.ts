@@ -14,6 +14,14 @@
  * `destinations` exists only when this checkout's links name exactly the
  * recorded Workspaces under the sign-in stored on this machine, so "has
  * destinations" means "joined by the person signed in here" on every path.
+ *
+ * One checkout can stand on another's links: a linked Git worktree that has
+ * never joined by itself uses the join of its repository's main checkout
+ * (`inheritedRoutes`). The same person, on the same machine, already answered
+ * for this project in this repository, and worktrees are made too often to ask
+ * again in each. It is read through on every load, never copied, so it lasts
+ * exactly as long as the main checkout stays joined to the same Workspaces.
+ * Attachment consent is the exception and stays each checkout's own.
  * controlUrl/endpoint/ingestUrl are the file twins of the three env overrides;
  * CLI flags win over env, which wins over config, then the default.
  *
@@ -46,12 +54,12 @@
  * migrated (connect may REUSE a listed Connector the user owns, verified live,
  * after they answer the destination question again).
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { hasStoredProfile, storedProfileGateway, storedProfileUserId } from "./auth";
-import { readLinks } from "./links";
+import { linksPath, readLinks } from "./links";
 import { documentTimestamp } from "./documents";
-import { gitTracking, resolveProjectRoot } from "./project";
+import { gitTracking, mainCheckoutOf, resolveProjectRoot } from "./project";
 import { displayOrigin, sameOrigin } from "./url";
 export { resolveProjectRoot } from "./project";
 
@@ -75,7 +83,9 @@ export interface RecordedWorkspace {
 
 /**
  * Whether this checkout's links carry the recorded connection.
- * - `joined`: they name exactly the recorded Workspaces, under this sign-in.
+ * - `joined`: they name exactly the recorded Workspaces, under this sign-in —
+ *   its own links, or its main checkout's for a worktree that has none
+ *   (`joinInheritedFrom` says which).
  * - `none`: this checkout has not joined this connection.
  * - `signin`: it joined under a different sign-in than the one stored here —
  *   another organization or environment, or another person in the same one.
@@ -107,9 +117,11 @@ export interface Organization {
 
 export interface ProjectConfig {
   authMode: AuthMode;
-  /** When capture began here. For a browser connection, when this checkout joined. */
+  /** When capture began here. For a browser connection, when this checkout joined
+   *  — or, for a worktree using its main checkout's join, when that one did. */
   captureSince?: string;
-  /** This checkout's attachment consent, never taken from a shared browser config. */
+  /** This checkout's attachment consent, never taken from a shared browser config
+   *  or from a main checkout's join. */
   attachmentsConsentedAt?: string;
   profileId?: string;
   /** A browser project's identity, shared by every checkout of it. Each person's
@@ -119,6 +131,12 @@ export interface ProjectConfig {
   workspaces?: RecordedWorkspace[];
   /** How this checkout stands against that decision (browser connections only). */
   join?: JoinState;
+  /**
+   * The main checkout whose join this linked Git worktree is using, when it has
+   * no links of its own ({@link inheritedRoutes}). Absent for a checkout that
+   * joined by itself. A local path, for saying where the join comes from.
+   */
+  joinInheritedFrom?: string;
   /**
    * Every destination this project feeds, in the order connect wrote them. One
    * entry per selected Workspace; derived from destinations in parsed config.
@@ -191,17 +209,85 @@ function parseWorkspaces(raw: unknown): RecordedWorkspace[] | undefined {
   return workspaces;
 }
 
+interface JoinedRoutes {
+  join: JoinState;
+  destinations?: Destination[];
+  joinedAt?: string;
+  attachmentsConsentedAt?: string;
+  inheritedFrom?: string;
+}
+
+/**
+ * The join a linked Git worktree takes from its repository's main checkout, or
+ * undefined when there is none to take.
+ *
+ * Narrow on purpose. Every condition has to hold, and each failure leaves the
+ * worktree exactly where it was before this existed — not joined, with connect
+ * as the remedy:
+ *
+ *   - Git itself records `projectRoot` as a worktree of that checkout
+ *     (project.ts → `mainCheckoutOf`). A fresh clone, a teammate's checkout and
+ *     a cloud session are not worktrees of anything here, so they still join
+ *     through connect.
+ *   - The main checkout is joined NOW, by its own links, under the sign-in
+ *     stored on this machine and the person it belongs to, routing only to that
+ *     sign-in's gateway. All of that is `loadProjectConfig` saying `joined`
+ *     about it. Deleting the main checkout's config, signing in as someone
+ *     else, or a change to its Workspaces ends the inheritance at the next load.
+ *   - It is the same connection: the same project key and profile, and the main
+ *     checkout's links name EXACTLY the Workspaces this worktree's own config
+ *     records. A branch whose config feeds a different set inherits nothing; a
+ *     Workspace nobody affirmed is never reached through a worktree.
+ *
+ * What comes across is the routes and when capture began. Attachment consent
+ * does NOT: it stays each checkout's own (AGENTS.md → privacy invariants), so
+ * a worktree sends documents only after connect is run in it.
+ *
+ * The worktree's own settings are still checked against the sign-in's gateway
+ * by the caller, exactly as for links of its own.
+ */
+function inheritedRoutes(
+  projectRoot: string,
+  profileId: string,
+  projectKey: string,
+  workspaces: readonly RecordedWorkspace[],
+): JoinedRoutes | undefined {
+  const main = mainCheckoutOf(projectRoot);
+  if (!main) return undefined;
+  // The main checkout's `.git` is a directory, so it has no main checkout of its
+  // own and this load cannot come back here.
+  const cfg = loadProjectConfig(main);
+  if (cfg?.authMode !== "oauth" || cfg.join !== "joined" || !cfg.destinations) return undefined;
+  if (cfg.projectKey !== projectKey || cfg.profileId !== profileId) return undefined;
+  if (cfg.destinations.length !== workspaces.length) return undefined;
+  const destinations: Destination[] = [];
+  for (const workspace of workspaces) {
+    const route = cfg.destinations.find((entry) => entry.workspaceId === workspace.workspaceId);
+    if (!route) return undefined;
+    destinations.push({ connectorId: route.connectorId, ...workspace });
+  }
+  return { join: "joined", destinations, joinedAt: cfg.captureSince, inheritedFrom: main };
+}
+
 /**
  * This checkout's routes for a browser connection, when its links carry it.
  * Exact, not a superset: a pulled change that removes a Workspace and later
  * restores it must be confirmed again, not silently covered by an old link.
+ *
+ * A checkout with a links file answers for itself, whatever that file says: it
+ * joined once, so a stale or damaged file is a question for connect here, and
+ * its spool may hold records queued under those links. Only a checkout that has
+ * never joined can stand on its main checkout's join.
  */
 function joinedRoutes(
   projectRoot: string,
   profileId: string,
   projectKey: string,
   workspaces: readonly RecordedWorkspace[],
-): { join: JoinState; destinations?: Destination[]; joinedAt?: string; attachmentsConsentedAt?: string } {
+): JoinedRoutes {
+  if (!existsSync(linksPath(projectRoot))) {
+    return inheritedRoutes(projectRoot, profileId, projectKey, workspaces) ?? { join: "none" };
+  }
   const links = readLinks(projectRoot);
   if (!links || links.projectKey !== projectKey) return { join: "none" };
   if (links.profileId !== profileId || storedProfileUserId(profileId) !== links.userId) return { join: "signin" };
@@ -281,7 +367,7 @@ export function loadProjectConfig(
             // the sign-in's gateway, only a variable is pointing elsewhere.
             cause: own && routesOnlyTo(own, settings, {}) ? "environment" : "file",
           };
-      const routes: ReturnType<typeof joinedRoutes> = gatewayMismatch ? { join: "gateway" } : joined;
+      const routes: JoinedRoutes = gatewayMismatch ? { join: "gateway" } : joined;
       return {
         ...settings,
         authMode: "oauth",
@@ -296,6 +382,7 @@ export function loadProjectConfig(
               connectorIds: routes.destinations.map((destination) => destination.connectorId),
               captureSince: routes.joinedAt,
               ...(routes.attachmentsConsentedAt ? { attachmentsConsentedAt: routes.attachmentsConsentedAt } : {}),
+              ...(routes.inheritedFrom ? { joinInheritedFrom: routes.inheritedFrom } : {}),
             }
           : {}),
         projectRoot,
