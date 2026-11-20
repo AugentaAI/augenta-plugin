@@ -44,7 +44,7 @@ Send each command as its own message:
 /plugin install augenta@augenta
 ```
 
-Restart Claude Code, open your project, and run:
+Run `/reload-plugins` (or restart Claude Code), then run this in your project:
 
 ```text
 /augenta:connect
